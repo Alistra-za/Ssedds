@@ -1012,6 +1012,23 @@ fn an_n_that_looks_opengl_offers_treat_as_opengl() {
     m.select_item("test/wall_n.png");
     let mut h = harness(m, 1400.0);
     h.run();
+    // Note FB8: the check's line shows its words; the code is on its hover.
+    let guess = h
+        .state()
+        .check_warnings("test/wall_n.png")
+        .iter()
+        .find(|w| w.code == Code::ChkGreenGuess)
+        .expect("the guess")
+        .message
+        .clone();
+    assert_eq!(h.query_all_by_label_contains("CHK-GREEN-GUESS").count(), 0);
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.get_by_label_contains(&guess).hover();
+    h.run();
+    h.run();
     h.get_by_label_contains("CHK-GREEN-GUESS");
     h.get_by_label("Treat as OpenGL (flip green)").click();
     h.run();

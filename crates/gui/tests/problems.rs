@@ -3,6 +3,7 @@ mod support;
 use engine::codes::{Code, Warning};
 use engine::config::Subtype;
 use sdc_gui::model::bottom::{filtered, problems, problems_builds, At, Level, ProblemsFilter};
+use sdc_gui::model::code_text::code_line;
 use sdc_gui::model::items::ItemStatus;
 use sdc_gui::model::sets::set_views;
 use sdc_gui::model::{Answer, AppModel};
@@ -133,10 +134,18 @@ fn a_failed_item_is_a_red_row() {
     assert_eq!(
         red(&m.items[1].key).as_deref(),
         Some(&*format!(
-            "Failed: {}, {}",
-            Code::DimNpot.as_str(),
-            Code::LossReencode.as_str()
+            "Failed: {}; {}",
+            code_line(Code::DimNpot),
+            code_line(Code::LossReencode)
         ))
+    );
+    // Note FB8: the codes are the row's hover only.
+    let row = p
+        .iter()
+        .find(|p| p.at == At::Texture(m.items[1].key.clone()));
+    assert_eq!(
+        row.and_then(|p| p.codes_text()).as_deref(),
+        Some("DIM-NPOT, LOSS-REENCODE")
     );
 }
 

@@ -503,3 +503,99 @@ fn the_review_export_works_on_the_frame_it_becomes_ready() {
     h.step();
     assert!(h.state().export.running.is_some() || h.state().export.summary.is_some());
 }
+
+fn review_at(dir: &std::path::Path, size: egui::Vec2) -> Harness<'static, AppModel> {
+    let mut m = opened(dir);
+    m.open_review();
+    let mut h = Harness::builder()
+        .with_size(size)
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(8);
+    h
+}
+
+/// Note FB10: Review opens at 40 % of the window's height while the user has not resized it.
+#[test]
+fn review_opens_at_least_40_percent_tall() {
+    let d = tempfile::tempdir().unwrap();
+    let h = review_at(d.path(), egui::vec2(1400.0, 864.0));
+    let p = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("bottom-review"))
+        .expect("the Review panel")
+        .outer_rect;
+    assert!(p.height() >= 0.4 * 864.0 - 1.0, "{p:?}");
+}
+
+/// Note FB10: under 1200 px the columns stack in one scroll area; wider, they sit side by side.
+#[test]
+fn review_columns_stack_under_1200() {
+    let d = tempfile::tempdir().unwrap();
+    let pos = |h: &Harness<'static, AppModel>, l: &str| h.get_by_label_contains(l).rect();
+    let h = review_at(d.path(), egui::vec2(1100.0, 864.0));
+    let (b, u) = (pos(&h, "Blockers ("), pos(&h, "Undecided ("));
+    assert!(
+        u.top() > b.bottom() - 1.0 && u.left() <= b.left() + 1.0,
+        "{b:?} {u:?}"
+    );
+    let h = review_at(d.path(), egui::vec2(1536.0, 864.0));
+    let (b, u) = (pos(&h, "Blockers ("), pos(&h, "Undecided ("));
+    assert!(
+        u.left() > b.right() && (u.top() - b.top()).abs() < 2.0,
+        "{b:?} {u:?}"
+    );
+}
+
+/// Note FB10 round 1: the stack switch follows the window width: 1199 stacks, 1200 sits side by side.
+#[test]
+fn review_stacks_at_1199_and_not_at_1200() {
+    let d = tempfile::tempdir().unwrap();
+    let stacked = |w: f32| {
+        let h = review_at(d.path(), egui::vec2(w, 864.0));
+        let (b, u) = (
+            h.get_by_label_contains("Blockers (").rect(),
+            h.get_by_label_contains("Undecided (").rect(),
+        );
+        u.top() > b.bottom() - 1.0
+    };
+    assert!(stacked(1199.0));
+    assert!(!stacked(1200.0));
+}
+
+/// Note FB10 round 1: a Review height the user set survives a visit to another tab.
+#[test]
+fn a_review_resize_sticks_across_a_tab_switch() {
+    use egui::containers::panel::PanelState;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = review_at(d.path(), egui::vec2(1400.0, 864.0));
+    let id = egui::Id::new("bottom-review");
+    let height =
+        |h: &Harness<'static, AppModel>| PanelState::load(&h.ctx, id).unwrap().outer_rect.height();
+    let before = height(&h);
+    // Drag the panel's top edge down by 120 px.
+    let edge = egui::pos2(
+        700.0,
+        PanelState::load(&h.ctx, id).unwrap().outer_rect.top(),
+    );
+    let to = edge + egui::vec2(0.0, 120.0);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    h.event(egui::Event::PointerMoved(edge));
+    h.run_steps(2);
+    h.event(button(edge, true));
+    h.run_steps(2);
+    h.event(egui::Event::PointerMoved(to));
+    h.run_steps(2);
+    h.event(button(to, false));
+    h.run_steps(4);
+    let want = height(&h);
+    assert!(want < before - 100.0, "dragged: {before} -> {want}");
+    h.state_mut().show_tab(BottomTab::Problems);
+    h.run_steps(4);
+    h.state_mut().show_tab(BottomTab::Review);
+    h.run_steps(4);
+    assert!((height(&h) - want).abs() < 2.0, "{}", height(&h));
+}

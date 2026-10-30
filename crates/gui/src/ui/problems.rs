@@ -21,19 +21,36 @@ pub fn status_of(l: Level) -> Status {
     }
 }
 
+/// A row's focus id (Note FB9): by what the row is, not where it is, so focus stays on a row while the rows above it
+/// leave the list.
+pub fn row_id(p: &Problem) -> egui::Id {
+    egui::Id::new(("problem-row", p.level, &p.at, &p.text))
+}
+
+/// A row's accessible name: where, then what (Note FB9).
+fn row_name(p: &Problem) -> String {
+    let at = match &p.at {
+        At::Texture(k) | At::File(k) => k.as_str(),
+        At::Set { id, .. } => id.as_str(),
+        At::Project => "Project",
+    };
+    format!("{at}: {}", p.shown())
+}
+
 type Rows = Arc<Vec<Problem>>;
 
 /// `filtered` at most once per change: keyed on the (cached) problems build and the filter. Also the count the
-/// "Checks {n}" button shows: the set's check rows while a Set filter is on, else the project's (K6, review M2).
-fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize) {
+/// "Checks {n}" button shows: the set's check rows while a Set filter is on, else the project's (K6, review M2), and
+/// the project's rows with a suggestion, which "Accept all suggestions" decides (Note FB9).
+fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize, usize) {
     let all = problems(model);
     let f = model.bottom.filter.clone();
     let id = egui::Id::new("problems-rows");
-    if let Some((a, ff, out, n)) =
-        ui.data(|d| d.get_temp::<(Rows, Option<ProblemsFilter>, Rows, usize)>(id))
+    if let Some((a, ff, out, n, s)) =
+        ui.data(|d| d.get_temp::<(Rows, Option<ProblemsFilter>, Rows, usize, usize)>(id))
     {
         if Arc::ptr_eq(&a, &all) && ff == f {
-            return (out, n);
+            return (out, n, s);
         }
     }
     let out: Rows = filtered(model, f.as_ref());
@@ -41,8 +58,18 @@ fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize) {
         Some(ProblemsFilter::Set(_)) => out.iter().filter(|p| p.level == Level::Check).count(),
         _ => flagged(model).check_rows,
     };
-    ui.data_mut(|d| d.insert_temp(id, (all, f, out.clone(), n)));
-    (out, n)
+    let s = all.iter().filter(|p| p.suggested.is_some()).count();
+    ui.data_mut(|d| d.insert_temp(id, (all, f, out.clone(), n, s)));
+    (out, n, s)
+}
+
+/// The row that had keyboard focus and its index: when it leaves the list (its question was answered), focus goes to
+/// the row now at that index, or the last one (Review Focus 5).
+const ROW_FOCUS: &str = "problems-row-focus";
+
+/// The Problems tab is not drawn: forget the focused row, so coming back never moves focus into the list.
+pub fn forget_focus(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<(egui::Id, usize)>(egui::Id::new(ROW_FOCUS)));
 }
 
 enum Act {
@@ -53,11 +80,12 @@ enum Act {
     RebuildZ(String),
     RemoveMissing(String, Missing),
     Filter(Option<ProblemsFilter>),
+    AcceptAll,
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     // The count comes from the same cached build as the list (K6), not a count per frame.
-    let (list, checks) = rows(ui, model);
+    let (list, checks, suggestions) = rows(ui, model);
     let off = model.fix_off();
     let sets_off = model.sets_read_only_reason();
     let mut act = None;
@@ -67,8 +95,26 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             .find(|v| v.key == *k)
             .map_or(k.clone(), |v| v.id.clone())
     };
-    if model.bottom.filter.is_some() || checks > 0 {
+    if model.bottom.filter.is_some() || checks > 0 || suggestions > 0 {
         ui.horizontal(|ui| {
+            // Note FB9 (owner amendment A): the project's suggestions, one undo step; written by Save.
+            if suggestions > 0 {
+                let b = ui
+                    .add_enabled(
+                        off.is_none(),
+                        egui::Button::new(format!("Accept all suggestions ({suggestions})")),
+                    )
+                    .on_hover_text(if model.bottom.filter.is_some() {
+                        "Set every texture in the whole project that has a suggested type to it, not only the \
+                         listed ones; the others stay listed"
+                    } else {
+                        "Set every texture that has a suggested type to it; the others stay listed"
+                    })
+                    .on_disabled_hover_text(off.as_deref().unwrap_or_default());
+                if b.clicked() {
+                    act = Some(Act::AcceptAll);
+                }
+            }
             // The chip and what its × leaves; "Checks {n}" and what it sets (a Set filter keeps its set, M2).
             let (chip, press) = match &model.bottom.filter {
                 None => (None, Some(ProblemsFilter::Checks)),
@@ -106,10 +152,58 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     }
     let row_h = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
     let m = &*model;
+    // Review Focus 5: the focused row left the list (its question was answered) and egui dropped the focus, so the
+    // row now at its index takes it, or the last row.
+    let focus_key = egui::Id::new(ROW_FOCUS);
+    let last: Option<(egui::Id, usize)> = ui.data(|d| d.get_temp(focus_key));
+    let focused = ui.memory(|mem| mem.focused());
+    if let (None, Some((rid, i)), Some(end)) = (focused, last, list.len().checked_sub(1)) {
+        if !list.iter().any(|p| row_id(p) == rid) {
+            let to = row_id(&list[i.min(end)]);
+            ui.memory_mut(|mem| mem.request_focus(to));
+        }
+    }
+    let mut focus_now = None;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show_rows(ui, row_h, list.len(), |ui, range| {
-            for p in &list[range] {
+            for (i, p) in list[range.clone()].iter().enumerate() {
+                let i = range.start + i;
+                // Note FB9: the row is focusable (registered first, it takes no click from its cells); Enter or
+                // Space accepts its suggestion and moves to the next row. A row without one ignores both.
+                let rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                );
+                let rid = row_id(p);
+                let row = ui.interact(rect, rid, egui::Sense::focusable_noninteractive());
+                row.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Other, true, row_name(p))
+                });
+                if row.has_focus() {
+                    // Once a frame: the next row takes focus in this same frame and sees the same key press.
+                    let first = focus_now.replace((rid, i)).is_none();
+                    if row.gained_focus() {
+                        row.scroll_to_me(None);
+                    }
+                    let stroke = ui.visuals().selection.stroke;
+                    ui.painter()
+                        .rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+                    // Consumed only when the row acts, so the Grid's Enter (open the preview) never sees it too.
+                    let acting = matches!((first, &off, &p.at, p.suggested), (true, None, At::Texture(_), Some(_)));
+                    let pressed = acting
+                        && ui.input_mut(|k| {
+                            k.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                                || k.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+                        });
+                    if let (true, At::Texture(k), Some(st)) = (pressed, &p.at, p.suggested) {
+                        act = Some(Act::Fix(RowPick::Decide(k.clone(), st)));
+                        // The last row keeps focus: no wrap to the top.
+                        if let Some(next) = list.get(i + 1) {
+                            ui.memory_mut(|mem| mem.request_focus(row_id(next)));
+                        }
+                    }
+                }
                 // The fix buttons are laid out first, so the sentence is cut to the room left (I2).
                 let (l, r) = egui::Sides::new().shrink_left().truncate().show(
                     ui,
@@ -136,8 +230,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                 ui.label("Project");
                             }
                         }
-                        ui.add(egui::Label::new(&p.text).truncate())
-                            .on_hover_text(&p.text);
+                        // Note FB8: a sentence that names the action; the engine's text and the code are the hover.
+                        ui.add(egui::Label::new(&*p.shown()).truncate())
+                            .on_hover_ui(|ui| {
+                                ui.label(&p.text);
+                                if let Some(c) = p.codes_text() {
+                                    ui.weak(c);
+                                }
+                            });
                         a
                     },
                     |ui| {
@@ -195,9 +295,6 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                             }
                             _ => {}
                         }
-                        if let Some(c) = p.code {
-                            ui.label(egui::RichText::new(c.as_str()).small().weak());
-                        }
                         a
                     },
                 );
@@ -206,10 +303,32 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
             }
         });
+    // Kept while a row has focus, and over the frame its row leaves the list (egui drops the focus at that frame's
+    // end; the next frame moves it, so ask for that frame).
+    let keep = focus_now.or(last.filter(|(rid, _)| focused == Some(*rid)));
+    if keep.is_some() && focus_now.is_none() {
+        ui.ctx().request_repaint();
+    }
+    ui.data_mut(|d| {
+        if let Some(v) = keep {
+            d.insert_temp(focus_key, v);
+        } else {
+            d.remove::<(egui::Id, usize)>(focus_key);
+        }
+    });
     // Every click-through lands in the Textures view.
     let to_textures = |ui: &egui::Ui| super::header::set_meshes_view(ui.ctx(), false);
     match act {
         Some(Act::Texture(k)) => {
+            // Note FB12: a helper in a collapsed Helpers group opens it, as the palette does. Local to this click:
+            // `select_item` also runs for restores, which must not reopen a group the user collapsed.
+            if model
+                .item(&k)
+                .is_some_and(|i| i.kind == crate::model::items::ItemKind::Helper)
+            {
+                model.filter.hide_helpers = false;
+                model.nav.reveal_item = Some(k.clone());
+            }
             model.select_item(&k);
             to_textures(ui);
         }
@@ -237,6 +356,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         }
         Some(Act::Filter(f)) => model.bottom.filter = f,
+        Some(Act::AcceptAll) => model.accept_all_suggestions(),
         None => {}
     }
 }

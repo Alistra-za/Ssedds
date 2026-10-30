@@ -301,6 +301,9 @@ impl SetsDoc {
         if self.text() == old {
             self.f.doc = doc;
             self.f.dirty = dirty;
+        } else {
+            // The `set_*` calls above touch the document; back at the saved text it is clean again (Note FB3).
+            self.f.dirty = self.text() != self.f.saved_text;
         }
     }
 

@@ -47,6 +47,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
         drawer.stats.clear();
         drawer.epoch = model.drawer_epoch;
     }
+    if !model.bottom.open || model.bottom.tab != BottomTab::Problems {
+        problems::forget_focus(ui.ctx());
+    }
     if !model.bottom.open {
         // Its own id, so the strip's height never becomes the open panel's.
         egui::Panel::bottom("bottom-strip").show(ui, |ui| {
@@ -54,9 +57,16 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
         });
         return;
     }
-    egui::Panel::bottom("bottom")
+    // Note FB10: Review has its own id, so it opens at 40 % of the window and a user resize sticks to it.
+    let review = model.bottom.tab == BottomTab::Review && model.review.is_some();
+    let (id, height) = if review {
+        ("bottom-review", ui.ctx().content_rect().height() * 0.4)
+    } else {
+        ("bottom", 240.0)
+    };
+    egui::Panel::bottom(id)
         .resizable(true)
-        .default_size(240.0)
+        .default_size(height)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 tab_buttons(ui, model);

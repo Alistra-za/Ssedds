@@ -1,6 +1,7 @@
-//! GUI tweaks G3–G6: the TruePBR JSON editor, a window of its own over the whole PGPatcher JSON: every PBR set's
-//! entry and the delete sections, each in its own pill, each key a small pill of its own. It edits the same settings
-//! as the set editor's TruePBR box (`AppModel::set_json_value`), so the two always agree. Drawing only.
+//! GUI tweaks G3–G6: the TruePBR JSON editor, a centre-column tab (or its own window when popped out, Note FB7) over
+//! the whole PGPatcher JSON: every PBR set's entry and the delete sections, each in its own pill, each key a small
+//! pill of its own. It edits the same settings as the set editor's TruePBR box (`AppModel::set_json_value`), so the
+//! two always agree. Drawing only.
 use super::columns::{AMBER, RED};
 use super::path_picker;
 use super::pgp_fields::{alpha_default, context, control, disabled_reason, edit_key, Ctx};
@@ -71,7 +72,7 @@ impl Mode {
 
     fn label(self) -> String {
         match self {
-            Mode::Exact(n) => format!("exact · slot {n} {}", SLOT_NAMES[n as usize - 1]),
+            Mode::Exact(n) => format!("Match: exact, slot {n} ({})", SLOT_NAMES[n as usize - 1]),
             Mode::Contains => "path contains".into(),
         }
     }
@@ -90,29 +91,6 @@ enum Act {
     Unpend(Owner, String),
     /// A key (or a match mode switched on a pill with no path) waits for its value.
     Pend(Owner, String),
-}
-
-/// The window, while `AppModel::json_editor_open`: a native window of its own where the platform has them, an
-/// embedded one otherwise (and in tests).
-pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
-    if !model.json_editor_open {
-        return;
-    }
-    let id = egui::ViewportId::from_hash_of("sdc-pgp-json-editor");
-    let builder = egui::ViewportBuilder::default()
-        .with_title(format!("{WINDOW_TITLE} — {}", crate::PRODUCT_NAME))
-        .with_inner_size([980.0, 760.0]);
-    ctx.show_viewport_immediate(id, builder, |ui, class| {
-        if ui.ctx().input(|i| i.viewport().close_requested()) {
-            model.json_editor_open = false;
-        }
-        match class {
-            egui::ViewportClass::EmbeddedWindow => body(ui, model),
-            _ => {
-                egui::CentralPanel::default().show(ui, |ui| body(ui, model));
-            }
-        }
-    });
 }
 
 /// The JSON name field's width; it is never squeezed (AG126).
@@ -176,7 +154,8 @@ fn name_field(ui: &mut egui::Ui, model: &mut AppModel) {
     });
 }
 
-fn body(ui: &mut egui::Ui, model: &mut AppModel) {
+/// The editor, in the centre column or in its popped-out window (Note FB7).
+pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
     let mut acts: Vec<Act> = vec![];
     let read_only = model.sets_doc.as_ref().and_then(|d| {
         d.read_only().then(|| {
@@ -188,9 +167,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.horizontal_wrapped(|ui| {
         ui.heading(WINDOW_TITLE);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Close").clicked() {
-                model.json_editor_open = false;
-            }
+            super::centre_tabs::controls(ui, model, crate::model::CentreTab::Json);
             let r = ui
                 .add_enabled(read_only.is_none(), egui::Button::new("+ Delete section"))
                 .on_hover_text("An entry of its own that deletes the shapes it matches");
@@ -286,6 +263,7 @@ fn body(ui: &mut egui::Ui, model: &mut AppModel) {
                 }
                 model.remove_section(i);
             }
+            // Note FB7: `select_set` brings the set's editor to the front of the centre.
             Act::Select(key) => model.select_set(&key),
             Act::Fold(id) => {
                 if !nav.closed.remove(&id) {
@@ -476,8 +454,8 @@ fn match_pill(
             acts.push(Act::Edit(owner.clone(), k, v));
         }
         if matches!(owner, Owner::Set(_)) && mode == Mode::Exact(1) && path == derived {
-            ui.weak("derived")
-                .on_hover_text("The diffuse's own path; type another to change it");
+            ui.weak("derived from the set")
+                .on_hover_text("Derived: the diffuse's own path; type another to change it");
         }
         let hover = match mode {
             Mode::Exact(_) => "Pick an exact texture path the scan found in this slot",
@@ -546,6 +524,14 @@ fn nif_pill(ui: &mut egui::Ui, model: &AppModel, owner: &Owner, value: &str, act
     });
 }
 
+/// Review C15: a "Lock x" key says what it does; the schema's own label and the raw key are on hover.
+fn key_label(k: &KeySpec) -> String {
+    match k.label.strip_prefix("Lock ") {
+        Some(what) => format!("Keep the original texture (PGPatcher won't replace it): {what}"),
+        None => k.label.to_string(),
+    }
+}
+
 /// A schema key's pill on a set: the same control as the TruePBR box.
 fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<Act>) {
     let key = edit_key(k.key);
@@ -572,8 +558,8 @@ fn key_pill(ui: &mut egui::Ui, k: &KeySpec, c: &Ctx, set: &str, acts: &mut Vec<A
             return;
         }
         if !matches!(k.kind, KeyKind::OnlyTrue | KeyKind::Object) {
-            ui.label(egui::RichText::new(k.label).small())
-                .on_hover_text(k.key);
+            ui.label(egui::RichText::new(key_label(k)).small())
+                .on_hover_text(format!("{} ({})", k.label, k.key));
         }
         let reason = disabled_reason(k, c);
         let mut edits = vec![];
@@ -890,8 +876,8 @@ fn add_set_key_menu(
             }
             let reason = disabled_reason(k, c);
             let r = ui
-                .add_enabled(reason.is_none(), egui::Button::new(k.label))
-                .on_hover_text(k.key);
+                .add_enabled(reason.is_none(), egui::Button::new(key_label(k)))
+                .on_hover_text(format!("{} ({})", k.label, k.key));
             let r = match reason {
                 Some(why) => r.on_disabled_hover_text(why),
                 None => r,

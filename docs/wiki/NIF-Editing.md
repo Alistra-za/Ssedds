@@ -5,7 +5,7 @@ The GUI can edit a mesh (NIF file) in the Meshes view and write an edited copy. 
 ## Before you start
 
 - Scan your mods first, so the Meshes view lists your meshes. See [Mod scanning](Mod-Scanning.md).
-- Pick an export folder with **Export to ▾** in the header. Edited NIFs go there, next to your textures. Without one (a project never takes over the folder you picked for another mod) they go to a `sdc NIF Edits` mod in your MO2 instance.
+- Pick an export folder with **Export to ▾** in the header (**More ▾ → Choose export folder…** until a folder is chosen). Edited NIFs go there, next to your textures. Without one (a project never takes over the folder you picked for another mod) they go to a `sdc NIF Edits` mod in your MO2 instance.
 
 ## Open a mesh for editing
 

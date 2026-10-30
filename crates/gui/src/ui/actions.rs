@@ -21,18 +21,21 @@ pub enum Area {
     /// The 3D panel (Meshes view, set preview). `ui::viewport3d` handles its keys (the viewports are not in
     /// `AppModel`); they are only listed here.
     View3d,
-    /// The PGPatcher JSON editor window (`ui::json_editor` handles its keys; it is a window of its own).
+    /// The PGPatcher JSON editor (`ui::json_editor` handles its keys, docked or popped out).
     JsonEditor,
+    /// A focused Problems row (`ui::problems` handles its keys); only listed here.
+    Problems,
 }
 
 impl Area {
-    pub const ALL: [Area; 7] = [
+    pub const ALL: [Area; 8] = [
         Area::Global,
         Area::Grid,
         Area::Preview,
         Area::Sets,
         Area::View3d,
         Area::JsonEditor,
+        Area::Problems,
         Area::Dialogs,
     ];
 
@@ -45,11 +48,12 @@ impl Area {
             Area::Dialogs => "Dialogs",
             Area::View3d => "3D preview",
             Area::JsonEditor => "JSON editor",
+            Area::Problems => "Problems list",
         }
     }
 
-    /// Two areas that are never live at once may share a key (Esc clears the selection in the grid and closes the
-    /// preview; Enter opens the preview from the grid and presses a dialog's default).
+    /// Two areas that are never live at once may share a key (Enter opens the preview from the grid and presses a
+    /// dialog's default).
     pub fn exclusive_with(self, other: Area) -> bool {
         use Area::*;
         let both = |a, b| (self == a && other == b) || (self == b && other == a);
@@ -205,7 +209,7 @@ pub fn actions() -> &'static [Action] {
     ACTIONS
 }
 
-use Area::{Dialogs, Global, Grid, JsonEditor, Preview, Sets, View3d};
+use Area::{Dialogs, Global, Grid, JsonEditor, Preview, Problems, Sets, View3d};
 
 pub static ACTIONS: &[Action] = &[
     // Global
@@ -300,7 +304,7 @@ pub static ACTIONS: &[Action] = &[
             "Open the PGPatcher JSON editor",
             Global,
             &[],
-            |m, _| m.json_editor_open = true,
+            |m, _| m.open_json_editor(),
         ),
         |m| m.target == engine::config::Target::Cs && m.root.is_some() && m.sets_doc.is_some(),
     ),
@@ -315,13 +319,9 @@ pub static ACTIONS: &[Action] = &[
         &[ctrl(Key::A)],
         |m, _| m.select_all_visible(),
     ),
-    a(
-        "clear",
-        "Clear the selection",
-        Grid,
-        &[key(Key::Escape)],
-        |m, _| m.clear_selection(),
-    ),
+    a("clear", "Clear the selection", Grid, &[], |m, _| {
+        m.clear_selection()
+    }),
     unlisted(a(
         "left",
         "Select the texture to the left",
@@ -533,7 +533,7 @@ pub static ACTIONS: &[Action] = &[
         View3d,
         &[ctrl_shift(Key::C)],
     ),
-    // The JSON editor (its window handles them)
+    // The JSON editor (its view handles them)
     listed(
         "json-next-error",
         "Next error in the PGPatcher JSON editor",
@@ -545,6 +545,13 @@ pub static ACTIONS: &[Action] = &[
         "Previous error in the PGPatcher JSON editor",
         JsonEditor,
         &[shift(Key::F8)],
+    ),
+    // A focused Problems row (Note FB9)
+    listed(
+        "problems-accept",
+        "Accept the focused Problems row's suggestion and go to the next row",
+        Problems,
+        &[key(Key::Enter), key(Key::Space)],
     ),
     // Dialogs
     listed(
@@ -595,9 +602,14 @@ fn enabled(a: &Action, model: &AppModel, ctx: &egui::Context) -> bool {
 fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
     match area {
         Area::Global => true,
-        Area::Grid | Area::Sets => !meshes_view && model.expanded.is_none(),
+        // Note FB7: a docked Presets or JSON tab in front owns the keys; the Selection under it stays put.
+        Area::Grid | Area::Sets => {
+            !meshes_view
+                && model.expanded.is_none()
+                && model.centre_front() == crate::model::CentreTab::Selection
+        }
         Area::Preview => !meshes_view && model.expanded.is_some(),
-        Area::Dialogs | Area::View3d | Area::JsonEditor => false,
+        Area::Dialogs | Area::View3d | Area::JsonEditor | Area::Problems => false,
     }
 }
 

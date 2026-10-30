@@ -56,7 +56,7 @@ fn right_click_on_a_selected_tile_keeps_the_selection_and_opens_the_menu() {
 }
 
 #[test]
-fn ctrl_a_selects_every_visible_texture_and_esc_clears() {
+fn ctrl_a_selects_every_visible_texture_and_esc_keeps_them() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(opened(d.path()));
     h.run();
@@ -66,7 +66,8 @@ fn ctrl_a_selects_every_visible_texture_and_esc_clears() {
     assert_eq!(h.state().selected_items().len(), shown);
     h.key_press(Key::Escape);
     h.run();
-    assert_eq!(h.state().selection, Selection::None);
+    // Owner amendment G (Note FB11): Esc never clears the selection.
+    assert_eq!(h.state().selected_items().len(), shown);
 }
 
 #[test]

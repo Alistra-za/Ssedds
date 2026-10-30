@@ -4,10 +4,11 @@ use super::columns::{border_of, bulk_menu, status_text, AMBER, RED};
 use super::rnm_section::RNM_OUTLINE;
 use super::sets_column::{DropState, Pending, SlotNote};
 use super::slot_commands::SlotCmdState;
-use super::status::{dot, Status};
+use super::status::{code_hover, dot, Status};
 use super::thumbs::ThumbCache;
 use crate::model::bottom::tile_ready;
 use crate::model::bulk::MenuAction;
+use crate::model::code_text::shown_for;
 use crate::model::fields::{
     channel_text, encoding_options, field_hidden, field_lock, field_view, format_label,
     PARALLAX_HOVER,
@@ -258,7 +259,7 @@ fn head(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, view: View) {
                 ),
             );
             if ui.small_button("Open the JSON editor").clicked() {
-                model.json_editor_open = true;
+                model.open_json_editor();
             }
         });
     }
@@ -307,17 +308,17 @@ fn tabs(
         ui.selectable_value(&mut open, false, if json { "Material" } else { "Set" });
         ui.selectable_value(&mut open, true, "Advanced");
         // C14 (Note FB2): the name box above names the set, so the Material tab has no name line; its JSON editor
-        // button sits on the tab row. G3: the whole file, every set and the delete sections, in its own window.
+        // button sits on the tab row. G3: the whole file, every set and the delete sections, in a centre tab (Note FB7).
         if json && !open {
             ui.add_space(8.0);
             if ui
                 .small_button("TruePBR JSON editor…")
                 .on_hover_text(
-                    "Every set's entry and the delete sections of the PGPatcher JSON, in one window",
+                    "Every set's entry and the delete sections of the PGPatcher JSON, in one view",
                 )
                 .clicked()
             {
-                model.json_editor_open = true;
+                model.open_json_editor();
             }
         }
     });
@@ -436,7 +437,8 @@ fn under_grid(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
         recipe(ui, r);
     }
     for w in model.rnm_notes.get(&v.key).into_iter().flatten() {
-        ui.colored_label(AMBER, format!("{}: {}", w.code.as_str(), w.message));
+        ui.colored_label(AMBER, &*shown_for(Some(w.code), &w.message))
+            .on_hover_ui(|ui| code_hover(ui, &w.message, w.code.as_str()));
     }
     // R10: the codes live in Problems; one line points there.
     let n = crate::model::bottom::set_problem_count(model, &v.key);

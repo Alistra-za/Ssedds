@@ -90,8 +90,11 @@ fn row(h: &Harness<'static, AppModel>, file: &str) -> (String, egui::Rect) {
         .unwrap_or_else(|| panic!("no row for {file} in {:?}", rows(h)))
 }
 
-fn pill<'a>(h: &'a Harness<'static, AppModel>) -> egui_kittest::Node<'a> {
-    h.get_by_role_and_label(Role::Button, "Helpers filter")
+const XSET3: [&str; 4] = ["x.png", "x_roughness.png", "x_opacity.png", "y_opacity.png"];
+
+/// The group header's accessible name.
+fn header_name(n: usize) -> String {
+    format!("Helpers ({n})")
 }
 
 #[test]
@@ -134,40 +137,72 @@ fn helpers_group_sits_below_tiles() {
     assert_eq!(rows(&h).len(), 2);
 }
 
+/// Note FB12 (supersedes DY16's pill): the pill row holds only filters; Helpers is a group header.
 #[test]
-fn helpers_pill_on_by_default_and_hides_group() {
-    let d = tempfile::tempdir().unwrap();
-    let mut h = app(fixture(d.path(), &XSET, ""));
-    assert_eq!(
-        pill(&h).accesskit_node().toggled(),
-        Some(egui::accesskit::Toggled::True)
-    );
-    let tiles = h.state().visible_items();
-    pill(&h).click();
-    h.run();
-    h.run();
-    assert!(h.state().filter.hide_helpers);
-    assert!(rows(&h).is_empty(), "the rows are gone");
-    assert_eq!(h.query_all_by_label("Helpers (2)").count(), 0);
-    assert_eq!(h.state().visible_items(), tiles, "tiles unchanged");
-    assert!(h.state().filters_active());
-    assert_eq!(h.state().hidden_by_filters(), 2);
-    h.state_mut().clear_filters();
-    h.run();
-    h.run();
-    assert_eq!(rows(&h).len(), 2, "Clear filters brings them back");
-}
-
-#[test]
-fn helpers_pill_counts_helpers() {
+fn helpers_is_not_a_pill() {
     let d = tempfile::tempdir().unwrap();
     let h = app(fixture(d.path(), &XSET, ""));
     assert_eq!(h.state().filter_counts().helpers, 2);
-    // The pill is named "Helpers filter"; its visible text is its value.
     assert_eq!(
-        pill(&h).accesskit_node().value().as_deref(),
-        Some("Helpers 2")
+        h.query_all_by_label("Helpers filter").count(),
+        0,
+        "no Helpers filter pill"
     );
+    assert_eq!(h.query_all_by_label_contains("Helpers 2").count(), 0);
+    h.get_by_role_and_label(Role::Button, &header_name(2));
+}
+
+#[test]
+fn helpers_group_collapses() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = app(fixture(d.path(), &XSET3, ""));
+    let name = header_name(3);
+    assert_eq!(rows(&h).len(), 3, "open by default");
+    let toggled = |h: &Harness<'static, AppModel>| {
+        h.get_by_role_and_label(Role::Button, &name)
+            .accesskit_node()
+            .toggled()
+    };
+    assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::True));
+    let tiles = h.state().visible_items();
+    h.get_by_role_and_label(Role::Button, &name).click();
+    h.run();
+    h.run();
+    assert!(rows(&h).is_empty(), "collapsing hides the rows");
+    assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::False));
+    assert_eq!(h.state().visible_items(), tiles, "tiles unchanged");
+    assert!(!h.state().filters_active(), "collapsing is not a filter");
+    assert_eq!(h.state().hidden_by_filters(), 0);
+    h.get_by_role_and_label(Role::Button, &name).click();
+    h.run();
+    h.run();
+    assert_eq!(rows(&h).len(), 3, "opening brings them back");
+    assert_eq!(toggled(&h), Some(egui::accesskit::Toggled::True));
+}
+
+/// Review fix (FB12): the header button fits its line, so the first helper row starts below it.
+#[test]
+fn the_group_header_does_not_overlap_the_first_row() {
+    let d = tempfile::tempdir().unwrap();
+    let h = app(fixture(d.path(), &XSET3, ""));
+    let header = h
+        .get_by_role_and_label(Role::Button, &header_name(3))
+        .rect();
+    let first = rows(&h)
+        .into_iter()
+        .map(|r| r.1.min.y)
+        .fold(f32::MAX, f32::min);
+    assert!(
+        header.max.y <= first + 0.5,
+        "header {header:?} overlaps the first row at {first}"
+    );
+}
+
+#[test]
+fn no_helpers_no_header() {
+    let d = tempfile::tempdir().unwrap();
+    let h = app(fixture(d.path(), &["x.png"], ""));
+    assert_eq!(h.query_all_by_label_contains("Helpers (").count(), 0);
 }
 
 #[test]
@@ -367,8 +402,9 @@ fn ctrl_clicked_visible_helpers_are_not_hidden() {
     assert_eq!(m.selection_summary(false).as_deref(), Some("2 selected"));
 }
 
+/// Review fix (FB12): a selected helper in a collapsed group stays selected and the heading says where it went.
 #[test]
-fn hiding_helpers_keeps_a_selected_helper_and_counts_it_hidden() {
+fn a_selected_helper_in_a_collapsed_group_is_named_in_the_hint() {
     let d = tempfile::tempdir().unwrap();
     let mut m = fixture(d.path(), &XSET, "");
     let rows = helper_keys(&m);
@@ -379,8 +415,76 @@ fn hiding_helpers_keeps_a_selected_helper_and_counts_it_hidden() {
     assert!(m.selected_items().contains(&rows[0]), "still selected");
     assert_eq!(
         m.selection_summary(false).as_deref(),
-        Some("2 selected (1 hidden by filter)")
+        Some("2 selected (1 in the collapsed Helpers group)")
     );
+    assert_eq!(m.hidden_by_filters(), 0, "a fold is not a filter");
+    m.filter.hide_helpers = false;
+    assert_eq!(m.selection_summary(false).as_deref(), Some("2 selected"));
+}
+
+/// Review fix (FB12): select-all, the arrows and a mouse range never reach rows a collapsed group does not show.
+#[test]
+fn a_collapsed_group_is_out_of_reach_of_select_all_and_ranges() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET3, "");
+    let rows = helper_keys(&m);
+    let tiles: Vec<String> = m
+        .visible_items()
+        .iter()
+        .map(|&i| m.items[i].key.clone())
+        .collect();
+    m.filter.hide_helpers = true;
+    m.click_item(&tiles[0], false, false);
+    m.select_all_visible();
+    assert!(
+        m.selected_items().iter().all(|k| !rows.contains(k)),
+        "Ctrl+A selected a hidden helper"
+    );
+    // A range from a helper anchor to a tile does not sweep the hidden rows.
+    m.filter.hide_helpers = false;
+    m.click_item(&rows[0], false, false);
+    m.filter.hide_helpers = true;
+    m.click_item(&tiles[0], false, true);
+    assert_eq!(m.selected_items(), vec![tiles[0].clone()]);
+}
+
+/// Review fix (FB12): revealing a helper (the palette, a link) opens a collapsed group and draws the row.
+#[test]
+fn revealing_a_helper_opens_the_group() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET3, "");
+    let key = helper_keys(&m)[1].clone();
+    m.filter.hide_helpers = true;
+    let mut h = app(m);
+    assert!(rows(&h).is_empty());
+    h.state_mut()
+        .palette_pick(&sdc_gui::model::nav::Pick::Texture(key.clone()));
+    assert!(!h.state().filter.hide_helpers, "the group opened");
+    h.run();
+    h.run();
+    assert_eq!(rows(&h).len(), 3);
+    assert_eq!(h.state().selected_items(), vec![key]);
+}
+
+/// Final review (FB12, M6): a Problems click on a helper in a collapsed group opens the group and reveals the row.
+#[test]
+fn a_problems_click_on_a_helper_opens_the_group() {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET3, "");
+    let key = helper_keys(&m)[1].clone();
+    m.items.iter_mut().find(|i| i.key == key).unwrap().warnings =
+        vec![Warning::new(Code::LossReencode, "re-encoded")];
+    m.invalidate_views();
+    m.filter.hide_helpers = true;
+    m.open_problems(None);
+    let mut h = app(m);
+    h.get_by_label(&key).click();
+    h.run();
+    h.run();
+    assert!(!h.state().filter.hide_helpers, "the group opened");
+    assert_eq!(h.state().selected_items(), vec![key.clone()]);
+    assert_eq!(rows(&h).len(), 3, "the rows are drawn");
 }
 
 /// Review pictures of the Textures column at 1100, 1280 and 1600 px (egui-ui-rules step 5). Needs a GPU and
@@ -416,6 +520,69 @@ fn shots() {
         img.save(Path::new(&out).join(format!("helpers-{w}.png")))
             .expect("save png");
     }
+}
+
+/// Review C23 (Note FB13): with 10,000 selected the heading stays one line; the count truncates inside the column.
+#[test]
+fn textures_heading_stays_one_line_with_ten_thousand_selected() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET, "");
+    let base = m
+        .items
+        .iter()
+        .find(|i| i.kind != ItemKind::Helper)
+        .unwrap()
+        .clone();
+    m.items.retain(|i| i.kind == ItemKind::Helper);
+    m.items.extend((0..10_000).map(|n| {
+        let mut i = base.clone();
+        i.status = sdc_gui::model::items::ItemStatus::NeedsDecision;
+        i.key = format!("t/t{n:05}.png");
+        i.name = format!("t{n:05}.png");
+        i
+    }));
+    m.invalidate_views();
+    m.select_all_visible();
+    assert_eq!(
+        m.selection_summary(false).as_deref(),
+        Some("10000 selected")
+    );
+    assert_eq!(m.undecided(), 10_000, "the link is shown");
+    let mut h = harness(m, egui::vec2(1100.0, 800.0));
+    // The user dragged the Textures column narrow.
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("textures").with("chosen"), 220.0f32);
+    });
+    h.run_steps(4);
+    let panel = textures_rect(&h);
+    let heading = h.get_by_label("Textures").rect();
+    let count = h.get_by_label_contains("10000 selected").rect();
+    assert!(
+        (heading.center().y - count.center().y).abs() < 2.0,
+        "heading {heading:?} and count {count:?} share a line"
+    );
+    assert!(
+        count.max.x <= panel.max.x,
+        "count {count:?} inside {panel:?}"
+    );
+    // The "need a decision" link is on that line too.
+    let links: Vec<_> = h.query_all_by_label_contains("need a decision").collect();
+    assert!(!links.is_empty(), "the link is drawn");
+    for l in links {
+        let r = l.rect();
+        assert!(
+            r.min.y >= heading.min.y - 2.0 && r.max.y <= heading.max.y + 2.0,
+            "link {r:?} within the heading's line {heading:?}"
+        );
+    }
+    // The count is cut to fit, and the full text shows on hover.
+    let before = h.query_all_by_label_contains("10000 selected").count();
+    h.hover_at(count.center());
+    h.run_steps(30);
+    assert!(
+        h.query_all_by_label_contains("10000 selected").count() > before,
+        "the full count on hover"
+    );
 }
 
 #[test]

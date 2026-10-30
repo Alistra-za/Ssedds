@@ -1,6 +1,6 @@
 //! The bottom panel's state (layout v2 A1, A9; R7, R8): which tab shows, and whether the panel is open.
 use super::items::Decision;
-use super::{checks, counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
+use super::{checks, code_text, counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -59,7 +59,7 @@ impl AppModel {
 
 /// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CL)
 /// are listed but never change "ready" (`counts_as_ready_problem`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
     Blocks,
     Decide,
@@ -72,7 +72,7 @@ pub fn counts_as_ready_problem(p: &Problem) -> bool {
     p.level != Level::Check
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum At {
     /// An item key.
     Texture(String),
@@ -91,8 +91,30 @@ pub struct Problem {
     pub at: At,
     pub text: String,
     pub code: Option<engine::codes::Code>,
+    /// Codes the text names in words (a failed texture's, a question's); only the row's hover prints them (Note FB8).
+    pub also: Vec<engine::codes::Code>,
     /// Note DU3: the set entry that matches no file, which the row's fix button removes.
     pub missing: Option<sets::Missing>,
+    /// Note FB9: a Decide row's suggested sub-type, which its ✓ button, Enter and Space accept.
+    pub suggested: Option<engine::config::Subtype>,
+}
+
+impl Problem {
+    /// The codes behind the row, for its hover and nowhere else: `CODE, CODE`.
+    pub fn codes_text(&self) -> Option<String> {
+        let all: Vec<_> = self
+            .code
+            .iter()
+            .chain(&self.also)
+            .map(|c| c.as_str())
+            .collect();
+        (!all.is_empty()).then(|| all.join(", "))
+    }
+
+    /// What the row shows (Note FB8): the code's action sentence, else the engine's text with any code taken out.
+    pub fn shown(&self) -> std::borrow::Cow<'_, str> {
+        code_text::shown_for(self.code, &self.text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,7 +262,9 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         at,
         text,
         code,
+        also: vec![],
         missing: None,
+        suggested: None,
     };
     let mut out = vec![];
     for b in pbr_export::export_blocks(m) {
@@ -252,15 +276,18 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         out.push(row(Level::Blocks, at, b.text, None));
     }
     for i in &m.items {
-        let text = match &i.status {
-            ItemStatus::Failed(r) => format!("Failed: {r}"),
-            ItemStatus::Error(cs) => {
-                let cs: Vec<_> = cs.iter().map(|c| c.as_str()).collect();
-                format!("Failed: {}", cs.join(", "))
+        let (text, also) = match &i.status {
+            ItemStatus::Failed(r) => (format!("Failed: {r}"), vec![]),
+            ItemStatus::Error(cs0) => {
+                let cs: Vec<_> = cs0.iter().map(|c| code_text::code_line(*c)).collect();
+                (format!("Failed: {}", cs.join("; ")), cs0.clone())
             }
             _ => continue,
         };
-        out.push(row(Level::Blocks, At::Texture(i.key.clone()), text, None));
+        out.push(Problem {
+            also,
+            ..row(Level::Blocks, At::Texture(i.key.clone()), text, None)
+        });
     }
     for i in m
         .items
@@ -274,11 +301,28 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                 Decision::Subtype { .. } => "sub-type".into(),
                 Decision::AlphaMeaning => "what its alpha means".into(),
                 Decision::CubeLayout => "cube layout".into(),
-                Decision::Acknowledge(c) => format!("acknowledge {}", c.as_str()),
+                // Note FB8: the sentence names the action; the code is on the hover.
+                Decision::Acknowledge(c) => code_text::code_line(*c).into(),
+            })
+            .collect();
+        let also = i
+            .decisions
+            .iter()
+            .filter_map(|d| match d {
+                Decision::Acknowledge(c) => Some(*c),
+                _ => None,
             })
             .collect();
         let text = format!("Needs a decision: {}", parts.join("; "));
-        out.push(row(Level::Decide, At::Texture(i.key.clone()), text, None));
+        let suggested = i.decisions.iter().find_map(|d| match d {
+            Decision::Subtype { suggested } => *suggested,
+            _ => None,
+        });
+        out.push(Problem {
+            also,
+            suggested,
+            ..row(Level::Decide, At::Texture(i.key.clone()), text, None)
+        });
     }
     for a in pbr_export::export_asks(m) {
         let at = set_at(&a.set_key, &a.set_id);

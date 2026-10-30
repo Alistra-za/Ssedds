@@ -1,8 +1,10 @@
 //! The Review tab (layout v2 B2, C2, C5; R1–R4, R11): blockers, undecided textures and pitfalls side by side, what
 //! the export writes, and one Export button. Not a dialog: Enter does nothing here (N3).
-use super::settings_panel::{alpha_options, offered_groups, subtype_label};
+use super::settings_panel::{alpha_hint, alpha_options, offered_groups, subtype_label};
 use super::status::{AMBER, RED};
+use super::type_picker::{self, TypeKind};
 use crate::model::bottom::{problems, Level};
+use crate::model::code_text::code_line;
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{DiskState, JsonKind, JsonLine, NO_EXPORT_FOLDER};
@@ -89,13 +91,15 @@ pub fn undecided_row(
                         let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                             continue;
                         };
-                        if ui.button(label).on_disabled_hover_text(why).clicked() {
+                        let b = ui.button(label).on_hover_text(alpha_hint(policy));
+                        if b.on_disabled_hover_text(why).clicked() {
                             pick = Some(RowPick::Answer(key.to_string(), Answer::Alpha(policy)));
                         }
                     }
                 }
                 Decision::Acknowledge(code) => {
-                    ui.label(code.as_str());
+                    // Note FB8: the sentence, with the code on its hover.
+                    ui.label(code_line(*code)).on_hover_text(code.as_str());
                     if ui
                         .button("Acknowledge for this texture")
                         .on_disabled_hover_text(why)
@@ -112,8 +116,29 @@ pub fn undecided_row(
     pick
 }
 
-/// A Problems row's fix buttons (A1), one set per open question of the texture `key`: Set type… (the suggestion
-/// first), Decide… (the alpha options), Acknowledge. All disabled with `off` as hover.
+/// The text of a Problems row's one-click accept (Note FB9).
+fn accept_text(st: Subtype) -> String {
+    format!("Set type: {} \u{2713}", subtype_label(st))
+}
+
+/// Two buttons drawn as one, `[text] ▾`, in reading order in either layout direction: (main, arrow).
+fn split_button(ui: &mut egui::Ui, text: &str) -> (egui::Response, egui::Response) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        if ui.layout().prefer_right_to_left() {
+            let arrow = ui.button("\u{25BE}");
+            (ui.button(text), arrow)
+        } else {
+            let main = ui.button(text);
+            (main, ui.button("\u{25BE}"))
+        }
+    })
+    .inner
+}
+
+/// A Problems row's fix buttons (A1), one set per open question of the texture `key`: the suggestion's one-click
+/// accept with ▾ for the type picker, or a plain Set type… (Note FB9), Decide… (the alpha options), Acknowledge. All
+/// disabled with `off` as hover.
 pub fn fix_buttons(
     ui: &mut egui::Ui,
     model: &AppModel,
@@ -131,30 +156,39 @@ pub fn fix_buttons(
     ui.add_enabled_ui(off.is_none(), |ui| {
         for d in decisions {
             match d {
+                // Note FB9 (owner amendment A): `[Set type: {suggestion} ✓] ▾`, the main part accepts, ▾ opens the
+                // picker; without a suggestion the plain "Set type…" opens it.
                 Decision::Subtype { suggested } => {
-                    ui.menu_button("Set type…", |ui| {
-                        if let Some(st) = suggested {
-                            if ui
-                                .button(format!("{} (suggested)", subtype_label(*st)))
+                    let opener = match suggested {
+                        Some(st) => {
+                            let (accept, arrow) = split_button(ui, &accept_text(*st));
+                            if accept
+                                .on_hover_text("Use the suggested type")
+                                .on_disabled_hover_text(why)
                                 .clicked()
                             {
                                 pick = Some(RowPick::Decide(key.to_string(), *st));
-                                ui.close();
                             }
-                            ui.separator();
+                            // ▾ is what the plain button was: the picker, so it keeps its name.
+                            arrow.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    arrow.enabled(),
+                                    "Set type…",
+                                )
+                            });
+                            arrow.on_hover_text("Pick another type")
                         }
-                        for (heading, members) in offered_groups(model.target) {
-                            ui.label(egui::RichText::new(heading).weak());
-                            for st in members {
-                                if ui.button(subtype_label(st)).clicked() {
-                                    pick = Some(RowPick::Decide(key.to_string(), st));
-                                    ui.close();
-                                }
-                            }
-                        }
-                    })
-                    .response
+                        None => ui.button("Set type…"),
+                    }
                     .on_disabled_hover_text(why);
+                    let id = egui::Id::new(("set-type-picker", key));
+                    let kind = TypeKind::SetType;
+                    if let Some(st) =
+                        type_picker::show(ui, id, &opener, None, *suggested, kind, model.target)
+                    {
+                        pick = Some(RowPick::Decide(key.to_string(), st));
+                    }
                 }
                 Decision::AlphaMeaning => {
                     ui.menu_button("Decide…", |ui| {
@@ -162,7 +196,7 @@ pub fn fix_buttons(
                             let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                                 continue;
                             };
-                            if ui.button(label).clicked() {
+                            if ui.button(label).on_hover_text(alpha_hint(policy)).clicked() {
                                 let a = Answer::Alpha(policy);
                                 pick = Some(RowPick::Answer(key.to_string(), a));
                                 ui.close();
@@ -225,6 +259,9 @@ fn json_line_text(l: &JsonLine) -> String {
         (DiskState::Unreadable, _) => format!("{path}: cannot be read; kept"),
     }
 }
+
+/// Note FB10: under this window width the Review sections stack in one scroll area.
+const STACK_BELOW: f32 = 1200.0;
 
 /// A column: its heading, then `body` in a scroll area of its own.
 /// `key` names the scroll area, so a heading that carries a count keeps the column's scroll position.
@@ -574,114 +611,130 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 });
             });
         });
-    // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
-    ui.allocate_ui(ui.available_size(), |ui| {
-        ui.columns(if also_on { 4 } else { 3 }, |cols| {
-            // Note FB4: the missing export folder counts, because the gate enforces it.
-            let blockers = blocks.len() + usize::from(!folder_chosen);
-            column(
-                &mut cols[0],
-                "Blockers",
-                &format!("Blockers ({blockers})"),
-                |ui| {
-                    if blockers == 0 {
-                        ui.weak("None");
+    // Note FB4: the missing export folder counts, because the gate enforces it.
+    let blockers = blocks.len() + usize::from(!folder_chosen);
+    let n_cols = if also_on { 4 } else { 3 };
+    let heading = |i: usize| match i {
+        0 => ("Blockers", format!("Blockers ({blockers})")),
+        1 => ("Undecided", format!("Undecided ({})", undecided.len())),
+        2 => ("Warnings", format!("Warnings ({})", asks.len())),
+        _ => ("Also export as", "Also export as".to_string()),
+    };
+    // One body per column, drawn side by side or stacked (Note FB10).
+    let mut body = |ui: &mut egui::Ui, i: usize| match i {
+        0 => {
+            if blockers == 0 {
+                ui.weak("None");
+            }
+            // Note FB1: the export folder is a blocker until one is chosen for this project.
+            if !folder_chosen {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(RED, NO_EXPORT_FOLDER);
+                    let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            r.enabled(),
+                            "Choose the export folder…",
+                        )
+                    });
+                    let r = r
+                        .on_hover_text("Choose where converted textures are written")
+                        .on_disabled_hover_text(picker::BUSY_HOVER);
+                    if r.clicked() {
+                        act = Some(Act::ChooseExport);
                     }
-                    // Note FB1: the export folder is a blocker until one is chosen for this project.
-                    if !folder_chosen {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(RED, NO_EXPORT_FOLDER);
-                            let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
-                            r.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
-                                    r.enabled(),
-                                    "Choose the export folder…",
-                                )
-                            });
-                            let r = r
-                                .on_hover_text("Choose where converted textures are written")
-                                .on_disabled_hover_text(picker::BUSY_HOVER);
-                            if r.clicked() {
-                                act = Some(Act::ChooseExport);
-                            }
-                        });
-                    }
-                    for b in &blocks {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(RED, &b.text);
-                            // A project-wide issue has no set to go to.
-                            if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
-                                act = Some(Act::GoTo(b.set_key.clone()));
-                            }
-                        });
-                    }
-                },
-            );
-            let heading = format!("Undecided ({})", undecided.len());
-            column(&mut cols[1], "Undecided", &heading, |ui| {
-                if undecided.is_empty() {
-                    ui.weak("None");
-                }
-                for k in &undecided {
-                    if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
-                        act = Some(Act::Row(p));
-                    }
-                }
-                let accept = ui
-                    .add_enabled(
-                        any_suggestion && off.is_none(),
-                        egui::Button::new("Accept all suggestions"),
-                    )
-                    .on_hover_text(
-                        "Decide every texture that has a suggestion; the others stay listed",
-                    )
-                    .on_disabled_hover_text(
-                        off.as_deref()
-                            .unwrap_or("No undecided texture has a suggestion"),
-                    );
-                if accept.clicked() {
-                    act = Some(Act::AcceptAll);
-                }
-            });
-            let heading = format!("Warnings ({})", asks.len());
-            column(&mut cols[2], "Warnings", &heading, |ui| {
-                if asks.is_empty() {
-                    ui.weak("None that block the export");
-                }
-                let mut set = None;
-                for a in &asks {
-                    // Grouped by set: `export_asks` lists each set's pitfalls together.
-                    if set != Some(&a.set_id) {
-                        set = Some(&a.set_id);
-                        ui.colored_label(AMBER, &a.set_id);
-                    }
-                    let mut on = review.acknowledged.contains(&a.text);
-                    if ui.checkbox(&mut on, &a.text).changed() {
-                        act = Some(Act::Tick(a.text.clone(), on));
-                    }
-                }
-                if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
-                    act = Some(Act::AckAll);
-                }
-                if others > 0
-                    && ui
-                        .link(format!(
-                            "{others} warning{} in Problems (do not block)",
-                            plural(others)
-                        ))
-                        .clicked()
-                {
-                    act = Some(Act::Others);
-                }
-            });
-            if also_on {
-                column(&mut cols[3], "Also export as", "Also export as", |ui| {
-                    also_section(ui, m, also_err.as_deref(), &mut act)
                 });
             }
-        })
-    });
+            for b in &blocks {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(RED, &b.text);
+                    // A project-wide issue has no set to go to.
+                    if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
+                        act = Some(Act::GoTo(b.set_key.clone()));
+                    }
+                });
+            }
+        }
+        1 => {
+            if undecided.is_empty() {
+                ui.weak("None");
+            }
+            for k in &undecided {
+                if let Some(p) = undecided_row(ui, m, k, off.as_deref()) {
+                    act = Some(Act::Row(p));
+                }
+            }
+            let accept = ui
+                .add_enabled(
+                    any_suggestion && off.is_none(),
+                    egui::Button::new("Accept all suggestions"),
+                )
+                .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
+                .on_disabled_hover_text(
+                    off.as_deref()
+                        .unwrap_or("No undecided texture has a suggestion"),
+                );
+            if accept.clicked() {
+                act = Some(Act::AcceptAll);
+            }
+        }
+        2 => {
+            if asks.is_empty() {
+                ui.weak("None that block the export");
+            }
+            let mut set = None;
+            for a in &asks {
+                // Grouped by set: `export_asks` lists each set's pitfalls together.
+                if set != Some(&a.set_id) {
+                    set = Some(&a.set_id);
+                    ui.colored_label(AMBER, &a.set_id);
+                }
+                let mut on = review.acknowledged.contains(&a.text);
+                if ui.checkbox(&mut on, &a.text).changed() {
+                    act = Some(Act::Tick(a.text.clone(), on));
+                }
+            }
+            if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
+                act = Some(Act::AckAll);
+            }
+            if others > 0
+                && ui
+                    .link(format!(
+                        "{others} warning{} in Problems (do not block)",
+                        plural(others)
+                    ))
+                    .clicked()
+            {
+                act = Some(Act::Others);
+            }
+        }
+        _ => also_section(ui, m, also_err.as_deref(), &mut act),
+    };
+    if ui.ctx().content_rect().width() < STACK_BELOW {
+        // Note FB10: one scrolling column, the sections one under another.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::vertical()
+            .id_salt(("review", "stacked"))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for i in 0..n_cols {
+                    ui.strong(heading(i).1);
+                    body(ui, i);
+                    ui.add_space(6.0);
+                }
+            });
+    } else {
+        // `columns` sizes to max_rect, which still reaches under the footer; bound it to the space left above it.
+        ui.allocate_ui(ui.available_size(), |ui| {
+            ui.columns(n_cols, |cols| {
+                for (i, c) in cols.iter_mut().enumerate() {
+                    let (key, text) = heading(i);
+                    column(c, key, &text, |ui| body(ui, i));
+                }
+            })
+        });
+    }
     match act {
         Some(Act::AlsoTick(t, on)) => model.set_also_tick(t, on),
         Some(Act::AlsoSet(f)) => model.set_also_settings(f),

@@ -5,6 +5,7 @@ pub mod bottom;
 pub mod bulk;
 pub mod checks;
 pub mod cm_json;
+pub mod code_text;
 pub mod cs_pbr;
 pub mod cs_pbr_export;
 pub mod cube_cross;
@@ -106,6 +107,16 @@ fn thousands(n: usize) -> String {
         out.push(c);
     }
     out
+}
+
+/// Note FB7: what the centre column shows: the selection (a texture, a set, the preview, the start screen), or the
+/// docked Presets or TruePBR JSON view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CentreTab {
+    #[default]
+    Selection,
+    Presets,
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -351,10 +362,18 @@ pub struct AppModel {
     pub used_by: used_by::UsedByState,
     /// Note AN: the hover lists of PGPatcher-locked slots.
     pub original: used_by::OriginalState,
-    /// G3: the TruePBR JSON editor window is open.
+    /// G3: the TruePBR JSON editor is open (Note FB7: a centre tab, or its own window when popped out).
     pub json_editor_open: bool,
-    /// Note AM: the preset creator window is open.
+    /// Note AM: the preset creator is open (Note FB7: a centre tab, or its own window when popped out).
     pub presets_open: bool,
+    /// Note FB7: the view the centre column shows in front (`centre_front` checks it is open and docked).
+    pub centre_tab: CentreTab,
+    /// Note FB7: Pop out shows the view in an OS window of its own; Dock brings it back to the centre.
+    pub presets_popped: bool,
+    pub json_editor_popped: bool,
+    /// Note FB7: a view was opened docked this frame; the Meshes view, which has no centre column, switches to
+    /// Textures to show it.
+    pub reveal_centre: bool,
     /// Note AM: the presets folder as last scanned, and the creator's draft; made on first use (`presets_model`).
     pub presets: Option<presets::PresetsModel>,
     /// What the plan accepts (M6 Track E spec §2, DECISIONS Note U3): High suggestions, as the app runs. The M3-era test
@@ -435,6 +454,8 @@ pub struct AppModel {
     /// until dismissed.
     pub kept_banner: Option<String>,
     pub banner: Option<String>,
+    /// The lines of the last banner, so a rebuild logs only a line that is new (Note FB8).
+    banner_logged: Vec<String>,
     /// Task 9 (Z11): the last "encoding follows type" cleanup, as (status-line text, hover listing every texture).
     pub encoding_note: Option<(String, String)>,
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
@@ -621,6 +642,10 @@ impl AppModel {
             original: Default::default(),
             json_editor_open: false,
             presets_open: false,
+            centre_tab: CentreTab::Selection,
+            presets_popped: false,
+            json_editor_popped: false,
+            reveal_centre: false,
             presets: None,
             accept: AcceptSuggestions::High,
             session: None,
@@ -670,6 +695,7 @@ impl AppModel {
             dropped_fills: Default::default(),
             kept_banner: None,
             banner: None,
+            banner_logged: vec![],
             encoding_note: None,
             dialog: None,
             marker: Default::default(),
@@ -784,6 +810,13 @@ impl AppModel {
             Ok((m, _)) => m.clone(),
             Err(e) => e.clone(),
         };
+        // Note FB8: the panel shows the line without its code; the log keeps it whole.
+        let severity = if r.is_ok() {
+            messages::Severity::Info
+        } else {
+            messages::Severity::Warning
+        };
+        self.messages.log(severity, line.clone());
         self.dds_patch.last = Some((key.to_string(), line));
         r.map(|(_, dest)| dest)
     }
@@ -2640,6 +2673,8 @@ impl AppModel {
         self.selection = Selection::Item(key.to_string());
         self.reset_multi();
         self.bulk = Default::default();
+        // Note FB7: also a click on the texture already selected brings it to the front of the centre.
+        self.centre_tab = CentreTab::Selection;
     }
 
     /// Select one set; any multi-selection ends (F3a D1).
@@ -2647,6 +2682,8 @@ impl AppModel {
         self.selection = Selection::Set(key.to_string());
         self.reset_multi();
         self.bulk = Default::default();
+        // Note FB7: also a click on the set already selected brings it to the front of the centre.
+        self.centre_tab = CentreTab::Selection;
     }
 
     pub fn expand(&mut self, key: &str) {
@@ -2911,8 +2948,10 @@ impl AppModel {
             );
         }
     }
+
     /// The restore toast's Undo (Note FB5): takes back the restore step and deletes the `.recovery` files, since the
-    /// user rejected them. Does nothing once another edit sits on top of the step. (A plain Ctrl+Z keeps the files.)
+    /// user rejected them. Once another edit sits on top of the step it only says so and changes nothing. (A plain
+    /// Ctrl+Z keeps the files.)
     pub fn undo_crash_restore(&mut self) {
         let Some((depth, files)) = self.crash_restore.as_ref() else {
             return;
@@ -2926,7 +2965,7 @@ impl AppModel {
         {
             self.messages.notify(
                 messages::Severity::Info,
-                "The restored edits were not undone: you have edited since. Use Undo to step back.",
+                "The restored edits were already undone or edited since: use Undo or Redo",
             );
             return;
         }
@@ -3138,6 +3177,28 @@ impl AppModel {
     pub fn open_presets(&mut self) {
         self.presets_model().rescan();
         self.presets_open = true;
+        if !self.presets_popped {
+            self.centre_tab = CentreTab::Presets;
+            self.reveal_centre = true;
+        }
+    }
+
+    /// Open the TruePBR JSON editor: in front of the centre, or in its own window when popped out (Note FB7).
+    pub fn open_json_editor(&mut self) {
+        self.json_editor_open = true;
+        if !self.json_editor_popped {
+            self.centre_tab = CentreTab::Json;
+            self.reveal_centre = true;
+        }
+    }
+
+    /// The view in front of the centre column: `centre_tab` while that view is open and docked, else the selection.
+    pub fn centre_front(&self) -> CentreTab {
+        match self.centre_tab {
+            CentreTab::Presets if self.presets_open && !self.presets_popped => CentreTab::Presets,
+            CentreTab::Json if self.json_editor_open && !self.json_editor_popped => CentreTab::Json,
+            _ => CentreTab::Selection,
+        }
     }
 
     /// The header's Preset menu (AM12): every selectable preset whose chain targets this target, or none.
@@ -3267,7 +3328,7 @@ impl AppModel {
                 format!("NVTT {} at {} (tested)", t.version, t.path.display())
             }
             Some(NvttProbe::Found(t)) => format!(
-                "NVTT {} at {}: untested (3.2.5 is), acknowledge ENC-NVTT-VERSION to use it",
+                "NVTT {} at {}: untested (3.2.5 is), acknowledge its version warning to use it",
                 t.version,
                 t.path.display()
             ),
@@ -3412,11 +3473,26 @@ impl AppModel {
             let held = self.held_recovery.contains(s.path());
             lines.extend(crate::crash_log::recovery_note(s.path(), &s.text(), held));
         }
+        // Note FB8: a line that names a code goes to the log as the engine wrote it, once per appearance; the banner
+        // itself carries the words only.
+        for l in lines.iter().filter(|l| !self.banner_logged.contains(l)) {
+            if let Some(c) = code_text::first_code(l) {
+                use engine::codes::Severity as S;
+                let severity = match c.severity() {
+                    S::Info => messages::Severity::Info,
+                    S::Warning | S::Blocking => messages::Severity::Warning,
+                    S::Error => messages::Severity::Error,
+                };
+                self.messages.log(severity, l.clone());
+            }
+        }
         self.banner = if lines.is_empty() {
             None
         } else {
-            Some(lines.join("\n"))
+            let shown: Vec<_> = lines.iter().map(|l| code_text::banner_line(l)).collect();
+            Some(shown.join("\n"))
         };
+        self.banner_logged = lines;
     }
 
     /// Reload both documents from disk (the banner's Reload), then plan once.

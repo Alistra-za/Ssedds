@@ -67,7 +67,22 @@ fn path_from_the_card_menu_opens_the_slot_commands_window_and_it_toggles_the_loc
         h.query_all_by_label("Apply").count() >= 1,
         "slot 6 is in Path mode"
     );
-    h.get_by_label("Pin slot 6").click();
+    // Review C15 (Note FB13): eight boxes, each named for what it does and for its slot; the old term is on hover.
+    for n in 1..=8 {
+        assert_eq!(
+            h.query_all_by_label(&format!("Pin slot {n} (always use this file)"))
+                .count(),
+            1
+        );
+    }
+    let b = h.get_by_label("Pin slot 6 (always use this file)");
+    h.hover_at(b.rect().center());
+    h.run();
+    assert!(
+        h.query_by_label_contains("Pinned (locked)").is_some(),
+        "the old term (locked) is on hover"
+    );
+    h.get_by_label("Pin slot 6 (always use this file)").click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
 }

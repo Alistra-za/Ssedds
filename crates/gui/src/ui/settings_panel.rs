@@ -1,6 +1,9 @@
 //! The centre panel for a selected texture (M3a spec §2.4): the decisions it still needs, then its settings by group,
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
+use super::status::code_hover;
+use super::type_picker::TypeKind;
+use crate::model::code_text::{code_line, shown_for, without_codes};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
@@ -121,6 +124,22 @@ pub fn alpha_options() -> Options {
         (json!(AlphaPolicy::CutoutBlend), "Cutout + Blend".into()),
         (json!(AlphaPolicy::Data), "Data".into()),
     ]
+}
+
+/// One line on what an alpha meaning does (Note FB8, review C12): the hover of every place that offers one. Problems'
+/// Decide… menu and Review's buttons use it, and the question box in a texture's settings.
+pub fn alpha_hint(policy: AlphaPolicy) -> &'static str {
+    match policy {
+        AlphaPolicy::Remove => "Drops the alpha channel: the texture is fully solid",
+        AlphaPolicy::Cutout => {
+            "Alpha cuts holes: pixels over the threshold stay solid, the rest vanish (leaves, fences)"
+        }
+        AlphaPolicy::Blend => "Alpha fades smoothly: soft see-through edges (glass, hair)",
+        AlphaPolicy::CutoutBlend => "Alpha cuts holes and also fades the edges",
+        AlphaPolicy::Data => {
+            "The alpha is kept as data (a mask or a height): it is written as it is, not as see-through"
+        }
+    }
 }
 
 fn capitalised(s: &str) -> String {
@@ -305,6 +324,18 @@ pub(super) fn combo(
     options: &Options,
     mixed: bool,
 ) -> (Option<Value>, egui::Response) {
+    combo_for("", ui, id, current, options, mixed)
+}
+
+/// [`combo`] for `field`: the Alpha field's five options carry `alpha_hint` as their hover (Note FB8, review C12).
+pub(super) fn combo_for(
+    field: &str,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    current: &Value,
+    options: &Options,
+    mixed: bool,
+) -> (Option<Value>, egui::Response) {
     // Note FB4: "— mixed" and "— not set" (no value, nothing to mix) are drawn weak, never the word `null`.
     let shown = if mixed {
         egui::RichText::new("— mixed").weak()
@@ -325,8 +356,16 @@ pub(super) fn combo(
                 // A null value is a non-selectable group heading.
                 if v.is_null() {
                     ui.label(egui::RichText::new(label).weak());
-                } else if ui.selectable_label(v == current, label).clicked() {
-                    picked = Some(v.clone());
+                } else {
+                    let mut r = ui.selectable_label(v == current, label);
+                    if field == "alpha.policy" {
+                        if let Ok(p) = serde_json::from_value::<AlphaPolicy>(v.clone()) {
+                            r = r.on_hover_text(alpha_hint(p));
+                        }
+                    }
+                    if r.clicked() {
+                        picked = Some(v.clone());
+                    }
                 }
             }
         })
@@ -524,7 +563,14 @@ pub(super) fn editor(
             } else {
                 f.value.clone()
             };
-            combo(ui, egui::Id::new((key, field)), &current, &options, mixed)
+            combo_for(
+                field,
+                ui,
+                egui::Id::new((key, field)),
+                &current,
+                &options,
+                mixed,
+            )
         }
     }
 }
@@ -560,6 +606,9 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
         .scope(|ui| {
             if f.lock.is_some() {
                 ui.disable();
+            }
+            if f.field == "subtype" {
+                return subtype_field(ui, cx, f);
             }
             editor(ui, cx.key, cx.target, cx.job, cx.busy, f, false)
         })
@@ -613,6 +662,24 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
     }
     ui.end_row();
     edit
+}
+
+/// The Sub-type field (Note FB9, owner amendment J): a button showing the type that opens the type picker, the
+/// engine's suggestion pinned on top. Named and valued as the combo it replaces.
+fn subtype_field(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> (Option<Value>, egui::Response) {
+    let current = serde_json::from_value::<Subtype>(f.value.clone()).ok();
+    let shown = current.map_or_else(|| display_value(&f.value), subtype_label);
+    let r = ui.button(format!("{shown} \u{25BE}"));
+    r.widget_info(|| {
+        let mut i = egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, r.enabled(), f.label);
+        i.current_text_value = Some(shown.clone());
+        i
+    });
+    let id = egui::Id::new(("sub-type-picker", cx.key));
+    let suggested = cx.job.suggestions.first().map(|s| s.subtype);
+    let picked =
+        super::type_picker::show(ui, id, &r, current, suggested, TypeKind::SubType, cx.target);
+    (picked.filter(|s| Some(*s) != current).map(|s| json!(s)), r)
 }
 
 /// The basic Mipmaps rows: the on/off tick box (the level count lives in the Advanced drawer), then the filter.
@@ -791,7 +858,7 @@ fn decision_box(
                                 .into_iter()
                                 .filter_map(|(v, l)| Some((serde_json::from_value(v).ok()?, l)))
                             {
-                                if ui.button(label).clicked() {
+                                if ui.button(label).on_hover_text(alpha_hint(policy)).clicked() {
                                     actions.push(Action::Decide(Answer::Alpha(policy)));
                                 }
                             }
@@ -818,7 +885,9 @@ fn decision_box(
                         });
                     }
                     Decision::Acknowledge(code) => {
-                        ui.label(egui::RichText::new(code.as_str()).strong());
+                        // Note FB8: the sentence, with the code on its hover.
+                        ui.label(egui::RichText::new(code_line(*code)).strong())
+                            .on_hover_text(code.as_str());
                         if let Some(m) = message_of(warnings, *code) {
                             ui.label(m);
                         }
@@ -886,15 +955,24 @@ fn channels(ui: &mut egui::Ui, job: &ResolvedJob) {
     ui.add_space(6.0);
 }
 
+/// A failed texture's line (Note FB8: the sentences, not the codes; the codes are the label's hover).
 fn error_text(codes: &[Code]) -> String {
     format!(
         "Error: {}",
         codes
             .iter()
-            .map(|c| c.as_str())
+            .map(|c| code_line(*c))
             .collect::<Vec<_>>()
-            .join(", ")
+            .join("; ")
     )
+}
+
+fn error_codes(codes: &[Code]) -> String {
+    codes
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Warnings the decision box does not already show.
@@ -917,7 +995,8 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Warnings").strong());
     for w in rest {
-        ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
+        ui.label(egui::RichText::new(&*shown_for(Some(w.code), &w.message)).small())
+            .on_hover_ui(|ui| code_hover(ui, &w.message, w.code.as_str()));
     }
 }
 
@@ -978,7 +1057,9 @@ fn dds_header_panel(
         }
     }
     if let Some(l) = last {
-        ui.label(egui::RichText::new(l).small());
+        // The result line is kept whole (code first) for the Messages log; the panel shows the words.
+        ui.label(egui::RichText::new(without_codes(l)).small())
+            .on_hover_text(l);
     }
 }
 
@@ -1134,7 +1215,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 ItemStatus::Skipped(r) => ui.label(format!("Skipped: {r}")),
                 ItemStatus::Failed(e) => ui.label(format!("Failed: {e}")),
                 ItemStatus::PackedInto(j) => ui.label(format!("This map is packed into {j}.")),
-                ItemStatus::Error(c) => ui.label(error_text(c)),
+                ItemStatus::Error(c) => ui.label(error_text(c)).on_hover_text(error_codes(c)),
                 ItemStatus::NeedsDecision | ItemStatus::Ready => ui.label(""),
             };
             if kind == ItemKind::Dds {
@@ -1174,7 +1255,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ui.label(format!("Skipped: {r}"));
                 }
                 ItemStatus::Error(c) => {
-                    ui.colored_label(RED, error_text(c));
+                    ui.colored_label(RED, error_text(c))
+                        .on_hover_text(error_codes(c));
                 }
                 _ => {}
             }
@@ -1187,7 +1269,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ""
                 };
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}{hint}")).small());
+                    ui.label(egui::RichText::new(format!("{m}{hint}")).small())
+                        .on_hover_ui(|ui| code_hover(ui, m, Code::InGreenUnstated.as_str()));
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
                     }
@@ -1195,7 +1278,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             } else if let Some(m) = guess {
                 // No AW question was asked: the check's own line, same button, never an auto-flip.
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("CHK-GREEN-GUESS: {m}")).small());
+                    ui.label(egui::RichText::new(m).small())
+                        .on_hover_ui(|ui| code_hover(ui, m, Code::ChkGreenGuess.as_str()));
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
                     }

@@ -131,11 +131,14 @@ impl AppModel {
     /// summary's hidden count). Keyboard navigation and Ctrl+A stay on `visible_keys` (tiles only).
     fn shown_keys(&self) -> Vec<String> {
         let mut keys = self.visible_keys();
-        keys.extend(
-            self.visible_helpers_shared()
-                .iter()
-                .map(|&i| self.items[i].key.clone()),
-        );
+        // Note FB12: a collapsed Helpers group shows no rows, so a mouse range does not run over them.
+        if !self.filter.hide_helpers {
+            keys.extend(
+                self.visible_helpers_shared()
+                    .iter()
+                    .map(|&i| self.items[i].key.clone()),
+            );
+        }
         keys
     }
 
@@ -275,11 +278,30 @@ impl AppModel {
         }
         .into_iter()
         .collect();
-        let hidden = keys.iter().filter(|k| !shown.contains(*k)).count();
-        Some(match hidden {
-            0 => format!("{} selected", keys.len()),
-            h => format!("{} selected ({h} hidden by filter)", keys.len()),
-        })
+        // Note FB12: a selected helper in a collapsed Helpers group is hidden by the fold, not by a filter.
+        let folded: std::collections::HashSet<String> = if !sets && self.filter.hide_helpers {
+            self.visible_helpers_shared()
+                .iter()
+                .map(|&i| self.items[i].key.clone())
+                .collect()
+        } else {
+            Default::default()
+        };
+        let in_fold = keys.iter().filter(|k| folded.contains(*k)).count();
+        let hidden = keys
+            .iter()
+            .filter(|k| !shown.contains(*k) && !folded.contains(*k))
+            .count();
+        let mut s = format!("{} selected", keys.len());
+        match (hidden, in_fold) {
+            (0, 0) => {}
+            (h, 0) => s.push_str(&format!(" ({h} hidden by filter)")),
+            (0, f) => s.push_str(&format!(" ({f} in the collapsed Helpers group)")),
+            (h, f) => s.push_str(&format!(
+                " ({h} hidden by filter, {f} in the collapsed Helpers group)"
+            )),
+        }
+        Some(s)
     }
 
     /// After a plan (F3a D1, design §2.4): keys whose item or set is gone leave the multi-selection, and a gone
@@ -559,6 +581,8 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
     let locked = locked_items(m);
     // Note FB3: while a plan runs, the jobs are the ones from before the last edit; a field the document sets itself
     // is read from the document, so a partial write shows mixed at once.
+    // shortcut: a Reset during a plan still shows the old value (the document read has no "unset" to tell it from
+    // the jobs'), until the plan lands; upgrade if a Reset-then-read race is ever reported.
     let live = if m.planning.is_some() {
         m.project.as_ref()
     } else {

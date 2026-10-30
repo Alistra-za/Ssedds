@@ -1,4 +1,4 @@
-//! Note AM: the preset creator window (kittest). No presets folder: nothing can be written.
+//! Note AM: the preset creator, a centre tab since Note FB7 (kittest). No presets folder: nothing can be written.
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::AppModel;
@@ -36,7 +36,10 @@ fn presets_opens_the_creator_and_a_builtin_is_read_only() {
     h.state_mut().presets_model().select("cs-quality");
     h.run();
     h.get_by_label_contains("Built-in presets are read-only");
-    assert!(h.get_by_label("Save preset").accesskit_node().is_disabled());
+    assert!(
+        h.query_by_label("Save preset").is_none(),
+        "a built-in offers only Duplicate"
+    );
     h.get_by_label("Duplicate").click();
     h.run();
     assert_eq!(h.state_mut().presets_model().id(), "cs-quality-copy");
@@ -285,58 +288,4 @@ fn the_families_show_in_order_with_their_hints() {
 fn collapse_pbr(h: &mut Harness<'static, AppModel>) {
     h.get_by_label("PBR / Community Shaders").click();
     h.run();
-}
-
-#[test]
-fn place_keeps_a_saved_rect_below_the_header() {
-    use eframe::egui::{pos2, vec2, Rect};
-    use sdc_gui::ui::presets::place;
-    let area = Rect::from_min_max(pos2(0.0, 60.0), pos2(1600.0, 1000.0));
-    let centre = Rect::from_min_max(pos2(640.0, 60.0), pos2(1600.0, 760.0));
-    let saved = Rect::from_min_size(pos2(80.0, 10.0), vec2(860.0, 680.0));
-    let r = place(Some(saved), area, centre);
-    assert!(r.min.y >= 60.0 && area.contains_rect(r));
-    assert_eq!(r.size(), saved.size());
-    let r = place(None, area, centre);
-    assert!((r.center() - centre.center()).length() < 1.0 && r.width() >= 640.0);
-    // Taller than the area: shrunk to it, never above it.
-    let tall = Rect::from_min_size(pos2(80.0, 10.0), vec2(860.0, 2000.0));
-    assert!(area.contains_rect(place(Some(tall), area, centre)));
-}
-
-/// The open Presets window's rect after two frames, with the header and centre rects.
-fn opened_rects(
-    saved: Option<[f32; 4]>,
-) -> (eframe::egui::Rect, eframe::egui::Rect, eframe::egui::Rect) {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = with_folder(d.path());
-    m.settings.layout.presets_window = saved;
-    let mut h = harness(m);
-    h.run();
-    h.run();
-    let below = sdc_gui::ui::below_header(&h.ctx).expect("below-header recorded");
-    let centre = sdc_gui::ui::centre_rect(&h.ctx).expect("centre-rect recorded");
-    let w = h
-        .ctx
-        .memory(|m| m.area_rect(sdc_gui::ui::presets::window_id()))
-        .expect("the Presets window is open");
-    (w, below, centre)
-}
-
-#[test]
-fn the_presets_window_opens_over_the_centre_and_never_over_the_header() {
-    // A4: a saved rect that starts over the header is moved below it.
-    let (w, below, _) = opened_rects(Some([80.0, 10.0, 860.0, 680.0]));
-    assert!(below.top() > 10.0, "the header has height");
-    assert!(
-        w.top() >= below.top() - 0.5,
-        "{w:?} covers the header {below:?}"
-    );
-    // With none saved it opens centred over the centre column.
-    let (w, below, centre) = opened_rects(None);
-    assert!(w.top() >= below.top() - 0.5);
-    assert!(
-        centre.x_range().contains(w.center().x),
-        "{w:?} vs {centre:?}"
-    );
 }

@@ -296,6 +296,10 @@ impl AppModel {
 
     /// [`Self::header_export_text`] for a `clean` the caller already has (the header asks once per frame).
     pub fn export_text(&self, clean: bool) -> String {
+        // Final review M5: with no folder open there is no count to give ("Review 0 files" greeted a new user).
+        if self.root.is_none() {
+            return "Export".into();
+        }
         let n = self.export_files();
         let verb = if clean { "Export" } else { "Review" };
         format!("{verb} {n} file{}", plural(n))

@@ -210,7 +210,6 @@ pub struct Probe {
     layout: Layout,
     looks: (Look, Look),
     settings_window: Option<Rect>,
-    presets_window: Option<Rect>,
     details: [bool; DETAILS_NAMES.len()],
 }
 
@@ -251,7 +250,6 @@ pub fn probe(
         layout: view.layout,
         looks: (*looks.0, *looks.1),
         settings_window: settings_window_now(ctx),
-        presets_window: ctx.memory(|m| m.area_rect(crate::ui::presets::window_id())),
         details: DETAILS_NAMES.map(|n| crate::ui::viewport3d::details_open(ctx, n)),
     }
 }
@@ -311,16 +309,10 @@ pub fn capture(
     l.look = look_now(looks.0, &prev.look);
     l.set_look = look_now(looks.1, &prev.set_look);
     let content = ctx.content_rect();
-    // The 3D settings window is constrained to the window, Presets to the area under the header (A9).
+    // The 3D settings window is constrained to the window.
     if let Some(r) = settings_window_now(ctx) {
         if let Some(now) = window_rect(r, prev.settings_window, content) {
             l.settings_window = Some(now);
-        }
-    }
-    if let Some(r) = ctx.memory(|m| m.area_rect(crate::ui::presets::window_id())) {
-        let area = crate::ui::below_header(ctx).unwrap_or(content);
-        if let Some(now) = window_rect(r, prev.presets_window, area) {
-            l.presets_window = Some(now);
         }
     }
     l.details = DETAILS_NAMES

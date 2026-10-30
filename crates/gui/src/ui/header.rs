@@ -783,7 +783,7 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
         let _ = model.open_export_folder();
     }
     if json {
-        model.json_editor_open = true;
+        model.open_json_editor();
     }
     if marker {
         model.open_marker_dialog();
