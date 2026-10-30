@@ -97,10 +97,46 @@ pub fn device_lost() -> bool {
     DEVICE_LOST.load(std::sync::atomic::Ordering::Acquire)
 }
 
-/// Note DN: called from the frame after a device loss, before egui-wgpu's paint would panic. eframe cannot recreate
-/// the device, so the app writes the unsaved documents to their recovery files, says why, and exits.
-/// `on_exit` (the layout save) does not run.
-pub fn close_after_device_loss() -> ! {
+/// Note FC4: a process started with `--after-device-loss` is one restart deep; see `should_relaunch`.
+static AFTER_LOSS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Called once from `main` with the folder named by `--after-device-loss`, if any.
+pub fn mark_started(after_loss: bool) {
+    AFTER_LOSS.store(after_loss, std::sync::atomic::Ordering::Release);
+    let _ = STARTED.set(std::time::Instant::now());
+}
+
+/// The folder after `--after-device-loss` in the process arguments (the program name is skipped by the caller).
+pub fn after_device_loss_folder(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        if a == "--after-device-loss" {
+            return it.next().map(PathBuf::from);
+        }
+    }
+    None
+}
+
+/// Note FC4 (DN3): the arguments the restarted process gets, so it reopens the folder and FB5's restore runs.
+pub fn relaunch_args(folder: Option<&Path>) -> Vec<std::ffi::OsString> {
+    match folder {
+        Some(f) => vec!["--after-device-loss".into(), f.as_os_str().to_owned()],
+        None => Vec::new(),
+    }
+}
+
+/// Loop guard: a restarted process that loses the device again within 60 s of its start does not restart again.
+pub fn should_relaunch(started_with_flag: bool, uptime: std::time::Duration) -> bool {
+    !started_with_flag || uptime >= std::time::Duration::from_secs(60)
+}
+
+/// Note FC4 (supersedes DN1's exit): called from the frame after a device loss, before egui-wgpu's paint would
+/// panic. eframe cannot recreate the device, so the app writes the unsaved documents to their recovery files (the
+/// caller has run `on_exit`), starts itself again on the same folder, and exits.
+pub fn close_after_device_loss(folder: Option<&Path>) -> ! {
     let files = RECOVERY.lock().map(|r| r.clone()).unwrap_or_default();
     write_recovery(&files);
     let kept: Vec<String> = files
@@ -116,6 +152,34 @@ pub fn close_after_device_loss() -> ! {
             ),
         );
     }
+    let uptime = STARTED.get().map(|s| s.elapsed()).unwrap_or_default();
+    if should_relaunch(
+        AFTER_LOSS.load(std::sync::atomic::Ordering::Acquire),
+        uptime,
+    ) {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(crate::PRODUCT_NAME)
+            .set_description(
+                "The graphics device was lost. Tessalith restarts and brings your unsaved edits back.",
+            )
+            .set_buttons(rfd::MessageButtons::OkCustom("Restart".into()))
+            .show();
+        let spawned = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .args(relaunch_args(folder))
+                .spawn()
+        });
+        match spawned {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                if let Some(path) = RUN_LOG.get() {
+                    append(path, &format!("{} restart failed: {e}\n", now_stamp()));
+                }
+            }
+        }
+    }
+    // A failed spawn, or a second loss within 60 s of a restart: FB5's text, then exit.
     let mut text = "The graphics device was lost (a driver reset, or a fault around alt-tab or screen capture), \
                     so Tessalith has to close."
         .to_string();
@@ -374,5 +438,33 @@ mod tests {
             .map(|p| std::fs::read_to_string(p).unwrap())
             .collect();
         assert_eq!(kept, vec!["A".to_string()]);
+    }
+
+    /// Note FC4 (DN3): the restarted process reopens the folder that was open.
+    #[test]
+    fn relaunch_args_names_the_folder() {
+        let args = relaunch_args(Some(Path::new("C:\\mods\\x")));
+        assert_eq!(
+            args,
+            vec![
+                std::ffi::OsString::from("--after-device-loss"),
+                std::ffi::OsString::from("C:\\mods\\x")
+            ]
+        );
+    }
+
+    #[test]
+    fn relaunch_args_is_empty_without_a_folder() {
+        assert!(relaunch_args(None).is_empty());
+    }
+
+    /// Note FC4: a restarted process that loses the device again within 60 s does not restart again.
+    #[test]
+    fn no_second_relaunch_within_60s() {
+        use std::time::Duration;
+        assert!(should_relaunch(false, Duration::from_secs(1)));
+        assert!(should_relaunch(false, Duration::from_secs(600)));
+        assert!(!should_relaunch(true, Duration::from_secs(59)));
+        assert!(should_relaunch(true, Duration::from_secs(60)));
     }
 }

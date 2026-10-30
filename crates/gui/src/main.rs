@@ -53,6 +53,9 @@ fn build_model() -> AppModel {
 
 fn main() -> eframe::Result {
     sdc_gui::crash_log::install();
+    // Note FC4: a restart after a lost graphics device reopens the folder that was open.
+    let reopen = sdc_gui::crash_log::after_device_loss_folder(std::env::args_os().skip(1));
+    sdc_gui::crash_log::mark_started(reopen.is_some());
     // The preview timing log (SDC_PREVIEW_LOG=0 turns it off); kept alive for the whole run.
     let _perf = render3d::perf_log::start();
     // The saved window (AG17, AG18), fitted to the monitors before the window exists.
@@ -95,7 +98,11 @@ fn main() -> eframe::Result {
                 sdc_gui::crash_log::watch_device(rs, sdc_gui::crash_log::run_log_path());
             }
             // No render state means no usable adapter: the app still starts, without a preview.
-            let app = SdcApp::new(build_model()).with_render_state(cc.wgpu_render_state.as_ref());
+            let mut model = build_model();
+            if let Some(folder) = reopen {
+                model.open_folder(folder);
+            }
+            let app = SdcApp::new(model).with_render_state(cc.wgpu_render_state.as_ref());
             app.restore_ctx(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
