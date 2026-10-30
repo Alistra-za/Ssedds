@@ -214,6 +214,8 @@ impl Sim {
         self.f1(SLSF1_PARALLAX, false);
         self.f2(SLSF2_GLOW_MAP, false);
         self.f1(SLSF1_FACEGEN_DETAIL, false);
+        // [Src 2.2.0 TP:1080]
+        self.f1(SLSF1_FACEGEN_RGB_TINT, false);
         self.f2(SLSF2_PBR, true);
         self.f1(SLSF1_EYE_ENVMAP, false);
         if let Some(v) = get_bool(e, "subsurface") {
@@ -316,12 +318,7 @@ pub(crate) fn run(
     if matches.is_empty() {
         return SimResult::NoMatch;
     }
-    // 1.2.0 canApply [TP:230-243]; the GRASS-use half is plugin-side.
-    if source.slsf1 & (1 << SLSF1_FACEGEN_RGB_TINT) != 0 {
-        return SimResult::Skip(
-            "PGPatcher 1.2.0 skips shapes with SLSF1.21 (FaceGen RGB tint)".to_string(),
-        );
-    }
+    // 2.x canApply is always true [Src 2.2.0 TP:302-307]: SLSF1.21 shapes are patched (and the bit cleared).
     for (e, _) in matches {
         if let Err(msg) = check_types(e) {
             return SimResult::Skip(msg);

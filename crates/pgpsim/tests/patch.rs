@@ -383,15 +383,15 @@ fn no_match_and_nif_filter() {
     );
 }
 
+/// GE1: 2.x patches an SLSF1.21 shape and clears the bit [Src 2.2.0 TP:1080; measured T7].
 #[test]
-fn facegen_rgb_tint_is_a_skip() {
+fn facegen_rgb_tint_is_patched_and_cleared() {
     let mut src = rock();
     src.slsf1 |= 1 << 21;
-    let r = sim(&md(), &sdc_default(), &src);
-    assert!(
-        matches!(&r, SimResult::Skip(s) if s.contains("SLSF1.21")),
-        "{r:?}"
-    );
+    let (m, mp, _) = patched(sim(&md(), &sdc_default(), &src));
+    assert_eq!(mp, MP);
+    assert!(m.is_pbr());
+    assert!(!bit(m.slsf1, 21));
 }
 
 #[test]
