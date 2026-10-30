@@ -958,18 +958,27 @@ const PGP_LOCK_CAPTION: &str = "kept by PGPatcher";
 /// move the row), so a node of its own carries the name.
 fn pgp_lock_mark(ui: &egui::Ui, rect: egui::Rect, id: egui::Id) {
     let grey = ui.visuals().weak_text_color();
-    let p = ui.painter();
-    p.rect_filled(rect, 2.0, ui.visuals().extreme_bg_color.gamma_multiply(0.7));
-    super::input_name::paint_lock(p, rect.center() - egui::vec2(0.0, 9.0), grey);
-    let font = egui::FontId::proportional(9.0);
-    for (i, line) in ["kept by", "PGPatcher"].into_iter().enumerate() {
-        p.text(
-            rect.center() + egui::vec2(0.0, 1.0 + 10.0 * i as f32),
-            egui::Align2::CENTER_TOP,
-            line,
-            font.clone(),
-            grey,
-        );
+    // Clipped to the thumbnail; below the width the caption needs only the padlock is drawn (the name stays).
+    let p = ui.painter().with_clip_rect(rect);
+    p.rect_filled(
+        rect,
+        2.0,
+        ui.visuals().extreme_bg_color.gamma_multiply(0.45),
+    );
+    let caption = rect.width() >= 50.0;
+    let lift = if caption { 9.0 } else { 0.0 };
+    super::input_name::paint_lock(&p, rect.center() - egui::vec2(0.0, lift), grey);
+    if caption {
+        let font = egui::FontId::proportional(9.0);
+        for (i, line) in ["kept by", "PGPatcher"].into_iter().enumerate() {
+            p.text(
+                rect.center() + egui::vec2(0.0, 1.0 + 10.0 * i as f32),
+                egui::Align2::CENTER_TOP,
+                line,
+                font.clone(),
+                grey,
+            );
+        }
     }
     ui.ctx().accesskit_node_builder(id, |b| {
         b.set_role(egui::accesskit::Role::Label);
@@ -990,7 +999,7 @@ fn pgp_lock_hover(
     let n = slot.slot_number();
     resp.on_hover_ui(|ui| {
         ui.label(format!(
-            "PGPatcher lock ({}): the original texture in this spot is used",
+            "kept by PGPatcher. PGPatcher lock ({}): the original texture in this spot is used",
             lock_key(n).unwrap_or_default()
         ));
         match model.original_textures(&v.id, n) {

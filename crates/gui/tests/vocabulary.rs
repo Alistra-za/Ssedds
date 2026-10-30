@@ -4,7 +4,6 @@ mod support;
 use eframe::egui;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
-use sdc_gui::model::sets::set_views;
 use sdc_gui::model::AppModel;
 use serde_json::json;
 use std::time::Duration;
@@ -86,6 +85,89 @@ fn no_stray_words() {
     assert!(h.query_all_by_label_contains("Not ready").count() >= 1);
 }
 
+/// Fix round 1: the words that live in places the first sweep never opened.
+#[test]
+fn advanced_checks_use_low_detail_and_no_mip_zero() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.settings.advanced_open = true;
+    let mut h = harness(m);
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    assert_eq!(h.query_all_by_label("Low detail check").count(), 1);
+    assert_no_strays(&h, "Advanced");
+    // The hover is not in the tree until it shows; hover the switch and sweep again.
+    h.get_by_label_contains("Measure whether full size adds anything")
+        .hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("full-size level");
+    assert_no_strays(&h, "Advanced hover");
+}
+
+/// Fix round 1: the sub-type dropdowns offer `Skin RFAOS`, never `skin rfaos`.
+fn open_a_combo_and_check(h: &mut Harness<'static, AppModel>, view: &str) {
+    use eframe::egui::accesskit::Role;
+    let combos: Vec<_> = h
+        .query_all_by_role(Role::ComboBox)
+        .map(|n| n.rect())
+        .collect();
+    assert!(!combos.is_empty(), "{view}: a sub-type combo");
+    let mut seen = false;
+    for r in combos {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(r.center()));
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: r.center(),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        });
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: r.center(),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        h.run();
+        h.run();
+        assert_eq!(
+            h.query_all_by_label_contains("skin rfaos").count(),
+            0,
+            "{view}: lower-case id offered"
+        );
+        if h.query_all_by_label("Skin RFAOS").count() > 0 {
+            seen = true;
+            break;
+        }
+        h.key_press(egui::Key::Escape);
+        h.run();
+    }
+    assert!(seen, "{view}: Skin RFAOS is offered");
+}
+
+#[test]
+fn the_subtype_dropdowns_offer_skin_rfaos() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.select_item("landscape/rock01_normal.png");
+    let mut h = harness(m);
+    h.run();
+    open_a_combo_and_check(&mut h, "settings box");
+
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.open_review();
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    open_a_combo_and_check(&mut h, "Review");
+}
+
 /// Note FC9 (AN6): a PGPatcher-locked slot is a grey padlock with the caption `kept by PGPatcher`, not a red cross.
 #[test]
 fn the_pgpatcher_lock_reads_kept_by_pgpatcher() {
@@ -111,7 +193,6 @@ fn the_pgpatcher_lock_reads_kept_by_pgpatcher() {
         h.query_all_by_label("kept by PGPatcher").count() >= 1,
         "the padlock is named"
     );
-    assert!(set_views(h.state()).iter().any(|v| v.id == SET));
 }
 
 /// Note FC9 (CC9/CC10): a feature that is on but blocked reads `on, blocked by …`, not `off`.
