@@ -255,11 +255,17 @@ type RetargetKey = (
     Option<(u64, Option<std::time::SystemTime>)>,
 );
 
-/// The copy an edit applies to: the first that is neither PGPatcher output nor our own edit mod (spec §8.1).
+/// The copy an edit applies to: the first that is neither PGPatcher output, our chosen edit mod, nor the 1.x default
+/// edit mod (spec §8.1; Note GD28: `mods\sdc NIF Edits` holds Tessalith's own earlier output).
 pub fn pick_source<'a>(copies: &'a [PathCopy], edit_mod: &Path) -> Option<&'a PathCopy> {
+    let legacy = |root: &str| {
+        Path::new(&root.replace('/', "\\"))
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(edit_doc::EDIT_MOD))
+    };
     copies
         .iter()
-        .find(|c| !c.derived && !same_dir(Path::new(&c.root), edit_mod))
+        .find(|c| !c.derived && !same_dir(Path::new(&c.root), edit_mod) && !legacy(&c.root))
 }
 
 pub fn generated_warning(origin: &str) -> Option<String> {

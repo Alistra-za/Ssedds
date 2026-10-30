@@ -602,6 +602,19 @@ fn pick_source_skips_the_edit_mod_and_pgpatcher_output() {
     assert!(pick_source(&c[..2], m).is_none());
 }
 
+/// Note GD28: the 1.x default edit mod (`mods\sdc NIF Edits`, CI3) holds Tessalith's own earlier output: it is never
+/// the edit source, with no folder chosen or another one.
+#[test]
+fn the_legacy_edit_mod_is_never_the_source() {
+    let c = [copy("SDC NIF Edits", 8, false), copy("A", 3, false)];
+    let src = |m: &str| pick_source(&c, Path::new(m)).map(|c| c.origin.clone());
+    assert_eq!(src(""), Some("A".into()), "no folder chosen");
+    assert_eq!(src(r"C:\I\mods\MyOut"), Some("A".into()), "another folder");
+    let mut slash = c[0].clone();
+    slash.root = r"C:\I/mods\sdc NIF Edits\".into();
+    assert!(pick_source(&[slash], Path::new("")).is_none());
+}
+
 /// Final review M2: Windows folder names ignore case, so `SDC NIF Edits` is still the edit mod.
 #[test]
 fn the_edit_mod_is_matched_ignoring_case() {

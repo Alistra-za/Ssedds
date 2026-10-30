@@ -5,7 +5,7 @@ The GUI can edit a mesh (NIF file) in the Meshes view and write an edited copy. 
 ## Before you start
 
 - Scan your mods first, so the Meshes view lists your meshes. See [Mod scanning](Mod-Scanning.md).
-- Pick an export folder with **Export to ▾** in the header. Edited NIFs go there, next to your textures. There is no default folder: until you pick one you can edit, but not export ("No export folder chosen"), and your edits are kept in `%LOCALAPPDATA%\sdc\nif-edits` so they survive a restart.
+- Pick an export folder with **Export to ▾** in the header. Edited NIFs go there, next to your textures. There is no default folder: until you pick one you can edit, but not export ("No export folder chosen"), and your edits are kept in `%LOCALAPPDATA%\sdc\nif-edits` so they survive a restart. Edits made with Tessalith 1.1 or earlier without an export folder are in `mods\sdc NIF Edits`: choose that folder in **Export to ▾** to reopen them.
 
 ## Open a mesh for editing
 
