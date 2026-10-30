@@ -10277,24 +10277,31 @@ fn a_failed_folder_change_is_a_row_beside_a_refused_op() {
         }],
         None,
     );
+    use sdc_gui::model::meshes::NifLevel;
+    // Note GD33: the refused op's own row, never export_block's "1 edit cannot be applied." summary beside it
+    let refused = |rows: &[sdc_gui::model::meshes::NifProblem]| {
+        rows.iter()
+            .filter(|p| p.level == NifLevel::Blocks && p.text.contains("not a bit field"))
+            .count()
+    };
+    let rows = m.nif_problems();
+    assert_eq!((rows.len(), refused(&rows)), (1, 1), "{rows:?}");
+    let old = d.path().join("mods").join(EDIT_MOD);
     let bad = d.path().join(r"mods\Bad");
     std::fs::create_dir_all(nif_doc(&bad).parent().unwrap()).unwrap();
     std::fs::write(nif_doc(&bad), b"not = [toml").unwrap();
     m.set_nif_export_root(Some(bad.clone()));
     let rows = m.nif_problems();
     let head = format!("could not open the edit document in {}: ", bad.display());
+    assert_eq!((rows.len(), refused(&rows)), (2, 1), "{rows:?}");
     assert!(
         rows.iter()
-            .any(|p| p.level == sdc_gui::model::meshes::NifLevel::Blocks
-                && p.text.contains("not a bit field")),
+            .any(|p| p.level == NifLevel::Blocks && p.text.starts_with(&head)),
         "{rows:?}"
     );
-    assert!(
-        rows.iter()
-            .any(|p| p.level == sdc_gui::model::meshes::NifLevel::Blocks
-                && p.text.starts_with(&head)),
-        "{rows:?}"
-    );
+    m.set_nif_export_root(Some(old));
+    let rows = m.nif_problems();
+    assert_eq!((rows.len(), refused(&rows)), (1, 1), "{rows:?}");
 }
 
 /// Note GD30 (final review M5): a folder change closes an open guard dialog (its diff was the old folder's file).

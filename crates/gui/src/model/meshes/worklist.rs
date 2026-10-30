@@ -1,6 +1,6 @@
 //! The open NIF edit's entries in the one worklist (Note GD1): every warning and blocker of the edit, one row each,
 //! with the tab and field where its fix lives. The app hands them to the Problems list; no egui types.
-use super::nif_edit::{NifEdit, NO_CLEANUP, NO_EDITS, NO_EXPORT_FOLDER, RERUN_PGPATCHER};
+use super::nif_edit::{NifEdit, NO_CLEANUP, RERUN_PGPATCHER};
 use nif::edit::validate::{new_errors, Level, Target, Warning};
 use nif::edit::{Op, Outcome};
 use nif::fields::Field;
@@ -147,25 +147,19 @@ pub(super) fn problems(e: &NifEdit) -> Vec<NifProblem> {
             None,
         );
     }
-    // A reason `export_block` found that no row above covers (a failed folder change, an apply error, bytes that do
-    // not read back). Note GD30: matched by text, so another blocking row does not hide it.
-    if let Some(why) = e
-        .blocked
-        .as_ref()
-        .filter(|b| *b != NO_EDITS && *b != NO_EXPORT_FOLDER)
-    {
-        if !out.iter().any(|p| p.text == *why) {
-            out.insert(
-                0,
-                NifProblem {
-                    level: NifLevel::Blocks,
-                    path: e.data_path.clone(),
-                    text: why.clone(),
-                    tab: NifTab::Shader,
-                    field: None,
-                },
-            );
-        }
+    // Note GD33: a failed folder change, an apply error or bytes that do not read back (no row above says them); first,
+    // as `export_block` checks them first. Another blocking row does not hide it (GD30).
+    if let Some(why) = e.uncovered_block() {
+        out.insert(
+            0,
+            NifProblem {
+                level: NifLevel::Blocks,
+                path: e.data_path.clone(),
+                text: why,
+                tab: NifTab::Shader,
+                field: None,
+            },
+        );
     }
     out
 }

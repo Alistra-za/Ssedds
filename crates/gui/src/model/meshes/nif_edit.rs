@@ -809,6 +809,20 @@ impl NifEdit {
         read_back(&self.patched).err()
     }
 
+    /// Note GD33: a reason the export is blocked that no worklist row says: a failed folder change, an apply error, or
+    /// bytes that do not read back. Refused ops, conflicts and errors have their own rows, so `export_block`'s
+    /// summaries of them are never a row. Unblocked, the bytes read back (`export_block` checked), so no second scan.
+    pub fn uncovered_block(&self) -> Option<String> {
+        self.retarget_error
+            .clone()
+            .or_else(|| self.apply_err.clone())
+            .or_else(|| {
+                self.blocked
+                    .as_ref()
+                    .and_then(|_| read_back(&self.patched).err())
+            })
+    }
+
     /// Recomputes `blocked` after the ops or the warnings changed.
     pub fn refresh_blocked(&mut self) {
         self.blocked = self.export_block();
