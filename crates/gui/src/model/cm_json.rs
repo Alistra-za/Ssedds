@@ -50,7 +50,8 @@ pub fn key(name: &str) -> Option<&'static CmKey> {
     KEYS.iter().find(|k| k.name == name)
 }
 
-/// Whether `v` has the type PGPatcher reads. A colour is exactly three numbers: 1.2.0 crashes on anything else.
+/// Whether `v` has the type PGPatcher reads. A colour is exactly three numbers: 2.x ignores anything else (1.2.0
+/// crashed on it).
 pub fn valid(kind: CmKind, v: &Json) -> bool {
     match kind {
         CmKind::Bool => v.is_boolean(),

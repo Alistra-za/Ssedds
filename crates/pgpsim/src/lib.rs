@@ -1,5 +1,6 @@
-//! PGPatcher 1.2.0 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1), plus the 2.2.0 `alphaprop_*` keys.
-//! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1). Pure: no GPU, no egui, no IO.
+//! PGPatcher 2.3.1 TruePBR patch, simulated in memory for the 3D preview (P1 spec §2.1; Note GE).
+//! Rules: the PGPatcher 1.2.0 TruePBR rule notes ("01", NIF team plan p1) with the 2.x changes of the pgp22 research
+//! (`[Src 2.2.0 TP:<line>]`; that file is unchanged at 2.3.1). Pure: no GPU, no egui, no IO.
 //! It stops at "the NIF as PGPatcher leaves it", a `MaterialState`; CS's load-time remap belongs to render3d.
 mod check;
 mod index;
@@ -18,7 +19,8 @@ pub use prep::prepare;
 use serde_json::{Map, Value};
 
 /// What In game (simulated) models, said once (Note GD7): the edit panel's hover and first line read it.
-pub const SIMULATED_AS: &str = "Simulated as PGPatcher 1.2.0 with 2.2's alphaprop keys: loose JSON only, no modrules priority, read at the last scan";
+pub const SIMULATED_AS: &str =
+    "Simulated as PGPatcher 2.3.1: loose JSON only, no modrules priority, read at the last scan";
 
 pub struct SimInput<'a> {
     /// One PGPatcher entry exactly as sdc writes it (`pgp::writer::entry_node(..).to_value()`).

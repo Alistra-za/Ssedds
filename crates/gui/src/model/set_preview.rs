@@ -1,5 +1,5 @@
 //! The live set preview (P1-A, spec §2.3, 02): the Textures view's own 3D panel, showing the selected set on a game
-//! mesh patched in memory as PGPatcher 1.2.0 would patch it (`pgpsim`), with this session's encodes of the set's
+//! mesh patched in memory as PGPatcher 2.3.1 would patch it (`pgpsim`), with this session's encodes of the set's
 //! textures. No egui types; `ui::set_preview` draws it.
 //!
 //! Part 1: per-member preview encodes → DDS bytes served as `FileSource::Memory`, fresh/stale per member, paused

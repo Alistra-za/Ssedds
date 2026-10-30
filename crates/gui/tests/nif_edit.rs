@@ -9629,7 +9629,11 @@ fn string_extra_value_keeps_its_document_shape() {
 /// GD7: "In game (simulated)" says what it simulates, from the one const: on hover and as the first line under it.
 #[test]
 fn in_game_label_reads_simulated_as() {
-    assert!(pgpsim::SIMULATED_AS.starts_with("Simulated as PGPatcher 1.2.0"));
+    // GE7: the text names 2.3.1.
+    assert_eq!(
+        pgpsim::SIMULATED_AS,
+        "Simulated as PGPatcher 2.3.1: loose JSON only, no modrules priority, read at the last scan"
+    );
     let (_d, mut m) = pg_session();
     let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
     m.select_edit(Selection::Shape(shape));
