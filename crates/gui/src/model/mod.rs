@@ -542,6 +542,8 @@ pub struct AppModel {
     pub(crate) auto_note: Option<auto_record::AutoNote>,
     /// Note FC1 (AM14): `preset` names no installed preset; computed once per plan request.
     missing_preset_id: Option<String>,
+    /// Note FC1 R5: the untouched recorded sub-types when the presets were saved; the settled plan re-types them.
+    retype_untouched: Vec<(String, serde_json::Value)>,
     /// Export was clicked while sources had changed: it starts when the fresh plan arrives.
     export_after_plan: bool,
     /// Review's Export was clicked while a plan or scan read was in flight: the export continues when it lands.
@@ -782,6 +784,7 @@ impl AppModel {
             choose_preset: None,
             auto_note: None,
             missing_preset_id: None,
+            retype_untouched: vec![],
             last_inputs: None,
             auto_replans: 0,
             follow_off: false,
@@ -904,6 +907,7 @@ impl AppModel {
         self.drop_undo_note();
         self.history.clear();
         self.auto_note = None;
+        self.retype_untouched.clear();
         self.refresh_banner();
         let recent = self.settings.recent.clone();
         self.settings.push_recent(root.clone());

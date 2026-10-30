@@ -182,8 +182,9 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
         }
     }
     if saved {
-        // The presets folder changed: the next plan loads it (and the header's preset list already shows it).
-        model.replan();
+        // The presets folder changed: the next plan loads it (and the header's preset list already shows it); an
+        // untouched recorded sub-type follows a new alias (Note FC1 R5).
+        model.presets_saved();
     }
 }
 

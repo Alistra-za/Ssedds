@@ -1689,13 +1689,21 @@ impl AppModel {
             return;
         }
         let id = set.to_string();
+        let retype = self.untouched_for_shader(set, shader);
+        // Note FC1 R5: a sub-type the plan recorded on its own and nobody changed goes, so the shader re-types it.
+        let pick = move |p: &mut crate::project::ProjectDoc, d: &mut crate::sets_doc::SetsDoc| {
+            d.set_shader(&id, shader);
+            for k in &retype {
+                p.clear_file_value(k, "subtype");
+            }
+        };
         let Some((item, was, on)) = self.skin_follow(set, shader) else {
-            self.edit_docs("Shader", None, true, move |_, d| d.set_shader(&id, shader));
+            self.edit_docs("Shader", None, true, pick);
             return;
         };
         // Note DU6-DU7: the shader and the diffuse's sub-type (with Note DQ's recipe follow) are one step.
         self.batch_edit("Shader", |m| {
-            m.edit_docs("Shader", None, true, |_, d| d.set_shader(&id, shader));
+            m.edit_docs("Shader", None, true, pick);
             if on {
                 m.edit_subtype("Shader", &item, Some(Subtype::SkinAlbedo));
             } else {
@@ -1720,6 +1728,34 @@ impl AppModel {
                 s.set_auto_skin(&skin);
             });
         });
+    }
+
+    /// Note FC1 R5: set `set`'s members whose recorded sub-type is untouched and that `shader` re-types (the engine's
+    /// `member_subtype`); not a member in a locked slot.
+    fn untouched_for_shader(&self, set: &str, shader: Option<Shader>) -> Vec<String> {
+        let Some(sh) = shader else {
+            return vec![];
+        };
+        let views = views(self);
+        let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
+            return vec![];
+        };
+        let locked = locked_items(self);
+        let now = v.shader.as_ref().map(|p| p.shader);
+        let held = |k: &String| {
+            self.project
+                .as_ref()
+                .and_then(|p| p.file_value(k, "subtype"))
+        };
+        v.members
+            .iter()
+            .filter(|k| !locked.contains_key(*k) && self.untouched_subtype(k, now))
+            .filter(|k| {
+                let new = self.auto_pick(k, Some(sh)).map(|st| serde_json::json!(st));
+                new.is_some() && new != held(k)
+            })
+            .cloned()
+            .collect()
     }
 
     /// Note DU6-DU9: what choosing `shader` for set `set` does to its own diffuse: `(item, its own [files] sub-type

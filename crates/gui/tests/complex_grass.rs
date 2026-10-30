@@ -327,6 +327,50 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
     );
 }
 
+/// Note FC1: with the scan database there at the first plan (accept High, as the app), the mesh vote's sub-type is
+/// what gets recorded: the landscape colour map of a PBR grass set is written as `pbr_albedo`, not
+/// `landscape_diffuse`.
+#[test]
+fn a_mesh_vote_at_the_first_plan_is_what_gets_recorded() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    for (name, px) in [
+        ("g.png", [64u8, 128, 38]),
+        ("g_n.png", [128, 128, 255]),
+        ("g_rmaos.png", [128, 0, 255]),
+    ] {
+        let p = root.join("landscape/grass").join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::ImageBuffer::from_fn(16, 16, |_, _| image::Rgb(px))
+            .save(p)
+            .unwrap();
+    }
+    let dbdir = tempfile::tempdir().unwrap();
+    let db = gras_db(dbdir.path(), r"textures\landscape\grass\g.dds");
+    modscan::store::Store::open(&db)
+        .unwrap()
+        .conn()
+        .execute("UPDATE shape SET slsf2 = 8388608", [])
+        .unwrap();
+    let mut m = sdc_gui::model::AppModel::new(
+        sdc_gui::settings::GuiSettings {
+            export_folder: Some(d.path().join("export")),
+            ..Default::default()
+        },
+        None,
+        support::session(),
+    );
+    assert_eq!(m.accept, engine::policy::AcceptSuggestions::High);
+    m.scan_db = Some(db);
+    m.open_folder(root);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let p = m.project.as_ref().unwrap();
+    assert_eq!(
+        p.file_value("landscape/grass/g.png", "subtype"),
+        Some(serde_json::json!("pbr_albedo"))
+    );
+}
+
 /// PBR grass design §4.2, R5: a TruePBR GRAS shape is evidence for pbr_grass, and none for complex grass.
 #[test]
 fn a_pbr_set_whose_albedo_a_truepbr_gras_shape_uses_picks_pbr_grass() {

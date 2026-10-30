@@ -191,18 +191,23 @@ impl AppModel {
         if leaves {
             return Follow::Revert(v.members.iter().filter(free).cloned().collect());
         }
+        let shader = v.shader.as_ref().map(|s| s.shader);
         let switch = v
             .members
             .iter()
             .filter(free)
-            .filter(|m| *m != key && p.file_value(m, "subtype").is_none())
+            .filter(|m| *m != key)
             .filter_map(|m| {
                 let it = self.item(m)?;
                 let job = it.job.as_ref()?;
+                // Note FC1 R5: a sub-type the plan recorded on its own and nobody changed counts as inferred.
+                let untouched = self.untouched_subtype(m, shader);
                 // Inferred means nothing the user wrote decided it: no `[files]` entry (under either spelling of the
                 // key) and no rule. `[files]` keys are paths, never globs; only the CLI's `--set` takes globs. Anything
                 // the user wrote resolves with a provenance other than the engine's own suggestion.
-                if job.provenance.get("subtype") != Some(&Provenance::Suggestion) {
+                let inferred = p.file_value(m, "subtype").is_none()
+                    && job.provenance.get("subtype") == Some(&Provenance::Suggestion);
+                if !inferred && !untouched {
                     return None;
                 }
                 let suggested = it.decisions.iter().find_map(|d| match d {

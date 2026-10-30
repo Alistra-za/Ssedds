@@ -650,7 +650,9 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         .response
         .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
     // Note FC1 (AM14): a Problems row's `Choose preset…` opens the same menu under the combo, as a popup the header
-    // owns (egui 0.36 has no public way to open a combo). A request older than two passes is dropped.
+    // owns (egui 0.36 has no public way to open a combo). A request is taken by the next pass that draws this combo
+    // and honoured only within two passes of the click: one left while the combo was not drawn is dropped then, as
+    // stale, and never opens the menu later.
     let now = ui.ctx().cumulative_pass_nr();
     let request = model.choose_preset.take().is_some_and(|at| now <= at + 2);
     egui::Popup::menu(&combo)

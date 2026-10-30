@@ -426,7 +426,7 @@ fn the_gui_accepts_high_suggestions_and_still_asks_for_medium_ones() {
 /// Spec Review Focus 3: a sub-type the user chose (`sdc.toml` `[files]`) beats the accepted suggestion and is not
 /// "(auto)".
 #[test]
-fn an_explicit_subtype_beats_an_accepted_suggestion() {
+fn a_users_choice_replaces_the_recorded_suggestion() {
     use sdc_gui::model::fields::auto_subtype_reason;
     let d = tempfile::tempdir().unwrap();
     let mut m = opened_as_the_app(mod_folder(d.path()), d.path().join("export"));

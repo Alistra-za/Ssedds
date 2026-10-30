@@ -172,6 +172,31 @@ fn a_recording_after_a_user_edit_is_its_own_step() {
     assert!(auto_row(&m).is_none(), "its Undo was for the undone step");
 }
 
+/// R5: deciding a diffuse as `pbr_albedo` switches its set's members, also one whose type the plan recorded on its
+/// own and nobody changed.
+#[test]
+fn pbr_follow_retypes_an_untouched_recorded_member() {
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/iron.png", [120, 90, 60]);
+    rgb(&root, "a/iron_n.png", [128, 128, 255]);
+    let mut m = support::opened_as_the_app(root, d.path().join("export"));
+    assert_eq!(subtype(&m, "a/iron_n.png"), Some(json!("normal")));
+    m.decide("a/iron.png", Answer::Subtype(Subtype::PbrAlbedo));
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/iron.png"), Some(json!("pbr_albedo")));
+    assert_eq!(subtype(&m, "a/iron_n.png"), Some(json!("pbr_normal")));
+    // A type the user chose is theirs: it does not follow.
+    m.undo();
+    assert!(m.wait_idle(WAIT));
+    m.set_field("a/iron_n.png", "subtype", json!("msn"));
+    assert!(m.wait_idle(WAIT));
+    m.decide("a/iron.png", Answer::Subtype(Subtype::PbrAlbedo));
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/iron_n.png"), Some(json!("msn")));
+}
+
 /// Note FB5: a crash restore's toast can undo it while it is the top step, so nothing is recorded over it.
 #[test]
 fn nothing_is_recorded_over_a_crash_restore() {

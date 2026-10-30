@@ -228,8 +228,6 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
         std::sync::Arc::new(engine::session::Session::new(encoders_sys::Bc1Model::Ideal).unwrap()),
     );
     m.user_presets = Some(presets.clone());
-    // An accepted type would be recorded on open (Note FC1, R1), and a new alias does not re-type a recorded file.
-    m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(root);
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     let swizzle = |m: &sdc_gui::model::AppModel| {
@@ -247,10 +245,22 @@ fn a_saved_remap_reaches_the_plan_without_a_restart() {
     pm.add_alias("dmask", "m").unwrap();
     pm.set_branch_field(Subtype::Envmask, "dmask", "channels.swizzle", json!("bgr1"));
     pm.save().unwrap();
-    // What the window does after a save.
-    m.replan();
+    // What the window does after a save. The opening recorded the file's accepted type (Note FC1); untouched, it
+    // follows the alias (R5).
+    m.presets_saved();
     assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     assert_eq!(swizzle(&m).as_deref(), Some("bgr1"));
+    let key = m
+        .items
+        .iter()
+        .find(|i| i.name.contains("box_dmask"))
+        .unwrap()
+        .key
+        .clone();
+    assert_eq!(
+        m.project.as_ref().unwrap().file_value(&key, "subtype"),
+        Some(json!("envmask"))
+    );
 }
 
 #[test]
