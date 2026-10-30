@@ -53,7 +53,7 @@ pub enum SimResult {
     },
     /// PGPatcher would skip this shape for this file; the shape keeps `source`.
     Skip(String),
-    /// PGPatcher 2.3 throws on this file and stops the whole run (`CRASHES: <key> is not a <type>`); the shape
+    /// PGPatcher 2.3 throws on this file and stops the whole run (`CRASHES: <key> is not a string`, or `an array`); the shape
     /// keeps `source` (Note GE5).
     Error(String),
 }

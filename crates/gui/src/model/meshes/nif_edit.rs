@@ -1465,7 +1465,8 @@ impl NifEdit {
                 notes.push(PGP_ENV_SCALE.to_string());
             }
             // GE6 (R3): badge only, outside the cache like the env check; the revert is not simulated.
-            if shape.is_some_and(|sm| pg_stock(&self.model, sm)) {
+            // GE16: a crashing run never reverts.
+            if crashes.is_empty() && shape.is_some_and(|sm| pg_stock(&self.model, sm)) {
                 notes.insert(0, PG_STOCK_REVERT.to_string());
             }
             rows.push((s.id, m, notes));

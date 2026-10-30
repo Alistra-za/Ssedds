@@ -40,8 +40,9 @@ const MATCH_KEYS: &[&str] = &[
     "match8",
 ];
 
+/// `t` carries its article ("a string", "an array").
 fn crashes(k: &str, t: &str) -> String {
-    format!("{}: {k} is not a {t}", crate::CRASHES)
+    format!("{}: {k} is not {t}", crate::CRASHES)
 }
 
 /// The first match key that is not a string (a load or `shouldApply` throw).
@@ -49,7 +50,7 @@ pub(crate) fn match_key_error(e: &Map<String, Value>) -> Option<String> {
     MATCH_KEYS
         .iter()
         .find(|k| e.get(**k).is_some_and(|v| !v.is_string()))
-        .map(|k| crashes(k, "string"))
+        .map(|k| crashes(k, "a string"))
 }
 
 /// A multilayer entry's `coat_color` that is an object of 3+ keys: `size() >= 3` passes, then `[0]` throws
@@ -59,7 +60,7 @@ pub(crate) fn coat_error(e: &Map<String, Value>) -> Option<String> {
         && e.get("coat_color")
             .and_then(Value::as_object)
             .is_some_and(|o| o.len() >= 3);
-    throws.then(|| crashes("coat_color", "array"))
+    throws.then(|| crashes("coat_color", "an array"))
 }
 
 /// PGPatcher 2.2 `alphaprop_*` whole-number keys and their maxima. Never in `NUM_KEYS`: 2.2 ignores a bad value

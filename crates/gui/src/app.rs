@@ -434,6 +434,8 @@ impl eframe::App for SdcApp {
             || self.meshes.scanning()
             || self.meshes.v3.busy()
             || self.state.set3d.busy()
+            // GE16: the set preview's crash lines appear when the JSON read lands, even on an idle Textures view.
+            || self.meshes.pg_reading()
             || self.model.v2_jobs_pending();
         let background =
             self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;

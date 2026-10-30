@@ -6908,6 +6908,27 @@ fn pg_stock_shape_gets_the_revert_line() {
     assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
 }
 
+/// GE16 (final review M2): a crashing run never reverts, so a PG_STOCK shape shows the crash line and no revert line.
+#[test]
+fn a_crashing_json_drops_the_pg_stock_revert_line() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&shape_pg_stock()));
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    assert_eq!(
+        notes(&m, shape),
+        [
+            r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json)."
+        ]
+    );
+}
+
 /// PG_IGNORE on the shader counts as on the shape (fix F6); value 0 does not.
 #[test]
 fn pg_ignore_on_the_shader_is_not_simulated() {

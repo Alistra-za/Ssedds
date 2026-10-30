@@ -427,7 +427,7 @@ fn wrong_typed_patch_key_is_ignored() {
 fn wrong_typed_match_key_is_an_error() {
     let err = |k: &str, t: &str| {
         SimResult::Error(format!(
-            "PGPatcher 2.3 crashes on this JSON: {k} is not a {t}"
+            "PGPatcher 2.3 crashes on this JSON: {k} is not {t}"
         ))
     };
     let none = |_: &str| false;
@@ -447,14 +447,14 @@ fn wrong_typed_match_key_is_an_error() {
     ] {
         assert_eq!(
             sim_with(&e, &sdc_default(), &rock(), &none),
-            err(k, "string"),
+            err(k, "a string"),
             "{e}"
         );
     }
     let coat = with(json!({"multilayer": true, "coat_color": {"r": 1, "g": 1, "b": 1}}));
     assert_eq!(
         sim(&coat, &sdc_default(), &rock()),
-        err("coat_color", "array")
+        err("coat_color", "an array")
     );
     // An apply-time throw: a file rejected by the texture check never reaches it.
     assert!(matches!(
