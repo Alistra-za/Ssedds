@@ -378,22 +378,37 @@ fn picking_a_layout_resolves_only_that_file() {
     );
 }
 
-/// T4 minor 1 (DT35): a Review row whose only question is the layout says where to answer it; a 2D row does not.
+/// Note FC3 (supersedes DT35's hint): a row whose question is the layout answers it inline with `Set layout ▾`; a 2D
+/// row has no such control.
 #[test]
-fn a_review_row_for_the_layout_points_to_settings() {
-    const HINT: &str = "Pick its cube layout in settings";
+fn a_layout_row_sets_the_layout_inline() {
+    use sdc_gui::ui::review::{apply, undecided_row, SET_LAYOUT};
     for (key, want) in [(UNCLEAR, 1), ("a/flat.png", 0)] {
         let d = tempfile::tempdir().unwrap();
         let mut h = Harness::builder()
-            .with_size(eframe::egui::vec2(800.0, 200.0))
+            .with_size(eframe::egui::vec2(800.0, 300.0))
             .build_ui_state(
                 move |ui, m: &mut AppModel| {
-                    sdc_gui::ui::review::undecided_row(ui, m, key, None);
+                    if let Some(p) = undecided_row(ui, m, key, None) {
+                        apply(m, p);
+                    }
                 },
                 unclear_model(d.path()),
             );
         h.run();
-        assert_eq!(h.query_all_by_label(HINT).count(), want, "{key}");
+        assert_eq!(h.query_all_by_label(SET_LAYOUT).count(), want, "{key}");
+        if want == 0 {
+            continue;
+        }
+        h.get_by_label(SET_LAYOUT).click();
+        h.run();
+        h.get_by_label("Mirror ball").click();
+        h.run();
+        let p = h.state().project.as_ref().unwrap();
+        assert_eq!(
+            p.file_value(UNCLEAR, "cubemap.layout"),
+            Some(serde_json::json!("mirror_ball"))
+        );
     }
 }
 

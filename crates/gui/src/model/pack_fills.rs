@@ -202,6 +202,7 @@ impl AppModel {
         self.dropped_fills.clear();
         if !notes.is_empty() {
             self.dropped_fills.insert(note_key, notes.join("; "));
+            self.dropped_fills_step = self.history.pushes;
         }
         None
     }

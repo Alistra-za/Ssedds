@@ -7,7 +7,7 @@ use egui_kittest::Harness;
 use engine::config::Subtype;
 use engine::shader::Shader;
 use image::{ImageBuffer, Luma, Rgb};
-use sdc_gui::model::bottom::problems;
+use sdc_gui::model::bottom::{problems, Fix};
 use sdc_gui::model::sets::{set_views, Missing};
 use sdc_gui::model::AppModel;
 use sdc_gui::settings::GuiSettings;
@@ -148,7 +148,7 @@ fn a_missing_entry_is_a_problems_row() {
     let rows = problems(&m);
     let row = rows
         .iter()
-        .find(|p| p.missing == Some(Missing::File(GONE.into())))
+        .find(|p| p.fix == Some(Fix::RemoveMissing(Missing::File(GONE.into()))))
         .unwrap_or_else(|| panic!("no row: {rows:#?}"));
     assert!(row.text.contains(GONE), "{}", row.text);
 }
@@ -167,7 +167,9 @@ fn the_problems_row_removes_the_entry() {
     .click();
     settle(&mut h);
     assert!(missing_of(h.state(), ROCK).is_empty());
-    assert!(problems(h.state()).iter().all(|p| p.missing.is_none()));
+    assert!(problems(h.state())
+        .iter()
+        .all(|p| !matches!(p.fix, Some(Fix::RemoveMissing(_)))));
 }
 
 // ---- Remove a missing entry: the "?" chip's menu ----

@@ -1,23 +1,33 @@
 //! The Problems tab (layout v2 A1, A12): one row per problem with its fix in place; the list is rebuilt once per
-//! change and only the rows on screen are drawn.
+//! change and only the rows on screen are drawn. Note FC3: every result the user must act on is a row, and its action
+//! is the row's button (`Problem::fix`).
 use super::review::{apply, fix_buttons, RowPick};
 use super::status::{dot, Status};
-use crate::model::bottom::{filtered, flagged, problems, At, Level, Problem, ProblemsFilter};
+use crate::model::bottom::{filtered, flagged, problems, At, Fix, Level, Problem, ProblemsFilter};
 use crate::model::sets::Missing;
-use crate::model::AppModel;
+use crate::model::shell::ShellRequest;
+use crate::model::{Answer, AppModel};
+use crate::pgp::settings::feature_key;
 use eframe::egui;
-use engine::codes::Code;
 use serde_json::json;
 use std::sync::Arc;
 
 /// The fix button on a CHAN-NORMAL-LENGTH row (Note DP).
 pub const REBUILD_Z: &str = "Rebuild Z";
+/// The Undo of an Info row (R-fills-2, Z11); not the header's `Undo`, so the two have distinct names (rule 8.4).
+pub const UNDO_ROW: &str = "Undo this change";
+/// The `Checks` filter pill (Note FC3: Problems shows one count; checks are a filter of it, rule 6.5).
+pub const CHECKS_PILL: &str = "Checks";
+/// Note FC3: `Fix path` asks the PGPatcher field `(set id, key)` for focus; the field takes it when drawn.
+pub const FOCUS_FIELD: &str = "fix-path-focus";
 
 pub fn status_of(l: Level) -> Status {
     match l {
         Level::Blocks => Status::Blocks,
-        // A check row's own dot is the list's severity marker, not a "ready" dot (owner: "amber is fine").
-        Level::Decide | Level::Warning | Level::Check => Status::Warning,
+        Level::Decide | Level::Warning => Status::Warning,
+        // Note FC3 (amends CL18): checks are not amber; Info rows are not a status either.
+        Level::Check => Status::Check,
+        Level::Info => Status::Info,
     }
 }
 
@@ -30,7 +40,7 @@ pub fn row_id(p: &Problem) -> egui::Id {
 /// A row's accessible name: where, then what (Note FB9).
 fn row_name(p: &Problem) -> String {
     let at = match &p.at {
-        At::Texture(k) | At::File(k) => k.as_str(),
+        At::Texture(k) | At::File(k) | At::Nif(k) => k.as_str(),
         At::Set { id, .. } => id.as_str(),
         At::Project => "Project",
     };
@@ -39,9 +49,9 @@ fn row_name(p: &Problem) -> String {
 
 type Rows = Arc<Vec<Problem>>;
 
-/// `filtered` at most once per change: keyed on the (cached) problems build and the filter. Also the count the
-/// "Checks {n}" button shows: the set's check rows while a Set filter is on, else the project's (K6, review M2), and
-/// the project's rows with a suggestion, which "Accept all suggestions" decides (Note FB9).
+/// `filtered` at most once per change: keyed on the (cached) problems build and the filter. Also whether the
+/// `Checks` pill shows (the set's check rows while a Set filter is on, else the project's; K6, review M2), and the
+/// project's rows with a suggestion, which "Accept all suggestions" decides (Note FB9).
 fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize, usize) {
     let all = problems(model);
     let f = model.bottom.filter.clone();
@@ -76,11 +86,108 @@ enum Act {
     Texture(String),
     Set(String),
     File(String),
-    Fix(RowPick),
-    RebuildZ(String),
-    RemoveMissing(String, Missing),
+    Pick(RowPick),
+    Apply(Fix, At),
     Filter(Option<ProblemsFilter>),
     AcceptAll,
+}
+
+/// The pill's state and where a click takes the filter: on with a set keeps the set (review M2).
+fn checks_pill(f: &Option<ProblemsFilter>) -> (bool, Option<ProblemsFilter>) {
+    match f {
+        None | Some(ProblemsFilter::Undecided) => (false, Some(ProblemsFilter::Checks)),
+        Some(ProblemsFilter::Checks) => (true, None),
+        Some(ProblemsFilter::Set(k)) => (false, Some(ProblemsFilter::SetChecks(k.clone()))),
+        Some(ProblemsFilter::SetChecks(k)) => (true, Some(ProblemsFilter::Set(k.clone()))),
+    }
+}
+
+/// A button with a hover, disabled with `off` as its hover (rule 1.2: the fix in place).
+fn button(ui: &mut egui::Ui, text: &str, tip: &str, off: Option<&str>) -> bool {
+    let b = ui.add_enabled(off.is_none(), egui::Button::new(text));
+    match off {
+        Some(why) => b.on_disabled_hover_text(why),
+        None => b.on_hover_text(tip),
+    }
+    .clicked()
+}
+
+/// The fix button of a row (Note FC3), or nothing for a row whose fix is drawn from its level.
+fn fix_button(
+    ui: &mut egui::Ui,
+    m: &AppModel,
+    p: &Problem,
+    off: Option<&str>,
+    sets_off: Option<&str>,
+) -> bool {
+    let Some(fix) = &p.fix else {
+        return false;
+    };
+    match fix {
+        // Note DU3: a set entry that matches no file is removed in place.
+        Fix::RemoveMissing(miss) => {
+            let At::Set { id, .. } = &p.at else {
+                return false;
+            };
+            let (label, name) = match miss {
+                Missing::NoFilesLeft => ("Delete set", format!("Delete set {id}")),
+                _ => ("Remove from set", format!("Remove {} from {id}", miss.text())),
+            };
+            let b = ui.add_enabled(sets_off.is_none(), egui::Button::new(label));
+            b.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, sets_off.is_none(), &name)
+            });
+            match sets_off {
+                Some(why) => b.on_disabled_hover_text(why),
+                None => b.on_hover_text("Remove this line from sdc-project.toml"),
+            }
+            .clicked()
+        }
+        // Review Focus 3: nothing is written from the row; the Generate dialog's own button writes.
+        Fix::Regenerate(_) => button(
+            ui,
+            "Regenerate…",
+            "Open Generate with this map's last settings; nothing is written until you click Generate there",
+            off,
+        ),
+        Fix::RebuildZ(k) => {
+            let on = m
+                .project
+                .as_ref()
+                .and_then(|d| d.file_value(k, "channels.reconstruct_z"))
+                == Some(json!(true));
+            // DP7d: after Rebuild Z the exported file is still short until the next export.
+            let done = on.then_some("Rebuild Z is on for this file: export again to rewrite it");
+            button(
+                ui,
+                REBUILD_Z,
+                "Rebuild the blue (Z) channel from red and green for this file (channels.reconstruct_z). Only for \
+                 normal maps: it replaces the file's blue channel.",
+                off.or(done),
+            )
+        }
+        Fix::OpenReport(path) => button(ui, "Open report", &path.display().to_string(), None),
+        Fix::OpenFolder(path) => button(ui, "Open folder", &path.display().to_string(), None),
+        Fix::TreatAsOpenGl(_) => button(
+            ui,
+            "Treat as OpenGL",
+            "Flip this normal map's green channel (channels.green_convention = opengl)",
+            off,
+        ),
+        Fix::TurnFeatureOff(_, f) => {
+            let name = feature_key(*f).trim_end_matches("_on");
+            let text = format!("Turn {name} off");
+            button(ui, &text, "Turn this feature off for the set", off.or(sets_off))
+        }
+        Fix::FixPath(..) => button(ui, "Fix path", "Go to the set and its path field", None),
+        Fix::UndoLast => {
+            let tip = format!("Undo: {}", m.undo_label().unwrap_or_default());
+            button(ui, UNDO_ROW, &tip, off)
+        }
+        Fix::ShowNifTab(_, tab, _) => {
+            button(ui, &format!("Open the {tab:?} tab"), "Open this NIF on the tab that holds the field", None)
+        }
+    }
 }
 
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -95,6 +202,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             .find(|v| v.key == *k)
             .map_or(k.clone(), |v| v.id.clone())
     };
+    let (pill_on, pill_to) = checks_pill(&model.bottom.filter);
     if model.bottom.filter.is_some() || checks > 0 || suggestions > 0 {
         ui.horizontal(|ui| {
             // Note FB9 (owner amendment A): the project's suggestions, one undo step; written by Save.
@@ -115,34 +223,27 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     act = Some(Act::AcceptAll);
                 }
             }
-            // The chip and what its × leaves; "Checks {n}" and what it sets (a Set filter keeps its set, M2).
-            let (chip, press) = match &model.bottom.filter {
-                None => (None, Some(ProblemsFilter::Checks)),
-                Some(ProblemsFilter::Undecided) => (
-                    Some(("Undecided only ×".to_string(), None)),
-                    Some(ProblemsFilter::Checks),
-                ),
-                Some(ProblemsFilter::Checks) => (Some(("Checks only ×".to_string(), None)), None),
-                Some(ProblemsFilter::Set(k)) => (
-                    Some((format!("Set: {} ×", label(k)), None)),
-                    Some(ProblemsFilter::SetChecks(k.clone())),
-                ),
-                Some(ProblemsFilter::SetChecks(k)) => (
-                    Some((
-                        format!("Set: {}, checks only ×", label(k)),
-                        Some(ProblemsFilter::Set(k.clone())),
-                    )),
-                    None,
-                ),
+            // The chip and what its × leaves (the Checks pill stays as it is).
+            let chip = match &model.bottom.filter {
+                Some(ProblemsFilter::Undecided) => Some(("Undecided only ×".to_string(), None)),
+                Some(ProblemsFilter::Set(k)) => Some((format!("Set: {} ×", label(k)), None)),
+                Some(ProblemsFilter::SetChecks(k)) => {
+                    Some((format!("Set: {} ×", label(k)), Some(ProblemsFilter::Checks)))
+                }
+                None | Some(ProblemsFilter::Checks) => None,
             };
             if let Some((text, back)) = chip {
                 if ui.button(text).clicked() {
                     act = Some(Act::Filter(back));
                 }
             }
-            if let Some(f) = press.filter(|_| checks > 0) {
-                if ui.button(format!("Checks {checks}")).clicked() {
-                    act = Some(Act::Filter(Some(f)));
+            // Note FC3 (CL18 amended): one count, on the tab; checks are a filter pill of it (rule 6.5).
+            if checks > 0 || pill_on {
+                let r = ui
+                    .add(egui::Button::selectable(pill_on, CHECKS_PILL).frame_when_inactive(true))
+                    .on_hover_text("Show only the artist checks' rows");
+                if r.clicked() {
+                    act = Some(Act::Filter(pill_to.clone()));
                 }
             }
         });
@@ -170,7 +271,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             for (i, p) in list[range.clone()].iter().enumerate() {
                 let i = range.start + i;
                 // Note FB9: the row is focusable (registered first, it takes no click from its cells); Enter or
-                // Space accepts its suggestion and moves to the next row. A row without one ignores both.
+                // Space accepts its suggestion and moves to the next row. A row without one ignores both, and no
+                // row's fix runs from a key (Review Focus 3).
                 let rect = egui::Rect::from_min_size(
                     ui.cursor().min,
                     egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
@@ -190,26 +292,30 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     ui.painter()
                         .rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
                     // Consumed only when the row acts, so the Grid's Enter (open the preview) never sees it too.
-                    let acting = matches!((first, &off, &p.at, p.suggested), (true, None, At::Texture(_), Some(_)));
+                    let acting = matches!(
+                        (first, &off, &p.at, p.suggested),
+                        (true, None, At::Texture(_), Some(_))
+                    );
                     let pressed = acting
                         && ui.input_mut(|k| {
                             k.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                                 || k.consume_key(egui::Modifiers::NONE, egui::Key::Space)
                         });
                     if let (true, At::Texture(k), Some(st)) = (pressed, &p.at, p.suggested) {
-                        act = Some(Act::Fix(RowPick::Decide(k.clone(), st)));
+                        act = Some(Act::Pick(RowPick::Decide(k.clone(), st)));
                         // The last row keeps focus: no wrap to the top.
                         if let Some(next) = list.get(i + 1) {
                             ui.memory_mut(|mem| mem.request_focus(row_id(next)));
                         }
                     }
                 }
+                let status = status_of(p.level);
                 // The fix buttons are laid out first, so the sentence is cut to the room left (I2).
                 let (l, r) = egui::Sides::new().shrink_left().truncate().show(
                     ui,
                     |ui| {
                         let mut a = None;
-                        dot(ui, status_of(p.level));
+                        dot(ui, status);
                         match &p.at {
                             At::Texture(k) => {
                                 if ui.link(k).clicked() {
@@ -226,76 +332,46 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     a = Some(Act::File(k.clone()));
                                 }
                             }
+                            // A NIF's link opens it, as its fix does.
+                            At::Nif(path) => {
+                                if ui.link(path).clicked() {
+                                    a = p.fix.clone().map(|f| Act::Apply(f, p.at.clone()));
+                                }
+                            }
                             At::Project => {
                                 ui.label("Project");
                             }
                         }
                         // Note FB8: a sentence that names the action; the engine's text and the code are the hover.
-                        ui.add(egui::Label::new(&*p.shown()).truncate())
-                            .on_hover_ui(|ui| {
-                                ui.label(&p.text);
-                                if let Some(c) = p.codes_text() {
-                                    ui.weak(c);
-                                }
-                            });
+                        let mut text = egui::RichText::new(&*p.shown());
+                        // Note FC3: check and Info rows are drawn weak.
+                        if status.weak() {
+                            text = text.weak();
+                        }
+                        ui.add(egui::Label::new(text).truncate()).on_hover_ui(|ui| {
+                            ui.label(&p.text);
+                            if let Some(c) = p.codes_text() {
+                                ui.weak(c);
+                            }
+                        });
                         a
                     },
                     |ui| {
-                        let mut a = None;
                         // Right to left: the last widget added is the leftmost.
-                        match &p.at {
-                            At::Texture(k) if p.code == Some(Code::ChanNormalLength) => {
-                                let b = ui.add_enabled(off.is_none(), egui::Button::new(REBUILD_Z));
-                                let tip = "Rebuild the blue (Z) channel from red and green for this file \
-                                           (channels.reconstruct_z). Only for normal maps: it replaces the \
-                                           file's blue channel.";
-                                let b = match &off {
-                                    Some(why) => b.on_disabled_hover_text(why.as_str()),
-                                    None => b.on_hover_text(tip),
-                                };
-                                if b.clicked() {
-                                    a = Some(Act::RebuildZ(k.clone()));
-                                }
-                            }
-                            At::Texture(k) if p.level == Level::Decide => {
-                                if let Some(r) = fix_buttons(ui, m, k, off.as_deref()) {
-                                    a = Some(Act::Fix(r));
-                                }
-                            }
-                            // Note DU3: a set entry that matches no file is removed in place.
-                            At::Set { id, .. } if p.missing.is_some() => {
-                                let miss = p.missing.as_ref().expect("guarded");
-                                let (label, name) = match miss {
-                                    Missing::NoFilesLeft => {
-                                        ("Delete set", format!("Delete set {id}"))
-                                    }
-                                    _ => (
-                                        "Remove from set",
-                                        format!("Remove {} from {id}", miss.text()),
-                                    ),
-                                };
-                                let b = ui.add_enabled(sets_off.is_none(), egui::Button::new(label));
-                                b.widget_info(|| {
-                                    egui::WidgetInfo::labeled(
-                                        egui::WidgetType::Button,
-                                        sets_off.is_none(),
-                                        &name,
-                                    )
-                                });
-                                let b = match &sets_off {
-                                    Some(why) => b.on_disabled_hover_text(why.as_str()),
-                                    None => b.on_hover_text("Remove this line from sdc-project.toml"),
-                                };
-                                if b.clicked() {
-                                    a = Some(Act::RemoveMissing(id.clone(), miss.clone()));
-                                }
-                            }
-                            At::Set { key, .. } if ui.button("Go to set").clicked() => {
-                                a = Some(Act::Set(key.clone()));
-                            }
-                            _ => {}
+                        if fix_button(ui, m, p, off.as_deref(), sets_off.as_deref()) {
+                            return p.fix.clone().map(|f| Act::Apply(f, p.at.clone()));
                         }
-                        a
+                        match &p.at {
+                            At::Texture(k) if p.level == Level::Decide => {
+                                fix_buttons(ui, m, k, off.as_deref()).map(Act::Pick)
+                            }
+                            At::Set { key, .. }
+                                if p.fix.is_none() && ui.button("Go to set").clicked() =>
+                            {
+                                Some(Act::Set(key.clone()))
+                            }
+                            _ => None,
+                        }
                     },
                 );
                 if let Some(a) = l.or(r) {
@@ -348,15 +424,55 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 to_textures(ui);
             }
         },
-        Some(Act::Fix(r)) => apply(model, r),
-        Some(Act::RebuildZ(k)) => model.set_field(&k, "channels.reconstruct_z", json!(true)),
-        Some(Act::RemoveMissing(id, miss)) => {
-            if let Err(why) = model.remove_missing(&id, &miss) {
-                model.status_line = why;
-            }
-        }
+        Some(Act::Pick(r)) => apply(model, r),
+        Some(Act::Apply(fix, at)) => apply_fix(ui, model, fix, at),
         Some(Act::Filter(f)) => model.bottom.filter = f,
         Some(Act::AcceptAll) => model.accept_all_suggestions(),
         None => {}
+    }
+}
+
+/// What a row's fix button does (Note FC3). Only the writes named in Review Focus 3 write, and only from this click.
+fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
+    let to_textures = |ui: &egui::Ui| super::header::set_meshes_view(ui.ctx(), false);
+    match fix {
+        Fix::RemoveMissing(miss) => {
+            if let At::Set { id, .. } = at {
+                if let Err(why) = model.remove_missing(&id, &miss) {
+                    model.status_line = why;
+                }
+            }
+        }
+        Fix::Regenerate(k) => {
+            let map = model.provenance(&k).map(|p| p.kind);
+            let set = model.item(&k).and_then(|i| i.set_key.clone());
+            let id = crate::model::sets::views(model)
+                .iter()
+                .find(|v| Some(&v.key) == set.as_ref())
+                .map(|v| v.id.clone());
+            if let Some(id) = id {
+                model.open_gen(&id, map);
+            }
+        }
+        Fix::RebuildZ(k) => model.set_field(&k, "channels.reconstruct_z", json!(true)),
+        Fix::OpenReport(p) | Fix::OpenFolder(p) => model.shell.push(ShellRequest::Open(p)),
+        Fix::TreatAsOpenGl(k) => {
+            model.decide(&k, Answer::Green(engine::config::GreenConvention::Opengl))
+        }
+        Fix::TurnFeatureOff(id, f) => model.set_json_value(&id, feature_key(f), Some(json!(false))),
+        Fix::FixPath(key, field) => {
+            let id = crate::model::sets::views(model)
+                .iter()
+                .find(|v| v.key == key)
+                .map(|v| v.id.clone());
+            model.select_set(&key);
+            to_textures(ui);
+            if let Some(id) = id {
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(egui::Id::new(FOCUS_FIELD), (id, field)));
+            }
+        }
+        Fix::UndoLast => model.undo(),
+        Fix::ShowNifTab(p, t, f) => model.nif_tab_request = Some((p, t, f)),
     }
 }

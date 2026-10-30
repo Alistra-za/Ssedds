@@ -30,12 +30,16 @@ pub struct Command {
 pub struct History {
     pub undo: Vec<Command>,
     pub redo: Vec<Command>,
+    /// Note FC3: every `push` counts here, merges included: a row that offers `Undo` remembers the count its step
+    /// left, and offers it only while nothing was pushed since.
+    pub pushes: u64,
 }
 
 impl History {
     pub const LIMIT: usize = 200;
 
     pub fn push(&mut self, c: Command) {
+        self.pushes += 1;
         self.redo.clear();
         if let (Some(last), Some(k)) = (self.undo.last_mut(), c.merge.as_ref()) {
             if last.merge.as_ref() == Some(k)

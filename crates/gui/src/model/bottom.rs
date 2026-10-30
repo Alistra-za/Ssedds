@@ -1,7 +1,12 @@
 //! The bottom panel's state (layout v2 A1, A9; R7, R8): which tab shows, and whether the panel is open.
 use super::items::Decision;
+use super::meshes::{NifLevel, NifTab};
 use super::{checks, code_text, counts_toward_badge, pbr_export, sets, AppModel, ItemStatus};
+use crate::pgp::settings::Feature;
+use engine::codes::Code;
+use nif::fields::Field;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -57,19 +62,21 @@ impl AppModel {
     }
 }
 
-/// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CL)
-/// are listed but never change "ready" (`counts_as_ready_problem`).
+/// Red blocks the export; Decide and Warning are amber (A12). `Check` rows (artist checks, DECISIONS Note CL) and
+/// `Info` rows are drawn weak and never change "ready" (`counts_as_ready_problem`, Note FC3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
     Blocks,
     Decide,
     Warning,
     Check,
+    /// Note FC3: a result with an action and no consequence for the export (a dropped fill, a cleared format).
+    Info,
 }
 
-/// Whether a row takes "ready" away: every row but an artist check's (owner answer 1).
+/// Whether a row takes "ready" away: every row but an artist check's (owner answer 1) and an Info row (Note FC3).
 pub fn counts_as_ready_problem(p: &Problem) -> bool {
-    p.level != Level::Check
+    !matches!(p.level, Level::Check | Level::Info)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -83,6 +90,33 @@ pub enum At {
     /// A job key.
     File(String),
     Project,
+    /// Note FC3: a NIF, by its data-relative path.
+    Nif(String),
+}
+
+/// Note FC3: a row's action, drawn as its button. Each arm is built by the row kind that needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fix {
+    /// Note DU3: remove the set entry that matches no file.
+    RemoveMissing(sets::Missing),
+    /// GEN-STALE (CO70): open the Generate dialog for this generated item's map; its own Generate writes.
+    Regenerate(String),
+    /// CHAN-NORMAL-LENGTH (Note DP): set `channels.reconstruct_z` on this item.
+    RebuildZ(String),
+    /// DERIVE-* (CN67): open the Also export's conversion report.
+    OpenReport(PathBuf),
+    /// IN-UNREADABLE (Y4): open the folder that holds the skipped entry.
+    OpenFolder(PathBuf),
+    /// CHK-GREEN-GUESS (CL5): answer this item's green convention as OpenGL.
+    TreatAsOpenGl(String),
+    /// P26: turn one of two exclusive features of a set (by id) off.
+    TurnFeatureOff(String, Feature),
+    /// P13: go to the set (by key) and focus the path field (a settings key) the blocker names.
+    FixPath(String, String),
+    /// R-fills-2, Z11: undo the step that caused the row; only built while that step is the top of the history.
+    UndoLast,
+    /// Note GD1: open the NIF on this tab and field.
+    ShowNifTab(String, NifTab, Option<Field>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,8 +127,8 @@ pub struct Problem {
     pub code: Option<engine::codes::Code>,
     /// Codes the text names in words (a failed texture's, a question's); only the row's hover prints them (Note FB8).
     pub also: Vec<engine::codes::Code>,
-    /// Note DU3: the set entry that matches no file, which the row's fix button removes.
-    pub missing: Option<sets::Missing>,
+    /// Note FC3: the row's action button (the Decide rows' buttons and `Go to set` are drawn from the level and `at`).
+    pub fix: Option<Fix>,
     /// Note FB9: a Decide row's suggested sub-type, which its ✓ button, Enter and Space accept.
     pub suggested: Option<engine::config::Subtype>,
 }
@@ -133,6 +167,14 @@ impl AppModel {
     pub fn open_problems(&mut self, f: Option<ProblemsFilter>) {
         self.show_tab(BottomTab::Problems);
         self.bottom.filter = f;
+    }
+
+    /// Note FC3: the NIF edit's problems, handed over by `app.rs` each frame. Only a new snapshot rebuilds Problems.
+    pub fn set_nif_problems(&mut self, p: Arc<Vec<super::meshes::NifProblem>>) {
+        if !Arc::ptr_eq(&self.nif_problems, &p) {
+            self.nif_problems = p;
+            self.invalidate_views();
+        }
     }
 }
 
@@ -173,6 +215,8 @@ pub(super) fn problems_inner(m: &AppModel) -> super::ProblemsKey {
         m.evidence_rev,
         m.export.revision,
         m.export.running.is_some(),
+        // Note FC3: an `Undo` fix is built only while its step is the top one.
+        m.history.pushes,
     )
 }
 
@@ -183,7 +227,7 @@ pub struct Flagged {
     pub textures: HashSet<String>,
     /// Rows passing `counts_as_ready_problem` (the Export dot and its hover, K6).
     pub ready_rows: usize,
-    /// `Level::Check` rows (the Problems tab's "Checks {n}").
+    /// `Level::Check` rows (whether the Problems tab shows its `Checks` pill).
     pub check_rows: usize,
 }
 
@@ -197,7 +241,7 @@ pub fn flagged(m: &AppModel) -> Arc<Flagged> {
     let mut f = Flagged::default();
     for p in all.iter() {
         if !counts_as_ready_problem(p) {
-            f.check_rows += 1;
+            f.check_rows += usize::from(p.level == Level::Check);
             continue;
         }
         f.ready_rows += 1;
@@ -263,7 +307,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         text,
         code,
         also: vec![],
-        missing: None,
+        fix: None,
         suggested: None,
     };
     let mut out = vec![];
@@ -273,8 +317,22 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         } else {
             set_at(&b.set_key, &b.set_id)
         };
-        out.push(row(Level::Blocks, at, b.text, None));
+        out.push(Problem {
+            fix: b.fix,
+            ..row(Level::Blocks, at, b.text, None)
+        });
     }
+    // Note FC3 (GD1): the NIF edit's rows, each with its level's group. A NIF Info is a row too: it has an action.
+    let nif_rows = |want: NifLevel, level: Level| {
+        m.nif_problems
+            .iter()
+            .filter(move |n| n.level == want)
+            .map(move |n| Problem {
+                fix: Some(Fix::ShowNifTab(n.path.clone(), n.tab, n.field)),
+                ..row(level, At::Nif(n.path.clone()), n.text.clone(), None)
+            })
+    };
+    out.extend(nif_rows(NifLevel::Blocks, Level::Blocks));
     for i in &m.items {
         let (text, also) = match &i.status {
             ItemStatus::Failed(r) => (format!("Failed: {r}"), vec![]),
@@ -335,7 +393,24 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
     {
         for w in i.warnings.iter().filter(|w| counts_toward_badge(w)) {
             let at = At::Texture(i.key.clone());
-            out.push(row(Level::Warning, at, w.message.clone(), Some(w.code)));
+            // Note DP: a short normal's row rebuilds Z in place.
+            let fix = (w.code == Code::ChanNormalLength).then(|| Fix::RebuildZ(i.key.clone()));
+            out.push(Problem {
+                fix,
+                ..row(Level::Warning, at, w.message.clone(), Some(w.code))
+            });
+        }
+        // Note FC3 (CO70): a stale generated map is a Warning row with Regenerate; GEN-REPLACED stays on hover.
+        if let Some(reason) = m.generated_info(&i.key).and_then(|g| g.stale) {
+            out.push(Problem {
+                fix: Some(Fix::Regenerate(i.key.clone())),
+                ..row(
+                    Level::Warning,
+                    At::Texture(i.key.clone()),
+                    reason,
+                    Some(Code::GenStale),
+                )
+            });
         }
     }
     for v in views.iter() {
@@ -352,7 +427,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                 _ => format!("No file matches {}", miss.text()),
             };
             out.push(Problem {
-                missing: Some(miss.clone()),
+                fix: Some(Fix::RemoveMissing(miss.clone())),
                 ..row(Level::Warning, set_at(&v.key, &v.id), text, None)
             });
         }
@@ -367,19 +442,30 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             out.push(row(Level::Warning, at, text, Some(w.code)));
         }
     }
-    // Artist checks (DECISIONS Note CL): listed, never "ready"-changing; Info results stay on hover (owner answer 2).
+    // Note FC3 (Y4): an entry of the folder the plan could not read, with its folder to open.
+    for w in &m.unreadable {
+        out.push(Problem {
+            fix: unreadable_folder(&w.message).map(Fix::OpenFolder),
+            ..row(Level::Warning, At::Project, w.message.clone(), Some(w.code))
+        });
+    }
+    out.extend(nif_rows(NifLevel::Warning, Level::Warning));
+    // Artist checks (DECISIONS Note CL): listed, never "ready"-changing. CHK-GREEN-GUESS, the one Info result, is a
+    // row too, since it has an action (Note FC3, CL5).
+    let check_row =
+        |w: &engine::codes::Warning| counts_toward_badge(w) || w.code == Code::ChkGreenGuess;
     for i in m
         .items
         .iter()
         .filter(|i| i.status != ItemStatus::NeedsDecision)
     {
-        for w in m
-            .check_warnings(&i.key)
-            .iter()
-            .filter(|w| counts_toward_badge(w))
-        {
+        for w in m.check_warnings(&i.key).iter().filter(|w| check_row(w)) {
             let at = At::Texture(i.key.clone());
-            out.push(row(Level::Check, at, w.message.clone(), Some(w.code)));
+            let fix = (w.code == Code::ChkGreenGuess).then(|| Fix::TreatAsOpenGl(i.key.clone()));
+            out.push(Problem {
+                fix,
+                ..row(Level::Check, at, w.message.clone(), Some(w.code))
+            });
         }
     }
     for v in views.iter() {
@@ -397,12 +483,18 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         // K2: an engine CHK-* row is a check row and follows its switch. The switches are not in `ProblemsKey`:
         // a switch change reaches this build through `refresh_checks`' `invalidate_views()`.
         let on = &m.settings.checks;
+        // Note FC3 (CN67): the DERIVE results the user acts on are Warning rows that open the report; the other
+        // Info results stay on the row's hover (P11).
+        let file_row = |w: &engine::codes::Warning| {
+            counts_toward_badge(w)
+                || matches!(w.code, Code::DeriveNoEnvmap | Code::DeriveNifSuggest)
+        };
         // Note DP4: the live item row is the current truth and carries the fix, so a same-code copy of it from
         // the last export is dropped. Only when the job maps to exactly one item (None = several share a job_key).
-        // Built once, and only when some export row has a counted warning (no per-row scan of all items).
+        // Built once, and only when some export row has a listed warning (no per-row scan of all items).
         let mut owners: Option<HashMap<&str, Option<&super::items::TextureItem>>> = None;
         for r in &m.export.rows {
-            if !r.warnings.iter().any(counts_toward_badge) {
+            if !r.warnings.iter().any(file_row) {
                 continue;
             }
             let owners = owners.get_or_insert_with(|| {
@@ -415,8 +507,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                 map
             });
             let live = owners.get(r.job_key.as_str()).copied().flatten();
-            // P11 (owner answer 2): Info stays on the row's hover, as for item and set rows (`DERIVE-*` included).
-            for w in r.warnings.iter().filter(|w| counts_toward_badge(w)) {
+            for w in r.warnings.iter().filter(|w| file_row(w)) {
                 if live.is_some_and(|i| {
                     i.status != ItemStatus::NeedsDecision
                         && i.warnings.iter().any(|x| x.code == w.code)
@@ -428,12 +519,47 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                     Some(_) => Level::Check,
                     None => Level::Warning,
                 };
+                let fix = match w.code {
+                    Code::DeriveNoEnvmap | Code::DeriveNifSuggest => {
+                        m.also_report.clone().map(Fix::OpenReport)
+                    }
+                    // Note FC3 (DP7d): after Rebuild Z the file on disk is still short; the row keeps the button.
+                    Code::ChanNormalLength => live.map(|i| Fix::RebuildZ(i.key.clone())),
+                    _ => None,
+                };
                 let at = At::File(r.job_key.clone());
-                out.push(row(level, at, w.message.clone(), Some(w.code)));
+                out.push(Problem {
+                    fix,
+                    ..row(level, at, w.message.clone(), Some(w.code))
+                });
             }
         }
     }
+    // Note FC3 (R-fills-2, Z11): what an edit removed is an Info row, with Undo while that edit is the last step.
+    let undo = |step: u64| (step == m.history.pushes && m.can_undo()).then_some(Fix::UndoLast);
+    for (k, note) in &m.dropped_fills {
+        out.push(Problem {
+            fix: undo(m.dropped_fills_step),
+            ..row(Level::Info, At::Texture(k.clone()), note.clone(), None)
+        });
+    }
+    // One row per texture the cleanup touched (the note's hover list before FC3).
+    for line in m.encoding_note.iter().flat_map(|(_, all)| all.lines()) {
+        out.push(Problem {
+            fix: undo(m.encoding_note_step),
+            ..row(Level::Info, At::Project, line.to_string(), None)
+        });
+    }
+    out.extend(nif_rows(NifLevel::Info, Level::Info));
     out
+}
+
+/// The folder that holds an IN-UNREADABLE entry: the engine writes `skipped: <path>: <error>`.
+fn unreadable_folder(message: &str) -> Option<PathBuf> {
+    let rest = message.strip_prefix("skipped: ")?;
+    // A drive's `C:\` has no space after its colon; the error's separator does.
+    let path = rest.split_once(": ").map_or(rest, |(p, _)| p);
+    PathBuf::from(path).parent().map(PathBuf::from)
 }
 
 /// The list narrowed by `f`: a set keeps its own rows and its members' rows; `Undecided` keeps the Decide rows.

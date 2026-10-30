@@ -12,13 +12,29 @@ pub fn group<R>(
     default_open: bool,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<R> {
+    group_with(ui, id, title, value, default_open, false, body)
+}
+
+/// [`group`], opened now when `open_now` (Note FC3: a Problems row's `Fix path` reveals its field).
+pub fn group_with<R>(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    title: &str,
+    value: Option<egui::RichText>,
+    default_open: bool,
+    open_now: bool,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
     egui::Frame::group(ui.style())
         .show(ui, |ui| {
             // shortcut: the Debug bound of egui ids is dodged by hashing to a u64 first; upgrade to `make_persistent_id(id)`
             // if egui drops the Debug bound or every caller's id type derives Debug.
             let hasher = std::hash::BuildHasherDefault::<std::hash::DefaultHasher>::default();
             let id = ui.make_persistent_id(std::hash::BuildHasher::hash_one(&hasher, id));
-            let state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+            let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, default_open);
+            if open_now {
+                state.set_open(true);
+            }
             let mut clicked = false;
             let mut h = state.show_header(ui, |ui| {
                 // The visible edge: a wider row above widens max_rect (egui unions it into the content), not the panel.

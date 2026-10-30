@@ -675,9 +675,10 @@ fn undo_restores_the_check_rows_an_edit_removed() {
     assert_eq!(rows[0].at, At::Texture("test/wall.png".into()));
 }
 
-/// Review M2: under a Set filter "Checks {n}" counts that set's check rows and keeps the set.
+/// Review M2: under a Set filter the checks filter keeps the set. Note FC3: it is the `Checks` pill (no count of its
+/// own); pressed again it leaves the set filter.
 #[test]
-fn the_checks_button_under_a_set_filter_counts_and_keeps_the_set() {
+fn the_checks_pill_under_a_set_filter_keeps_the_set() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_sets(d.path(), &[("wall", 20), ("rock", 20)], false);
     assert_eq!(check_rows(&m).len(), 2);
@@ -685,7 +686,7 @@ fn the_checks_button_under_a_set_filter_counts_and_keeps_the_set() {
     m.open_problems(Some(ProblemsFilter::Set(wall.clone())));
     let mut h = harness(m, 1600.0);
     h.run();
-    h.get_by_label("Checks 1").click();
+    h.get_by_label(sdc_gui::ui::problems::CHECKS_PILL).click();
     h.run();
     assert_eq!(
         h.state().bottom.filter,
@@ -695,13 +696,9 @@ fn the_checks_button_under_a_set_filter_counts_and_keeps_the_set() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].at, At::Texture("test/wall.png".into()));
     assert!(h.query_by_label_contains("Checks 1").is_none());
-    h.get_by_label_contains("checks only ×").click();
+    h.get_by_label(sdc_gui::ui::problems::CHECKS_PILL).click();
     h.run();
     assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Set(wall)));
-    // Without a Set filter the count is the project's.
-    h.state_mut().open_problems(None);
-    h.run();
-    h.get_by_label("Checks 2");
 }
 
 #[test]
@@ -766,10 +763,12 @@ fn a_hair_sets_plastic_row_has_the_hair_wording() {
     );
 }
 
+/// Note FC3 (supersedes CL5/CL7's "never rows"): the green guess, an Info result, is a check row because it has an
+/// action, `Treat as OpenGL`; it still leaves "ready" alone.
 #[test]
-fn info_check_results_are_never_problems_rows() {
+fn the_green_guess_is_a_check_row_with_treat_as_opengl() {
     let d = tempfile::tempdir().unwrap();
-    let m = pbr_wall(d.path(), 128, true);
+    let mut m = pbr_wall(d.path(), 128, true);
     let n = m.item("test/wall_n.png").expect("the normal");
     assert_eq!(n.status, sdc_gui::model::items::ItemStatus::Ready);
     let ws = m.check_warnings("test/wall_n.png");
@@ -779,7 +778,30 @@ fn info_check_results_are_never_problems_rows() {
         "{ws:?}"
     );
     let all = bottom::problems(&m);
-    assert!(all.is_empty(), "{all:?}");
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(all[0].level, Level::Check);
+    assert_eq!(all[0].code, Some(Code::ChkGreenGuess));
+    assert_eq!(
+        all[0].fix,
+        Some(bottom::Fix::TreatAsOpenGl("test/wall_n.png".into()))
+    );
+    assert!(!bottom::counts_as_ready_problem(&all[0]));
+    m.open_problems(None);
+    let mut h = harness(m, 1400.0);
+    h.run();
+    h.get_by_label(sdc_gui::model::code_text::code_sentence(
+        Code::ChkGreenGuess,
+    ));
+    h.get_by_label("Treat as OpenGL").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    let v = h
+        .state()
+        .project
+        .as_ref()
+        .unwrap()
+        .file_value("test/wall_n.png", "channels.green_convention");
+    assert_eq!(v, Some(serde_json::json!("opengl")));
 }
 
 // ---- the card badge -----------------------------------------------------------------------------------------------
@@ -1097,7 +1119,11 @@ fn landscape_pair(dir: &Path) -> AppModel {
 fn checks_summary_mixes_items_sets_and_info_without_miscounting() {
     let d = tempfile::tempdir().unwrap();
     let m = landscape_pair(d.path());
-    let rows = check_rows(&m);
+    // Note FC3: the green guess is a check row for its button, but the summary counts warnings only.
+    let rows: Vec<_> = check_rows(&m)
+        .into_iter()
+        .filter(|p| p.code != Some(engine::codes::Code::ChkGreenGuess))
+        .collect();
     let info = m
         .items
         .iter()

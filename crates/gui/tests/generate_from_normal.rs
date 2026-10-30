@@ -1713,11 +1713,20 @@ fn a_stale_generated_map_turns_only_its_row_dot_amber() {
     let before = dots(&m);
     rewrite_normal(&mut m, d.path());
     assert_eq!(stale(&m).as_deref(), Some(EARLIER));
-    assert_eq!(before, dots(&m), "set, tile and export dots do not read it");
-    assert_eq!(rows(&m), rows_before, "no Problems row for it or its set");
-    assert!(!bottom::problems(&m)
-        .iter()
-        .any(|p| p.code == Some(engine::codes::Code::GenStale)));
+    // Note FC3 (supersedes CO70/CO71): a stale map is a Warning row with Regenerate, so its set is not ready; the
+    // tile and the export do not read it.
+    let after = dots(&m);
+    assert_eq!((before.1, before.2), (after.1, after.2));
+    assert!(!after.0, "the set dot reads the row (before: {})", before.0);
+    let new: Vec<_> = rows(&m)
+        .into_iter()
+        .filter(|p| !rows_before.contains(p))
+        .collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert_eq!(new[0].code, Some(engine::codes::Code::GenStale));
+    assert_eq!(new[0].level, bottom::Level::Warning);
+    assert_eq!(new[0].text, EARLIER);
+    assert_eq!(new[0].fix, Some(bottom::Fix::Regenerate(P_KEY.into())));
     select_rock(&mut m);
     let mut h = harness(m);
     h.run();
@@ -1749,7 +1758,43 @@ fn gen_info_results_are_hover_only() {
     assert!(stale(&m).is_some());
     let codes: Vec<_> = bottom::problems(&m).iter().filter_map(|p| p.code).collect();
     assert!(!codes.contains(&Code::GenReplaced), "{codes:?}");
-    assert!(!codes.contains(&Code::GenStale), "{codes:?}");
+    // Note FC3: GEN-STALE is a row; GEN-REPLACED stays on hover.
+    assert!(codes.contains(&Code::GenStale), "{codes:?}");
+}
+
+/// Note FC3, Review Focus 3: `Regenerate…` on a stale row opens Generate with that map; nothing is written from the
+/// row, and the button is off while a plan is in flight.
+#[test]
+fn the_stale_row_regenerates_only_from_its_own_click() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = relief_rock(d.path());
+    generate_height(&mut m);
+    decide_p(&mut m);
+    rewrite_normal(&mut m, d.path());
+    assert!(stale(&m).is_some());
+    let p = land(d.path()).join("rock01_p_generated.png");
+    let bytes = std::fs::read(&p).unwrap();
+    m.open_problems(None);
+    let mut h = harness(m);
+    h.run();
+    // A plan in flight: the row's button is off.
+    h.state_mut().replan();
+    h.run();
+    if h.state().fix_off().is_some() {
+        assert!(h.get_by_label("Regenerate…").accesskit_node().is_disabled());
+    }
+    idle(h.state_mut());
+    h.run();
+    assert!(h.state().gen.is_none());
+    h.key_press(eframe::egui::Key::Enter);
+    h.run();
+    assert!(h.state().gen.is_none(), "Enter does not regenerate");
+    h.get_by_label("Regenerate…").click();
+    h.run();
+    let g = h.state().gen.as_ref().expect("the Generate dialog");
+    assert!(g.ticked.contains(&GenMap::Height), "{:?}", g.ticked);
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "nothing written yet");
 }
 
 #[test]

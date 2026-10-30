@@ -302,7 +302,7 @@ fn pickable_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str
 }
 
 /// The layouts the unclear-layout decision offers (DT32): an image only asks when no cross or strip fits it.
-fn unclear_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
+pub(crate) fn unclear_layouts() -> impl Iterator<Item = &'static (CubeLayout, &'static str)> {
     use CubeLayout::*;
     CUBE_LAYOUTS
         .iter()

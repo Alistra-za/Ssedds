@@ -263,7 +263,7 @@ fn read_only_banner(error: &str) -> String {
 }
 
 /// `(evidence_rev, export.revision, export running)`.
-type ProblemsKey = (u64, u64, bool);
+type ProblemsKey = (u64, u64, bool, u64);
 
 /// The cached set views, export blocks and delete-section hits, valid for `key` only.
 #[derive(Default)]
@@ -326,6 +326,12 @@ pub struct AppModel {
     pub loaded_user_presets: Vec<(String, String)>,
     /// `(file, reason)` of the user preset files the last plan skipped (CFG-PRESET-SKIPPED; the inspector lists them).
     pub skipped_user_presets: Vec<(String, String)>,
+    /// Note FC3 (Y4): the last plan's IN-UNREADABLE warnings, one Problems row each.
+    pub unreadable: Vec<engine::codes::Warning>,
+    /// Note FC3: the last Also export's conversion report, the DERIVE rows' Open report.
+    pub also_report: Option<PathBuf>,
+    /// Note FC3: the NIF edit's problems, handed over by `app.rs` each frame (`set_nif_problems`).
+    pub nif_problems: Arc<Vec<meshes::NifProblem>>,
     /// The scan database the mesh votes read (`meshes::default_store_path()`), set by `main`; `None` in tests so a
     /// developer's scan cannot leak in.
     pub scan_db: Option<PathBuf>,
@@ -460,6 +466,10 @@ pub struct AppModel {
     pub encoding_note: Option<(String, String)>,
     /// Per packed output key: fills a recipe switch removed because the new recipe has no such channel.
     pub dropped_fills: std::collections::BTreeMap<String, String>,
+    /// Note FC3: `history.pushes` when `dropped_fills` and `encoding_note` were written: their rows offer Undo
+    /// while it still is.
+    pub(crate) dropped_fills_step: u64,
+    pub(crate) encoding_note_step: u64,
     pub dialog: Option<Dialog>,
     /// The Make marker cube dialog's colour and roughness.
     pub marker: marker::MarkerDraft,
@@ -630,6 +640,9 @@ impl AppModel {
             user_presets: None,
             loaded_user_presets: vec![],
             skipped_user_presets: vec![],
+            unreadable: vec![],
+            also_report: None,
+            nif_problems: Default::default(),
             scan_db: None,
             scan_store_unsettled: false,
             unsettled_before_scan: false,
@@ -697,6 +710,8 @@ impl AppModel {
             undo_note: None,
             undo_note_at: None,
             dropped_fills: Default::default(),
+            dropped_fills_step: 0,
+            encoding_note_step: 0,
             kept_banner: None,
             banner: None,
             banner_logged: vec![],
@@ -890,6 +905,7 @@ impl AppModel {
         self.sets.clear();
         self.sets_root = None;
         self.also_written = None;
+        self.also_report = None;
         self.unmatched_keys.clear();
         self.selection = Selection::None;
         self.reset_multi();
@@ -2091,6 +2107,7 @@ impl AppModel {
             self.also_pass = also;
             self.also_error = None;
             self.also_written = None;
+            self.also_report = None;
             // Final review I2: dropping an earlier export's sender releases its worker (no extra file).
             self.also_reply = None;
             self.also_json.clear();
@@ -2481,6 +2498,7 @@ impl AppModel {
         self.batch_preset = view.preset_id;
         self.loaded_user_presets = view.user_presets;
         self.skipped_user_presets = view.skipped_user_presets;
+        self.unreadable = view.unreadable;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // The undo note stays through the plan the undo started, and goes with the next one.

@@ -191,6 +191,9 @@ impl AppModel {
         self.messages
             .log(super::messages::Severity::Info, line.clone());
         self.encoding_note = Some((line, lines.join("\n")));
+        // Note FC3: the note is a Problems row now; its step is the top one until the next push.
+        self.encoding_note_step = self.history.pushes;
+        self.invalidate_views();
     }
 }
 

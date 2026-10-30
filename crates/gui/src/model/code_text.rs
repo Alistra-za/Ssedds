@@ -96,7 +96,12 @@ pub fn code_sentence(code: Code) -> &'static str {
         AlsoReportFailed => "The extra export's report was not written — check the folder and export again",
         CubeFaces => "A cubemap's faces are missing or differ in size — fix the six faces",
         CubeNoMips => "A cubemap without mips sparkles on curved surfaces — turn mips on",
-        // Info results: no row, no sentence.
+        // Note FC3: the Info results that are rows, since the user acts on them.
+        GenStale => "This generated map no longer matches its normal map or set — regenerate it",
+        DeriveNoEnvmap => "No environment mask was written for this converted set — see the report",
+        DeriveNifSuggest => "This converted set needs NIF values set by hand — the report lists them",
+        ChkGreenGuess => "This normal map's green channel looks flipped — treat it as OpenGL if its lighting looks inverted",
+        // The other Info results: no row, no sentence.
         _ => "",
     }
 }

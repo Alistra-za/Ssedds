@@ -236,12 +236,17 @@ pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
 pub fn panel_advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
-    super::group::group(
+    // Note FC3 (P13): `Fix path` on a field in here opens the group.
+    let asked = ui
+        .data(|d| d.get_temp::<(String, String)>(egui::Id::new(super::problems::FOCUS_FIELD)))
+        .is_some_and(|(s, _)| s == c.set);
+    super::group::group_with(
         ui,
         ("pgp-advanced", &c.set),
         "Advanced TruePBR settings",
         None,
         false,
+        asked,
         |ui| {
             for g in ADVANCED {
                 if !group_open(g, &c.eff) {
@@ -418,6 +423,19 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
     );
 }
 
+/// Note FC3 (P13): a Problems row's `Fix path` asked this field of set `set` for focus.
+/// shortcut: a request for a field that is not drawn (a slot path, a collapsed group) waits until it is; clear it on
+/// set change if that ever surprises.
+fn take_focus(ui: &egui::Ui, r: &egui::Response, set: &str, key: &str) {
+    let id = egui::Id::new(super::problems::FOCUS_FIELD);
+    let asked = ui.data(|d| d.get_temp::<(String, String)>(id));
+    if asked.is_some_and(|(s, k)| s == set && k == key) {
+        ui.data_mut(|d| d.remove::<(String, String)>(id));
+        r.request_focus();
+        r.scroll_to_me(Some(egui::Align::Center));
+    }
+}
+
 fn matching_body(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
     ui.label(
         egui::RichText::new("The entry applies when any of these matches.")
@@ -440,6 +458,7 @@ fn matching_body(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
                         .data(|d| d.get_temp::<String>(id))
                         .unwrap_or_else(|| m.path.clone());
                     let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(220.0));
+                    take_focus(ui, &r, &c.set, &format!("match{}", m.n));
                     if r.changed() {
                         ui.data_mut(|d| d.insert_temp(id, text.clone()));
                     }
@@ -689,6 +708,7 @@ pub(crate) fn control(
                     .hint_text(hint)
                     .desired_width(160.0),
             );
+            take_focus(ui, &r, &c.set, k.key);
             if r.changed() {
                 ui.data_mut(|d| d.insert_temp(id, text.clone()));
             }

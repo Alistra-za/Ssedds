@@ -591,8 +591,8 @@ pub fn summary_text(n: usize, textures: usize, sets: usize) -> String {
     format!("Checks: {} on {on}; see Problems", pl(n, "warning"))
 }
 
-/// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; Info is
-/// never a row). `None` when there are none. It covers what this export wrote: once the export has rows, only the
+/// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; the
+/// Info-level green guess is a row since Note FC3 but is not counted here). `None` when there are none. It covers what this export wrote: once the export has rows, only the
 /// textures (and sets with a member) that have one are counted; with no rows it covers the whole project. A texture
 /// counts once, whether its rows are keyed by item or by job (CL19).
 pub fn checks_summary(m: &AppModel) -> Option<String> {
@@ -615,7 +615,11 @@ pub fn checks_summary(m: &AppModel) -> Option<String> {
     let views = super::sets::views(m);
     let (mut textures, mut sets) = (HashSet::new(), HashSet::new());
     let mut n = 0;
-    for p in problems(m).iter().filter(|p| p.level == Level::Check) {
+    // The green guess is an engine Info result that FC3 lists as a row for its button; it is not a warning.
+    let warning = |p: &&super::bottom::Problem| {
+        p.level == Level::Check && p.code != Some(engine::codes::Code::ChkGreenGuess)
+    };
+    for p in problems(m).iter().filter(warning) {
         match &p.at {
             At::Texture(k) if wrote(k) => {
                 textures.insert(k.clone());

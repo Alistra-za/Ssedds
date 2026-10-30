@@ -94,6 +94,8 @@ pub struct PlanView {
     pub user_presets: Vec<(String, String)>,
     /// `(file, reason)` of every user preset file the plan skipped (CFG-PRESET-SKIPPED).
     pub skipped_user_presets: Vec<(String, String)>,
+    /// Note FC3 (Y4): the batch's IN-UNREADABLE warnings (entries the discovery skipped).
+    pub unreadable: Vec<Warning>,
     pub items: Vec<TextureItem>,
     pub sets: Vec<SetItem>,
     pub unmatched: Vec<String>,
@@ -385,6 +387,7 @@ impl PlanView {
         let mut sets = vec![];
         let mut unmatched = vec![];
         let mut skipped_user_presets = vec![];
+        let mut unreadable = vec![];
         for e in events {
             match &e.kind {
                 EventKind::SetResolved {
@@ -428,6 +431,7 @@ impl PlanView {
                     let s = |k: &str| w.data[k].as_str().unwrap_or_default().to_string();
                     skipped_user_presets.push((s("file"), s("reason")));
                 }
+                EventKind::Warning(w) if w.code == Code::InUnreadable => unreadable.push(w.clone()),
                 _ => {}
             }
         }
@@ -441,6 +445,7 @@ impl PlanView {
                 .map(|(id, src)| (id.to_string(), src.to_string()))
                 .collect(),
             skipped_user_presets,
+            unreadable,
             items,
             sets,
             unmatched,

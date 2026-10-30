@@ -227,7 +227,10 @@ fn rfaos_shows_a_fuzz_row_hides_metallic_and_switches_the_inferred_members() {
     assert_eq!(resolved(m, DIFFUSE), Subtype::SkinAlbedo);
     assert_eq!(resolved(m, SK), Subtype::SkinSk);
     assert!(!m.sets_doc.as_ref().unwrap().text().contains("auto_skin"));
-    h.get_by_label_contains("metallic fill removed (RFAOS has no metallic channel)");
+    // Note FC3 (supersedes R-fills-2's card note): the dropped fill is a Problems Info row.
+    assert!(sdc_gui::model::bottom::problems(m)
+        .iter()
+        .any(|p| p.text == "metallic fill removed (RFAOS has no metallic channel)"));
     let v = set_views(m);
     let v = v.iter().find(|v| v.id == "m/rock01").unwrap();
     assert!(matches!(
@@ -919,4 +922,60 @@ fn a_skin_f_is_the_rfaos_cards_fuzz_file() {
         rows.iter().any(|r| matches!(r, FillRow::FromFile { role: RawMap::Fuzz, file, .. } if file == "rock01_f.png")),
         "{rows:?}"
     );
+}
+
+/// Note FC3 (R-fills-2): a fill a recipe switch dropped is an Info row with `Undo` while the switch is the last step;
+/// it leaves "ready" alone, and Undo takes the switch back.
+#[test]
+fn a_dropped_fill_is_an_info_row_with_undo() {
+    use egui_kittest::kittest::Queryable;
+    use sdc_gui::model::bottom::{counts_as_ready_problem, problems, At, Fix, Level};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    m.set_pack_fill(RMAOS, RawMap::Metallic, Some(9));
+    idle(&mut m);
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(&mut m);
+    let row = |m: &AppModel| problems(m).iter().find(|p| p.level == Level::Info).cloned();
+    let r = row(&m).expect("the Info row");
+    assert_eq!(r.at, At::Texture(RFAOS.into()));
+    assert_eq!(
+        r.text,
+        "metallic fill removed (RFAOS has no metallic channel)"
+    );
+    assert_eq!(r.fix, Some(Fix::UndoLast));
+    assert!(!counts_as_ready_problem(&r));
+    m.open_problems(None);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label(sdc_gui::ui::problems::UNDO_ROW).click();
+    h.run();
+    idle(h.state_mut());
+    h.run();
+    let m = h.state();
+    assert!(row(m).is_none());
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value(RFAOS, "packing.recipe"),
+        None
+    );
+    assert_eq!(
+        m.project
+            .as_ref()
+            .unwrap()
+            .file_value(RMAOS, "packing.fill.metallic"),
+        Some(json!(9))
+    );
+    // Another step on top: the row stays, without Undo.
+    let m = h.state_mut();
+    m.set_packing_recipe(RMAOS, PackRecipe::Rfaos);
+    idle(m);
+    assert_eq!(row(m).expect("listed again").fix, Some(Fix::UndoLast));
+    m.set_json_name("other");
+    assert_eq!(row(m).expect("still listed").fix, None);
 }

@@ -796,7 +796,7 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
 }
 
 fn status(ui: &mut egui::Ui, model: &mut AppModel) {
-    if model.status_line.is_empty() && model.banner.is_none() && model.encoding_note.is_none() {
+    if model.status_line.is_empty() && model.banner.is_none() {
         return;
     }
     egui::Panel::top("status").show(ui, |ui| {
@@ -833,10 +833,6 @@ fn status(ui: &mut egui::Ui, model: &mut AppModel) {
                 ui.weak(format!("· {text}")).on_hover_text(
                     "File sizes of the DDS files an export writes; a compressed size is also its video memory",
                 );
-            }
-            // Task 9 (Z11): the last "encoding follows type" cleanup; every texture on hover.
-            if let Some((line, all)) = &model.encoding_note {
-                ui.weak(format!("· {line}")).on_hover_text(all);
             }
         });
         if let Some(b) = model.banner.clone() {

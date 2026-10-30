@@ -1,6 +1,8 @@
 //! The Review tab (layout v2 B2, C2, C5; R1–R4, R11): blockers, undecided textures and pitfalls side by side, what
 //! the export writes, and one Export button. Not a dialog: Enter does nothing here (N3).
-use super::settings_panel::{alpha_hint, alpha_options, offered_groups, subtype_label};
+use super::settings_panel::{
+    alpha_hint, alpha_options, offered_groups, subtype_label, unclear_layouts,
+};
 use super::status::{AMBER, RED};
 use super::type_picker::{self, TypeKind};
 use crate::model::bottom::{problems, Level};
@@ -10,7 +12,7 @@ use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{DiskState, JsonKind, JsonLine, NO_EXPORT_FOLDER};
 use crate::model::{also, pbr_export, sets, Answer, AppModel};
 use eframe::egui;
-use engine::config::{AlphaPolicy, Subtype, Target};
+use engine::config::{AlphaPolicy, CubeLayout, Subtype, Target};
 use engine::presets::{AlsoTarget, ExportConfig};
 
 /// What a click on an undecided row asks for.
@@ -18,6 +20,8 @@ pub enum RowPick {
     Select(String),
     Decide(String, Subtype),
     Answer(String, Answer),
+    /// Note FC3 (DT35): the cube layout picked from the row's `Set layout ▾`.
+    Layout(String, CubeLayout),
 }
 
 pub fn apply(model: &mut AppModel, pick: RowPick) {
@@ -25,7 +29,27 @@ pub fn apply(model: &mut AppModel, pick: RowPick) {
         RowPick::Select(k) => model.select_item(&k),
         RowPick::Decide(k, st) => model.decide_undecided_row(&k, st),
         RowPick::Answer(k, a) => model.answer_undecided_row(&k, a),
+        RowPick::Layout(k, l) => model.set_field(&k, "cubemap.layout", serde_json::json!(l)),
     }
+}
+
+/// Note FC3 (supersedes DT35's hint): the cube layout question answered on the row, `Set layout ▾`, with the layouts
+/// the settings panel's picker offers for an unclear image.
+pub const SET_LAYOUT: &str = "Set layout ▾";
+
+fn layout_menu(ui: &mut egui::Ui, key: &str, why: &str) -> Option<RowPick> {
+    let mut pick = None;
+    ui.menu_button(SET_LAYOUT, |ui| {
+        for (l, label) in unclear_layouts() {
+            if ui.button(*label).clicked() {
+                pick = Some(RowPick::Layout(key.to_string(), *l));
+                ui.close();
+            }
+        }
+    })
+    .response
+    .on_disabled_hover_text(why);
+    pick
 }
 
 /// One undecided texture's controls: name link, sub-type combo + ✓ when it asks its sub-type, the alpha buttons,
@@ -44,10 +68,6 @@ pub fn undecided_row(
     ui.horizontal(|ui| {
         if ui.link(&item.name).clicked() {
             pick = Some(RowPick::Select(key.to_string()));
-        }
-        // DT35: a row with no inline control says where its one question is answered (DT15).
-        if item.decisions == [Decision::CubeLayout] {
-            ui.weak("Pick its cube layout in settings");
         }
         let Some(suggested) = question else {
             return;
@@ -108,8 +128,12 @@ pub fn undecided_row(
                         pick = Some(RowPick::Answer(key.to_string(), Answer::Acknowledge(*code)));
                     }
                 }
-                // The layout is picked in the texture's settings panel (Note DT14).
-                Decision::Subtype { .. } | Decision::CubeLayout => {}
+                Decision::CubeLayout => {
+                    if let Some(p) = layout_menu(ui, key, why) {
+                        pick = Some(p);
+                    }
+                }
+                Decision::Subtype { .. } => {}
             });
         }
     });
@@ -206,7 +230,11 @@ pub fn fix_buttons(
                     .response
                     .on_disabled_hover_text(why);
                 }
-                Decision::CubeLayout => {}
+                Decision::CubeLayout => {
+                    if let Some(p) = layout_menu(ui, key, why) {
+                        pick = Some(p);
+                    }
+                }
                 Decision::Acknowledge(code) => {
                     if ui
                         .button("Acknowledge")

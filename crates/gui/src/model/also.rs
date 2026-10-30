@@ -315,6 +315,7 @@ impl AppModel {
                 "Also export: a zip, the sums file or the report was not written (see the notes)",
             );
         }
+        self.also_report = s.report.clone();
         if let Some(r) = &s.report {
             let t = format!("Conversion report: {}", r.display());
             self.messages.notify(messages::Severity::Info, t.clone());

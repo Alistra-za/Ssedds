@@ -1,4 +1,5 @@
 //! Export of PBR sets (M3b spec §6): the checks that block or ask, and the JSON entries. No egui types.
+use super::bottom::Fix;
 use super::export::{Row, RowState};
 use super::history::{recorded, sha256_of};
 use super::sets::{
@@ -25,6 +26,8 @@ pub struct ExportIssue {
     /// The engine key, for selecting the set (empty for a created set with no members, and for project-wide issues).
     pub set_key: String,
     pub text: String,
+    /// Note FC3: the Problems row's action (P13 `Fix path`, P26 `Turn {feature} off`).
+    pub fix: Option<Fix>,
 }
 
 fn issue(v: &SetView, text: String) -> ExportIssue {
@@ -32,6 +35,7 @@ fn issue(v: &SetView, text: String) -> ExportIssue {
         set_id: v.id.clone(),
         set_key: v.key.clone(),
         text,
+        fix: None,
     }
 }
 
@@ -40,6 +44,7 @@ fn general(text: String) -> ExportIssue {
         set_id: String::new(),
         set_key: String::new(),
         text,
+        fix: None,
     }
 }
 
@@ -326,26 +331,39 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
         for (f, _) in FEATURE_KEYS {
             if let Some(b) = feature_on(s, f).then(|| blocked_by(s, f)).flatten() {
                 if f < b {
-                    out.push(issue(
-                        v,
-                        format!(
-                            "{}: {} and {} can't both be on",
-                            v.id,
-                            feature_key(f).trim_end_matches("_on"),
-                            feature_key(b).trim_end_matches("_on")
-                        ),
-                    ));
+                    let text = format!(
+                        "{}: {} and {} can't both be on",
+                        v.id,
+                        feature_key(f).trim_end_matches("_on"),
+                        feature_key(b).trim_end_matches("_on")
+                    );
+                    // Note FC3 (P26): the row turns the second one off.
+                    out.push(ExportIssue {
+                        fix: Some(Fix::TurnFeatureOff(v.id.clone(), b)),
+                        ..issue(v, text)
+                    });
                 }
             }
         }
+        // Note FC3 (P13): every path error starts with its field's key; the row goes to that field.
+        let fix_path = |e: &str| {
+            let field = e.split_once(':').map_or(e, |(f, _)| f);
+            Some(Fix::FixPath(v.key.clone(), field.to_string()))
+        };
         if let Some(e) = &v.prefix_error {
-            out.push(issue(v, format!("{}: {e}", v.id)));
+            out.push(ExportIssue {
+                fix: fix_path(e),
+                ..issue(v, format!("{}: {e}", v.id))
+            });
         }
         for n in 1..=8u8 {
             if let Some(Value::String(p)) = s.get(&format!("slot{n}")) {
                 if !p.is_empty() {
                     if let Err(e) = check_json_path(p, &format!("slot{n}")) {
-                        out.push(issue(v, format!("{}: {}", v.id, e.0)));
+                        out.push(ExportIssue {
+                            fix: fix_path(&e.0),
+                            ..issue(v, format!("{}: {}", v.id, e.0))
+                        });
                     }
                 }
             }
@@ -428,6 +446,7 @@ pub fn path_collisions(m: &AppModel) -> Vec<ExportIssue> {
                     name(first),
                     name(k)
                 ),
+                fix: None,
             }),
             None => {
                 seen.insert(path_lower(p), (owner.clone(), k.clone()));
@@ -453,6 +472,7 @@ pub fn path_collisions(m: &AppModel) -> Vec<ExportIssue> {
                     name(k),
                     it.key
                 ),
+                fix: None,
             });
         }
     }

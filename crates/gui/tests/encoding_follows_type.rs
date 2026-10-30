@@ -304,3 +304,38 @@ fn a_grey_skin_wet_keeps_an_explicit_r8() {
         Verdict::Clear
     );
 }
+
+/// Note FC3 (supersedes Z11's status line): a cleared format is an Info row per texture, with Undo while its step is
+/// the last one; it leaves "ready" alone.
+#[test]
+fn a_cleared_format_is_an_info_row_with_undo() {
+    use sdc_gui::model::bottom::{counts_as_ready_problem, problems, At, Fix, Level};
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, set) = grass_with(d.path(), Some(LINEAR));
+    m.set_shader(&set, Some(Shader::Pbr));
+    idle(&mut m);
+    let rows: Vec<_> = problems(&m)
+        .iter()
+        .filter(|p| p.level == Level::Info)
+        .cloned()
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].at, At::Project);
+    assert!(
+        rows[0]
+            .text
+            .starts_with("g.png: complex grass → pbr albedo"),
+        "{}",
+        rows[0].text
+    );
+    assert_eq!(rows[0].fix, Some(Fix::UndoLast));
+    assert!(!counts_as_ready_problem(&rows[0]));
+    m.undo();
+    idle(&mut m);
+    assert!(!problems(&m).iter().any(|p| p.level == Level::Info));
+    assert_eq!(
+        file(&m, "format"),
+        Some(json!("bc7")),
+        "the undo restored it"
+    );
+}

@@ -371,6 +371,31 @@ fn an_exported_short_normal_still_shows_one_z_row() {
     h.get_by_label(sdc_gui::ui::problems::REBUILD_Z).click();
     idle(&mut h);
     assert!(!z(h.state()).contains(&At::Texture("landscape/x_n.png".into())));
+    // Note FC3 (supersedes DP7d's "no button"): the file on disk is still short, so the last export's row comes back
+    // and keeps Rebuild Z, off with the reason until the next export rewrites the file.
+    let row = problems(h.state())
+        .iter()
+        .find(|p| p.code == Some(Code::ChanNormalLength))
+        .cloned()
+        .expect("the last export's row");
+    assert!(matches!(row.at, At::File(_)), "{:?}", row.at);
+    assert_eq!(
+        row.fix,
+        Some(sdc_gui::model::bottom::Fix::RebuildZ(
+            "landscape/x_n.png".into()
+        ))
+    );
+    // The panel is 240 px tall: hide the two plastic check rows so the File row is drawn.
+    let checks = h.state().settings.checks;
+    h.state_mut().set_checks(sdc_gui::settings::ChecksSettings {
+        plastic: false,
+        ..checks
+    });
+    h.state_mut().poll();
+    h.state_mut().invalidate_views();
+    h.run();
+    let b = h.get_by_label(sdc_gui::ui::problems::REBUILD_Z);
+    assert!(b.accesskit_node().is_disabled(), "already on");
 }
 
 #[test]
@@ -731,7 +756,8 @@ fn a_ready_set_that_gains_a_warning_loses_its_green_dot() {
     assert!(h.query_all_by_label("ready").count() < ready);
 }
 
-/// Owner 2026-10-20 ("1 yes"): "Checks {n}" narrows Problems to the artist checks' rows, "Checks only ×" clears it.
+/// Owner 2026-10-20 ("1 yes"): the checks filter narrows Problems to the artist checks' rows. Note FC3: it is the
+/// `Checks` pill, pressed again to clear.
 #[test]
 fn the_checks_filter_shows_only_check_rows() {
     use engine::codes::{Code, Warning};
@@ -779,16 +805,12 @@ fn the_checks_filter_shows_only_check_rows() {
     let shown = |h: &Harness<'static, AppModel>, t: &str| h.query_all_by_label(t).count();
     assert_eq!(shown(&h, plain), 1);
     assert_eq!(shown(&h, &check), 1);
-    h.get_by_label("Checks 1").click();
+    h.get_by_label(sdc_gui::ui::problems::CHECKS_PILL).click();
     h.run();
     assert_eq!(h.state().bottom.filter, Some(ProblemsFilter::Checks));
     assert_eq!(shown(&h, plain), 0);
     assert_eq!(shown(&h, &check), 1);
-    assert!(
-        h.query_by_label("Checks 1").is_none(),
-        "the chip replaces the button"
-    );
-    h.get_by_label("Checks only ×").click();
+    h.get_by_label(sdc_gui::ui::problems::CHECKS_PILL).click();
     h.run();
     assert_eq!(h.state().bottom.filter, None);
     assert_eq!(shown(&h, plain), 1);
