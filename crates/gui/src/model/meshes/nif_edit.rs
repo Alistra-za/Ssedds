@@ -2304,6 +2304,12 @@ impl MeshesModel {
         )
     }
 
+    /// Note GD18: opens the edit panel's Diff view of `path` (Review's Diff…, FC5, and the panel's own Diff… call
+    /// this). The lines are read here, once; None (no foreign file) closes the view.
+    pub fn show_nif_diff(&mut self, path: &str) {
+        self.nif_diff_view = self.nif_diff(path).map(|l| (path.to_string(), l));
+    }
+
     /// Note GD2: writes every Review row that is not blocked and, when Tessalith did not write its file, is answered
     /// Overwrite for the bytes on disk now (read again here). The answers are used up. Ok(written) when nothing was
     /// skipped, else Err listing each skipped NIF and why. Each write is a line in Messages, with its placement.

@@ -10581,6 +10581,41 @@ fn a_foreign_nif_row_has_the_block_diff() {
     assert_eq!(m.nif_diff("meshes/other.nif"), None);
 }
 
+/// Note GD18: `show_nif_diff` (Review's Diff…, FC5) opens the edit panel's Diff view with `nif_diff`'s lines; Close
+/// shuts it, and the footer's own Diff… opens it again.
+#[test]
+fn show_nif_diff_opens_the_diff_view() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    let p = exported(&d);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, m.edit.as_ref().unwrap().source.to_vec()).unwrap();
+    let want = m
+        .nif_diff("meshes/x.nif")
+        .expect("a foreign file has a diff");
+    m.show_nif_diff("meshes/x.nif");
+    assert_eq!(m.nif_diff_view, Some(("meshes/x.nif".into(), want.clone())));
+    let mut h = view(m);
+    h.run_steps(3);
+    let shown = |h: &Harness<'static, MeshesModel>| {
+        want.iter().all(|l| {
+            h.query_all_by_label(&format!("Diff line: {l}"))
+                .next()
+                .is_some()
+        })
+    };
+    assert!(shown(&h), "every line of nif_diff is in the view");
+    h.get_by_role_and_label(AkRole::Button, "Close the diff")
+        .click();
+    h.run_steps(3);
+    assert!(!shown(&h));
+    assert_eq!(h.state().nif_diff_view, None);
+    h.get_by_role_and_label(AkRole::Button, "Diff…").click();
+    h.run_steps(3);
+    assert!(shown(&h), "the footer's Diff… opens the same view");
+}
+
 #[test]
 fn a_blocked_nif_row_is_skipped_by_the_export() {
     let (_d, mut m) = export_session();

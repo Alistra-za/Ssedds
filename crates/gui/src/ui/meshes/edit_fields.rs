@@ -32,6 +32,8 @@ pub(super) struct Act {
     pub open: Option<String>,
     /// Note GD2: the footer's Review… (the app opens Review).
     pub review: bool,
+    /// Note GD18: the footer's Diff… (Some(true): open the Diff view) or the view's Close (Some(false)).
+    pub diff: Option<bool>,
     /// A click or drag on a curve: the scene time the clock jumps to (it pauses, B3's `Clock::scrub`).
     pub scrub: Option<f32>,
     /// The Preview selector picked free chains or a clip (v2 B7).

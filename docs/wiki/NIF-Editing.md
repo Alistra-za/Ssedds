@@ -46,7 +46,7 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 
 ## Export
 
-The bottom of the edit panel says **Ready**, "No edits to export.", or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**.
+The bottom of the edit panel says **Ready**, "No edits to export.", or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**. When a file Tessalith did not write is already where the export goes, **Diff…** lists the blocks that differ from what the export writes.
 
 - Review lists each NIF with edits as a row. The export writes `meshes\...\<name>.nif` under the export folder. Blocks that your edits left unused are left out, and the row says how many.
 - A blocked NIF row is skipped; it never stops the texture export.

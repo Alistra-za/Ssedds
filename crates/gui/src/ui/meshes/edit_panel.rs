@@ -29,10 +29,20 @@ pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     }
     if let Some(e) = &m.edit {
         top(ui, e, &mut act);
+        // Note GD18: a foreign file at the export path has a Diff…; the rows read the disk only when its stat changed.
+        let foreign = m
+            .nif_review_rows()
+            .first()
+            .is_some_and(|r| r.foreign.is_some());
+        let diff = m
+            .nif_diff_view
+            .as_ref()
+            .filter(|(p, _)| p.eq_ignore_ascii_case(&e.data_path))
+            .map(|(_, l)| l.as_slice());
         // Meshes UI T3: a footer drawn before the tabs (rule 2.1), so a long tab never pushes it away.
         egui::Panel::bottom("meshes-edit-export")
             .resizable(false)
-            .show(ui, |ui| export_block(ui, e, &mut act));
+            .show(ui, |ui| export_block(ui, e, foreign, diff, &mut act));
         let tab_id = egui::Id::new("meshes-edit-tab");
         let mut tab: usize = ui.data(|d| d.get_temp(tab_id)).unwrap_or(0);
         ui.horizontal(|ui| {
@@ -215,8 +225,15 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
 }
 
 /// The export footer (spec §8, Meshes UI T3): a status line (Ready, or Blocked and why), what is written where, then
-/// Review… (Note GD2). A read-only session shows its reason here too.
-fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
+/// Review… (Note GD2). A read-only session shows its reason here too. `foreign`: a file Tessalith did not write is at
+/// the export path (Diff… shows it); `diff`: the open Diff view's lines (Note GD18).
+fn export_block(
+    ui: &mut egui::Ui,
+    e: &NifEdit,
+    foreign: bool,
+    diff: Option<&[String]>,
+    act: &mut Act,
+) {
     ui.add_space(4.0);
     let red = e.doc.has_conflicts();
     egui::Sides::new().shrink_left().truncate().show(
@@ -255,8 +272,47 @@ fn export_block(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
                     ui.ctx().request_repaint();
                 }
             }
+            if foreign
+                && ui
+                    .small_button("Diff…")
+                    .on_hover_text(
+                        "A file Tessalith did not write is at the export path: its blocks against what the \
+                         export writes.",
+                    )
+                    .clicked()
+            {
+                act.diff = Some(true);
+            }
         },
     );
+    if let Some(lines) = diff {
+        ui.horizontal(|ui| {
+            ui.strong("The file on disk against the export");
+            let r = ui.small_button("Close");
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Close the diff")
+            });
+            if r.clicked() {
+                act.diff = Some(false);
+            }
+        });
+        // shortcut: the lines are read at the click and go stale after a later edit; Diff… again reads them anew.
+        egui::ScrollArea::vertical()
+            .id_salt("meshes-edit-diff")
+            .max_height(160.0)
+            .show(ui, |ui| {
+                for l in lines {
+                    let r = ui.add(egui::Label::new(egui::RichText::new(l).monospace()).truncate());
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Label,
+                            true,
+                            format!("Diff line: {l}"),
+                        )
+                    });
+                }
+            });
+    }
     if !e.edit_mod.as_os_str().is_empty() {
         // The real destination (Note CI29), cut in the middle like the header's Export to; the full path on hover and
         // in the accessible name. MO2 joins `mods` with `/`: shown with `\` throughout.
@@ -336,4 +392,13 @@ fn apply(m: &mut MeshesModel, act: Act) {
     }
     // A field that lost its focus to the Review… click committed its push (and flush) above this frame (rule 7.5).
     m.open_review_request |= act.review;
+    match act.diff {
+        Some(true) => {
+            if let Some(p) = m.edit.as_ref().map(|e| e.data_path.clone()) {
+                m.show_nif_diff(&p);
+            }
+        }
+        Some(false) => m.nif_diff_view = None,
+        None => {}
+    }
 }
