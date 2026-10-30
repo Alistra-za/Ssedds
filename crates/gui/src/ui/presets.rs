@@ -1,7 +1,7 @@
 //! The preset creator (Note AM, owner design §2): a centre-column tab, or its own window when popped out (Note FB7).
 //! Drawing only: every edit is collected and applied to the `PresetsModel` after the view is drawn.
 use super::columns::RED;
-use super::settings_panel::{combo, options_of, subtype_label, Options};
+use super::settings_panel::{combo_for, options_of, subtype_label, Options};
 use crate::model::fields::{
     encoding_options, field_lock, filter_option_lock, format_label, is_cutout,
 };
@@ -628,7 +628,8 @@ fn field_row(
     let cur = value_of(p, field);
     let lock = field_lock(t, p, field);
     let r = ui.add_enabled_ui(lock.is_none(), |ui| {
-        combo(
+        combo_for(
+            field,
             ui,
             egui::Id::new(("preset-field", st, scope, field)),
             &cur,

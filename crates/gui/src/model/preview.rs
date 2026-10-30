@@ -203,7 +203,8 @@ fn classify(item: &TextureItem) -> Previewable {
             .warnings
             .iter()
             .filter(|w| codes.contains(&w.code))
-            .map(|w| format!("{}: {}", w.code.as_str(), w.message));
+            // Note FB8: the reason in words, no code.
+            .map(|w| super::code_text::without_codes(&w.message));
         return Previewable::Blocked(
             std::iter::once(ERRORED.to_string())
                 .chain(why)

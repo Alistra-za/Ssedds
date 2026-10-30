@@ -111,10 +111,7 @@ impl Problem {
 
     /// What the row shows (Note FB8): the code's action sentence, else the engine's text with any code taken out.
     pub fn shown(&self) -> std::borrow::Cow<'_, str> {
-        match self.code.map(code_text::code_sentence) {
-            Some(s) if !s.is_empty() => s.into(),
-            _ => code_text::without_codes(&self.text).into(),
-        }
+        code_text::shown_for(self.code, &self.text)
     }
 }
 

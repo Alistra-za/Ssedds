@@ -1,7 +1,8 @@
 //! The centre panel for a selected texture (M3a spec §2.4): the decisions it still needs, then its settings by group,
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
-use crate::model::code_text::code_line;
+use super::status::code_hover;
+use crate::model::code_text::{code_line, shown_for, without_codes};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
     field_views, filter_option_lock, filter_view, group_of, levels_view, mips_count, mips_on,
@@ -322,6 +323,18 @@ pub(super) fn combo(
     options: &Options,
     mixed: bool,
 ) -> (Option<Value>, egui::Response) {
+    combo_for("", ui, id, current, options, mixed)
+}
+
+/// [`combo`] for `field`: the Alpha field's five options carry `alpha_hint` as their hover (Note FB8, review C12).
+pub(super) fn combo_for(
+    field: &str,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    current: &Value,
+    options: &Options,
+    mixed: bool,
+) -> (Option<Value>, egui::Response) {
     // Note FB4: "— mixed" and "— not set" (no value, nothing to mix) are drawn weak, never the word `null`.
     let shown = if mixed {
         egui::RichText::new("— mixed").weak()
@@ -342,8 +355,16 @@ pub(super) fn combo(
                 // A null value is a non-selectable group heading.
                 if v.is_null() {
                     ui.label(egui::RichText::new(label).weak());
-                } else if ui.selectable_label(v == current, label).clicked() {
-                    picked = Some(v.clone());
+                } else {
+                    let mut r = ui.selectable_label(v == current, label);
+                    if field == "alpha.policy" {
+                        if let Ok(p) = serde_json::from_value::<AlphaPolicy>(v.clone()) {
+                            r = r.on_hover_text(alpha_hint(p));
+                        }
+                    }
+                    if r.clicked() {
+                        picked = Some(v.clone());
+                    }
                 }
             }
         })
@@ -541,7 +562,14 @@ pub(super) fn editor(
             } else {
                 f.value.clone()
             };
-            combo(ui, egui::Id::new((key, field)), &current, &options, mixed)
+            combo_for(
+                field,
+                ui,
+                egui::Id::new((key, field)),
+                &current,
+                &options,
+                mixed,
+            )
         }
     }
 }
@@ -945,7 +973,8 @@ fn other_warnings(ui: &mut egui::Ui, warnings: &[Warning]) {
     ui.add_space(6.0);
     ui.label(egui::RichText::new("Warnings").strong());
     for w in rest {
-        ui.label(egui::RichText::new(format!("{}: {}", w.code.as_str(), w.message)).small());
+        ui.label(egui::RichText::new(&*shown_for(Some(w.code), &w.message)).small())
+            .on_hover_ui(|ui| code_hover(ui, &w.message, w.code.as_str()));
     }
 }
 
@@ -1006,7 +1035,9 @@ fn dds_header_panel(
         }
     }
     if let Some(l) = last {
-        ui.label(egui::RichText::new(l).small());
+        // The result line is kept whole (code first) for the Messages log; the panel shows the words.
+        ui.label(egui::RichText::new(without_codes(l)).small())
+            .on_hover_text(l);
     }
 }
 
@@ -1216,7 +1247,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                     ""
                 };
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("IN-GREEN-UNSTATED: {m}{hint}")).small());
+                    ui.label(egui::RichText::new(format!("{m}{hint}")).small())
+                        .on_hover_ui(|ui| code_hover(ui, m, Code::InGreenUnstated.as_str()));
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
                     }
@@ -1224,7 +1256,8 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             } else if let Some(m) = guess {
                 // No AW question was asked: the check's own line, same button, never an auto-flip.
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(format!("CHK-GREEN-GUESS: {m}")).small());
+                    ui.label(egui::RichText::new(m).small())
+                        .on_hover_ui(|ui| code_hover(ui, m, Code::ChkGreenGuess.as_str()));
                     if ui.small_button("Treat as OpenGL (flip green)").clicked() {
                         actions.push(Action::Decide(Answer::Green(GreenConvention::Opengl)));
                     }

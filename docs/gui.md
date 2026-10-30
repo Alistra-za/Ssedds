@@ -298,7 +298,7 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
 - **Cube preview.** The encoded side draws all six faces of the mip on show as one cross (4 by 3 faces), sized like a 2D preview, so a big cube previews at a lower mip. *Face labels* (on by default) names each face. *Heatmap*, *Tile 3×3* and *Pin* are off for a cube ("Not for cubes"), and there is no texel readout.
   - A six-file set has six source buttons, +X to -Z, over the source side. Each shows the processed face (after turns, flips, sizing and mips), the same picture as its cell in the cross.
   - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
-  - A set that cannot be built shows the engine's reason (for example `CUBE-FACES: faces differ in size`) in the encoded pane.
+  - A set that cannot be built shows the engine's reason (for example "faces differ in size"; the code is not shown) in the encoded pane.
 - **Make marker cube…** in **Export to ▾** opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
   - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
   - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
@@ -545,7 +545,7 @@ A panel runs along the bottom of the window in both views, full width. Collapsed
 
 - Blockers the export would stop on, for example a set that matches nothing.
 - *Failed: …* for a texture that failed to plan.
-- *Needs a decision: sub-type; what its alpha means; acknowledge CODE* for an undecided texture, with the fix in the row: **Set type…** (the suggested type first), **Decide…** (the alpha choices) and **Acknowledge**. These buttons are greyed out, with the reason on hover, while `sdc.toml` is read-only ("Wait for the plan to finish" while a plan runs).
+- *Needs a decision: sub-type; what its alpha means; <the warning's sentence>* for an undecided texture (a question that is an acknowledgement shows the sentence of its warning, for example "This texture's size isn't a power of two — resize it or acknowledge"; its code is on the hover), with the fix in the row: **Set type…** (the suggested type first), **Decide…** (the alpha choices) and **Acknowledge**. These buttons are greyed out, with the reason on hover, while `sdc.toml` is read-only ("Wait for the plan to finish" while a plan runs).
 - Export pitfalls, texture and set warnings, with **Go to set** on a set's row.
 - Artist-check warnings (see Artist checks), after the other warnings, with an amber dot that does not change "ready". The tab shows **Checks N** to narrow the list to them.
 - A file's export warnings, once the export has ended. Click the file to select it.

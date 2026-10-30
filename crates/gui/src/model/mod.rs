@@ -810,6 +810,13 @@ impl AppModel {
             Ok((m, _)) => m.clone(),
             Err(e) => e.clone(),
         };
+        // Note FB8: the panel shows the line without its code; the log keeps it whole.
+        let severity = if r.is_ok() {
+            messages::Severity::Info
+        } else {
+            messages::Severity::Warning
+        };
+        self.messages.log(severity, line.clone());
         self.dds_patch.last = Some((key.to_string(), line));
         r.map(|(_, dest)| dest)
     }
@@ -3319,7 +3326,7 @@ impl AppModel {
                 format!("NVTT {} at {} (tested)", t.version, t.path.display())
             }
             Some(NvttProbe::Found(t)) => format!(
-                "NVTT {} at {}: untested (3.2.5 is), acknowledge ENC-NVTT-VERSION to use it",
+                "NVTT {} at {}: untested (3.2.5 is), acknowledge its version warning to use it",
                 t.version,
                 t.path.display()
             ),
@@ -3467,14 +3474,21 @@ impl AppModel {
         // Note FB8: a line that names a code goes to the log as the engine wrote it, once per appearance; the banner
         // itself carries the words only.
         for l in lines.iter().filter(|l| !self.banner_logged.contains(l)) {
-            if code_text::without_codes(l) != *l {
-                self.messages.log(messages::Severity::Warning, l.clone());
+            if let Some(c) = code_text::first_code(l) {
+                use engine::codes::Severity as S;
+                let severity = match c.severity() {
+                    S::Info => messages::Severity::Info,
+                    S::Warning | S::Blocking => messages::Severity::Warning,
+                    S::Error => messages::Severity::Error,
+                };
+                self.messages.log(severity, l.clone());
             }
         }
         self.banner = if lines.is_empty() {
             None
         } else {
-            Some(code_text::without_codes(&lines.join("\n")))
+            let shown: Vec<_> = lines.iter().map(|l| code_text::banner_line(l)).collect();
+            Some(shown.join("\n"))
         };
         self.banner_logged = lines;
     }

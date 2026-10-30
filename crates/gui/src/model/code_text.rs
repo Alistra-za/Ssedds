@@ -109,11 +109,10 @@ pub fn code_line(code: Code) -> &'static str {
     }
 }
 
-/// `text` without the codes it names: a leading `CODE: ` prefix (the engine's habit) goes with its colon, a code in
-/// the middle of a sentence goes alone. The code stays in the Messages log, which gets the text as it was.
-pub fn without_codes(text: &str) -> String {
+/// Every code `text` names, as `(start, end, code)`: a whole token (`LOSS-ALPHA-DATA`), never a part of a longer one.
+fn code_spans(text: &str) -> Vec<(usize, usize, Code)> {
     let token = |c: char| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-';
-    let mut out = String::with_capacity(text.len());
+    let mut out = vec![];
     let mut i = 0;
     while i < text.len() {
         let rest = &text[i..];
@@ -122,19 +121,69 @@ pub fn without_codes(text: &str) -> String {
             .next_back()
             .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
         let n = rest.find(|c| !token(c)).unwrap_or(rest.len());
-        if at_start && n > 0 && Code::parse(&rest[..n]).is_some() {
-            i += n;
-            // "CODE: sentence" keeps the sentence.
-            i += text[i..]
-                .strip_prefix(": ")
-                .map_or_else(|| usize::from(text[i..].starts_with(':')), |_| 2);
-            continue;
+        if at_start && n > 0 {
+            if let Some(c) = Code::parse(&rest[..n]) {
+                out.push((i, i + n, c));
+                i += n;
+                continue;
+            }
         }
-        let c = rest.chars().next().expect("i < len");
-        out.push(c);
-        i += c.len_utf8();
+        i += rest.chars().next().map_or(1, char::len_utf8);
     }
     out
+}
+
+/// The first code `text` names.
+pub fn first_code(text: &str) -> Option<Code> {
+    code_spans(text).first().map(|s| s.2)
+}
+
+/// `text` without the codes it names: a leading `CODE: ` prefix (the engine's habit) goes with its colon, a code in
+/// the middle of a sentence goes alone (its backticks and the doubled space it leaves with it). The code stays in
+/// the Messages log, which gets the text as it was.
+pub fn without_codes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    for (s, e, _) in code_spans(text) {
+        out.push_str(&text[i..s]);
+        i = e;
+        if text[..s].ends_with('`') && text[e..].starts_with('`') {
+            out.pop();
+            i += 1;
+        }
+        // "CODE: sentence" keeps the sentence.
+        if text[i..].starts_with(':') {
+            i += 1;
+        }
+        if out.is_empty() || out.ends_with(' ') {
+            i += text[i..].len() - text[i..].trim_start_matches(' ').len();
+        }
+    }
+    out.push_str(&text[i..]);
+    out
+}
+
+/// What a row or line shows for `code` and its engine `text` (Note FB8): the code's sentence, else the engine's
+/// text without its code.
+pub fn shown_for(code: Option<Code>, text: &str) -> std::borrow::Cow<'_, str> {
+    match code.map(code_sentence) {
+        Some(s) if !s.is_empty() => s.into(),
+        _ => without_codes(text).into(),
+    }
+}
+
+/// A banner line (Note FB8): the first `CODE:` in it (`CFG-INVALID: preset 'x': …`, often behind a file path) says
+/// the code's sentence and keeps the engine's detail after it; any other code goes. The log keeps the line whole.
+pub fn banner_line(line: &str) -> String {
+    let lead = code_spans(line)
+        .into_iter()
+        .find(|&(_, e, c)| !code_sentence(c).is_empty() && line[e..].starts_with(':'));
+    match lead {
+        Some((s, e, c)) => {
+            without_codes(&format!("{}{}{}", &line[..s], code_sentence(c), &line[e..]))
+        }
+        None => without_codes(line),
+    }
 }
 
 #[cfg(test)]
@@ -164,8 +213,26 @@ mod tests {
         );
         assert_eq!(
             without_codes("acknowledge ENC-NVTT-VERSION to use it"),
-            "acknowledge  to use it"
+            "acknowledge to use it"
         );
+        // No empty backticks, and no doubled space, where a quoted code goes.
+        assert_eq!(
+            without_codes("raises `CHK-RANGE` and `DIM-NPOT`."),
+            "raises and ."
+        );
+        assert_eq!(
+            first_code("see CHK-RANGE and DIM-NPOT"),
+            Some(Code::ChkRange)
+        );
+        // A banner line that leads with a code says its sentence, then the detail.
+        assert_eq!(
+            banner_line("CFG-INVALID: preset 'x': bad — sdc.toml is ignored"),
+            format!(
+                "{}: preset 'x': bad — sdc.toml is ignored",
+                code_sentence(Code::CfgInvalid)
+            )
+        );
+        assert_eq!(banner_line("plain line"), "plain line");
         // Not a code: kept; a longer token that merely starts with a code: kept.
         assert_eq!(without_codes("NO-SUCH-CODE stays"), "NO-SUCH-CODE stays");
         assert_eq!(

@@ -38,3 +38,10 @@ pub fn dot(ui: &mut egui::Ui, s: Status) -> egui::Response {
     r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, s.label()));
     r
 }
+
+/// The hover of a line that shows a code's sentence or an Info message (Note FB8): the engine's message, then the
+/// code in weak text. The one place a code is printed in the panels.
+pub fn code_hover(ui: &mut egui::Ui, message: &str, codes: &str) {
+    ui.label(message);
+    ui.weak(codes);
+}

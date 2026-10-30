@@ -1,6 +1,8 @@
 //! M6 Track F2: the RNM section of a base normal's settings (F2 spec §5.2).
 use super::columns::AMBER;
+use super::status::code_hover;
 use super::thumbs::ThumbCache;
+use crate::model::code_text::shown_for;
 use crate::model::rnm::{ao_line, order_after_move, rnm_rows, RnmRow, AO_NOTE};
 use crate::model::AppModel;
 use eframe::egui;
@@ -212,7 +214,8 @@ pub fn rnm_section(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
                 .iter()
                 .filter(|w| w.code.as_str().starts_with("RNM-"))
             {
-                ui.colored_label(AMBER, format!("{}: {}", w.code.as_str(), w.message));
+                ui.colored_label(AMBER, &*shown_for(Some(w.code), &w.message))
+                    .on_hover_ui(|ui| code_hover(ui, &w.message, w.code.as_str()));
             }
         });
     for (k, f, v) in edits {

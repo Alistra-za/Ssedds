@@ -177,11 +177,25 @@ fn selecting_a_texture_shows_its_decisions_and_groups() {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
     model.select_item("landscape/rock01_normal.png");
+    // Note FB8: the Info line shows its message; the code is on its hover.
+    let unstated = model
+        .item("landscape/rock01_normal.png")
+        .unwrap()
+        .warnings
+        .iter()
+        .find(|w| w.code == engine::codes::Code::InGreenUnstated)
+        .expect("the unstated-green question")
+        .message
+        .clone();
     let mut h = harness(model);
     h.run();
+    assert_eq!(
+        h.query_all_by_label_contains("IN-GREEN-UNSTATED").count(),
+        0
+    );
     for label in [
         "Needs a decision",
-        "IN-GREEN-UNSTATED",
+        unstated.as_str(),
         "Colour",
         "Content",
         "DDS tag",
@@ -1470,7 +1484,24 @@ fn a_dds_with_undeclared_mips_offers_a_header_patch_and_writes_a_copy() {
     let patched = std::fs::read(&out).expect("a patched copy in the export folder");
     assert_eq!(&patched[148..], &b[148..]);
     assert_eq!(std::fs::read(&src).unwrap(), b, "the source is untouched");
-    h.get_by_label_contains("DDS-HEADER-PATCHED");
+    // Note FB8: the panel shows the result line without its code; the line (code first) is in the log.
+    let line = h
+        .state()
+        .dds_patch
+        .last_for("landscape/broken.dds")
+        .unwrap()
+        .to_string();
+    assert!(line.starts_with("DDS-HEADER-PATCHED"), "{line}");
+    h.get_by_label_contains(&sdc_gui::model::code_text::without_codes(&line));
+    assert_eq!(
+        h.query_all_by_label_contains("DDS-HEADER-PATCHED").count(),
+        0
+    );
+    assert!(h
+        .state()
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("DDS-HEADER-PATCHED")));
 }
 
 /// A full-chain 64x64 BC7 DDS at `<root>/landscape/broken.dds` whose header declares 1 mip; returns (path, bytes).
