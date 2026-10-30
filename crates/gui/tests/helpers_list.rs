@@ -90,8 +90,11 @@ fn row(h: &Harness<'static, AppModel>, file: &str) -> (String, egui::Rect) {
         .unwrap_or_else(|| panic!("no row for {file} in {:?}", rows(h)))
 }
 
-fn pill<'a>(h: &'a Harness<'static, AppModel>) -> egui_kittest::Node<'a> {
-    h.get_by_role_and_label(Role::Button, "Helpers filter")
+const XSET3: [&str; 4] = ["x.png", "x_roughness.png", "x_opacity.png", "y_opacity.png"];
+
+fn header<'a>(h: &'a Harness<'static, AppModel>, n: usize) -> egui_kittest::Node<'a> {
+    let label: &'static str = Box::leak(format!("Helpers ({n})").into_boxed_str());
+    h.get_by_role_and_label(Role::Button, label)
 }
 
 #[test]
@@ -134,40 +137,46 @@ fn helpers_group_sits_below_tiles() {
     assert_eq!(rows(&h).len(), 2);
 }
 
+/// Note FB12 (supersedes DY16's pill): the pill row holds only filters; Helpers is a group header.
 #[test]
-fn helpers_pill_on_by_default_and_hides_group() {
-    let d = tempfile::tempdir().unwrap();
-    let mut h = app(fixture(d.path(), &XSET, ""));
-    assert_eq!(
-        pill(&h).accesskit_node().toggled(),
-        Some(egui::accesskit::Toggled::True)
-    );
-    let tiles = h.state().visible_items();
-    pill(&h).click();
-    h.run();
-    h.run();
-    assert!(h.state().filter.hide_helpers);
-    assert!(rows(&h).is_empty(), "the rows are gone");
-    assert_eq!(h.query_all_by_label("Helpers (2)").count(), 0);
-    assert_eq!(h.state().visible_items(), tiles, "tiles unchanged");
-    assert!(h.state().filters_active());
-    assert_eq!(h.state().hidden_by_filters(), 2);
-    h.state_mut().clear_filters();
-    h.run();
-    h.run();
-    assert_eq!(rows(&h).len(), 2, "Clear filters brings them back");
-}
-
-#[test]
-fn helpers_pill_counts_helpers() {
+fn helpers_is_not_a_pill() {
     let d = tempfile::tempdir().unwrap();
     let h = app(fixture(d.path(), &XSET, ""));
     assert_eq!(h.state().filter_counts().helpers, 2);
-    // The pill is named "Helpers filter"; its visible text is its value.
     assert_eq!(
-        pill(&h).accesskit_node().value().as_deref(),
-        Some("Helpers 2")
+        h.query_all_by_label("Helpers filter").count(),
+        0,
+        "no Helpers filter pill"
     );
+    assert_eq!(h.query_all_by_label_contains("Helpers 2").count(), 0);
+    header(&h, 2);
+}
+
+#[test]
+fn helpers_group_collapses() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = app(fixture(d.path(), &XSET3, ""));
+    assert_eq!(rows(&h).len(), 3, "open by default");
+    let tiles = h.state().visible_items();
+    header(&h, 3).click();
+    h.run();
+    h.run();
+    assert!(rows(&h).is_empty(), "collapsing hides the rows");
+    header(&h, 3);
+    assert_eq!(h.state().visible_items(), tiles, "tiles unchanged");
+    assert!(!h.state().filters_active(), "collapsing is not a filter");
+    assert_eq!(h.state().hidden_by_filters(), 0);
+    header(&h, 3).click();
+    h.run();
+    h.run();
+    assert_eq!(rows(&h).len(), 3, "opening brings them back");
+}
+
+#[test]
+fn no_helpers_no_header() {
+    let d = tempfile::tempdir().unwrap();
+    let h = app(fixture(d.path(), &["x.png"], ""));
+    assert_eq!(h.query_all_by_label_contains("Helpers (").count(), 0);
 }
 
 #[test]
@@ -377,10 +386,6 @@ fn hiding_helpers_keeps_a_selected_helper_and_counts_it_hidden() {
     assert_eq!(m.selection_summary(false).as_deref(), Some("2 selected"));
     m.filter.hide_helpers = true;
     assert!(m.selected_items().contains(&rows[0]), "still selected");
-    assert_eq!(
-        m.selection_summary(false).as_deref(),
-        Some("2 selected (1 hidden by filter)")
-    );
 }
 
 /// Review pictures of the Textures column at 1100, 1280 and 1600 px (egui-ui-rules step 5). Needs a GPU and

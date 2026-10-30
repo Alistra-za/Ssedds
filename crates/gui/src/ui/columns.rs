@@ -369,7 +369,11 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
         ui.text_style_height(&egui::TextStyle::Body) + 2.0 * ui.spacing().item_spacing.y
     };
     let tiles_h = rows as f32 * row_step;
-    let total = tiles_h + header_h + helpers.len() as f32 * helper_h;
+    // Note FB12: the group is open unless the user collapsed it; collapsed, only the header line is laid out.
+    let open = !model.filter.hide_helpers;
+    let shown = if open { helpers.len() } else { 0 };
+    let total = tiles_h + header_h + shown as f32 * helper_h;
+    let mut toggle = false;
     let mut drawn = 0usize;
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -414,15 +418,35 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                 egui::vec2(width, header_h),
             );
             if viewport.translate(origin.to_vec2()).intersects(header) {
-                ui.scope_builder(egui::UiBuilder::new().max_rect(header), |ui| {
-                    ui.add_space(ui.spacing().item_spacing.y);
-                    ui.strong(format!("Helpers ({})", helpers.len()));
-                });
+                // An explicit id: opening or closing never shifts other widgets' auto ids.
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .id_salt("helpers-header")
+                        .max_rect(header),
+                    |ui| {
+                        let name = format!("Helpers ({})", helpers.len());
+                        let arrow = if open { "▾" } else { "▸" };
+                        let r = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new(format!("{arrow} {name}")).strong(),
+                            )
+                            .frame(false),
+                        );
+                        r.widget_info(|| {
+                            egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, &name)
+                        });
+                        let hover = if open {
+                            "Collapse the helper files (AO, masks, layers…)"
+                        } else {
+                            "Show the helper files (AO, masks, layers…)"
+                        };
+                        toggle = r.on_hover_text(hover).clicked();
+                    },
+                );
             }
             let top = tiles_h + header_h;
             let first = ((viewport.min.y - top) / helper_h).floor().max(0.0) as usize;
-            let last =
-                (((viewport.max.y - top) / helper_h).ceil().max(0.0) as usize).min(helpers.len());
+            let last = (((viewport.max.y - top) / helper_h).ceil().max(0.0) as usize).min(shown);
             for n in first..last {
                 let idx = helpers[n];
                 let rect = egui::Rect::from_min_size(
@@ -433,6 +457,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
                 drawn += 1;
             }
         });
+    if toggle {
+        model.filter.hide_helpers = open;
+    }
     ui.ctx()
         .data_mut(|d| d.insert_temp(egui::Id::new(HELPER_ROWS_DRAWN), drawn));
 }
@@ -685,25 +712,6 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
             {
                 *on = !*on;
             }
-        }
-        // Note DY16: on (selected) shows the helper rows; the filter field is the inverse so the default stays "off".
-        let shown = !f.hide_helpers;
-        let text = format!("Helpers {}", c.helpers);
-        let r = ui.add(
-            egui::Button::selectable(shown, text.clone())
-                .corner_radius(10)
-                .frame_when_inactive(true),
-        );
-        r.widget_info(|| {
-            let mut i =
-                egui::WidgetInfo::selected(egui::WidgetType::Button, true, shown, "Helpers filter");
-            i.current_text_value = Some(text.clone());
-            i
-        });
-        if r.on_hover_text("Show helper files (AO, masks, layers…) at the bottom of the list")
-            .clicked()
-        {
-            f.hide_helpers = !f.hide_helpers;
         }
         // A7: Sort is not a filter, so it stays out of the count.
         let k = [
