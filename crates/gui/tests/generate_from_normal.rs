@@ -1682,7 +1682,7 @@ fn the_slot_row_says_where_a_generated_map_came_from() {
 }
 
 #[test]
-fn a_stale_generated_map_turns_only_its_row_dot_amber() {
+fn a_stale_generated_map_is_a_regenerate_row_its_set_dot_reads() {
     use egui_kittest::kittest::Queryable;
     use sdc_gui::model::bottom;
     let d = tempfile::tempdir().unwrap();
