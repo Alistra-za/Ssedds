@@ -1690,11 +1690,19 @@ impl AppModel {
         }
         let id = set.to_string();
         let retype = self.untouched_for_shader(set, shader);
-        // Note FC1 R5: a sub-type the plan recorded on its own and nobody changed goes, so the shader re-types it.
+        // Note FC1 R5: a sub-type the plan recorded on its own and nobody changed takes the chosen shader's type in
+        // this step (the CLI never reads the set's shader, so `sdc.toml` must name it). Back to Auto it goes, and the
+        // next settled plan records what the plan picks then.
+        for (k, _) in &retype {
+            self.history.auto_written.remove(&(k.clone(), "subtype"));
+        }
         let pick = move |p: &mut crate::project::ProjectDoc, d: &mut crate::sets_doc::SetsDoc| {
             d.set_shader(&id, shader);
-            for k in &retype {
-                p.clear_file_value(k, "subtype");
+            for (k, new) in &retype {
+                match new {
+                    Some(v) => p.set_file_value(k, "subtype", v),
+                    None => p.clear_file_value(k, "subtype"),
+                }
             }
         };
         let Some((item, was, on)) = self.skin_follow(set, shader) else {
@@ -1730,18 +1738,28 @@ impl AppModel {
         });
     }
 
-    /// Note FC1 R5: set `set`'s members whose recorded sub-type is untouched and that `shader` re-types (the engine's
-    /// `member_subtype`); not a member in a locked slot.
-    fn untouched_for_shader(&self, set: &str, shader: Option<Shader>) -> Vec<String> {
-        let Some(sh) = shader else {
-            return vec![];
-        };
+    /// Note FC1 R5: set `set`'s members whose recorded sub-type is untouched under the shader being left and whose
+    /// pick under `shader` differs (`None`, Auto: the pick without a shader; the plan re-applies an automatic one);
+    /// not a member in a locked slot. Each with the value to write (`None` under Auto: cleared).
+    fn untouched_for_shader(
+        &self,
+        set: &str,
+        shader: Option<Shader>,
+    ) -> Vec<(String, Option<serde_json::Value>)> {
         let views = views(self);
         let Some(v) = views.iter().find(|v| same_id(&v.id, set)) else {
             return vec![];
         };
         let locked = locked_items(self);
         let now = v.shader.as_ref().map(|p| p.shader);
+        let chosen = v
+            .shader
+            .as_ref()
+            .is_some_and(|p| matches!(p.provenance, engine::shader::ShaderOrigin::Set));
+        // Auto while already on Auto changes nothing.
+        if shader.is_none() && !chosen {
+            return vec![];
+        }
         let held = |k: &String| {
             self.project
                 .as_ref()
@@ -1750,11 +1768,11 @@ impl AppModel {
         v.members
             .iter()
             .filter(|k| !locked.contains_key(*k) && self.untouched_subtype(k, now))
-            .filter(|k| {
-                let new = self.auto_pick(k, Some(sh)).map(|st| serde_json::json!(st));
-                new.is_some() && new != held(k)
+            .filter_map(|k| {
+                let new = self.auto_pick(k, shader).map(|st| serde_json::json!(st));
+                (new.is_some() && new != held(k))
+                    .then(|| (k.clone(), new.filter(|_| shader.is_some())))
             })
-            .cloned()
             .collect()
     }
 

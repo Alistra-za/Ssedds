@@ -36,6 +36,9 @@ pub struct History {
     /// Note FC1: the `(item key, field)` pairs the plan already wrote on its own under this history. Each is written
     /// once: an Undo of that step stays undone. A new history (open, reload) starts over.
     pub auto_written: std::collections::HashSet<(String, &'static str)>,
+    /// Note FC1 R5: the untouched recorded sub-types when the presets were saved; the settled plan re-types them.
+    /// Part of the history so every reset (open, reload) drops it.
+    pub retype_untouched: Vec<(String, serde_json::Value)>,
 }
 
 impl History {
@@ -96,6 +99,7 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.auto_written.clear();
+        self.retype_untouched.clear();
     }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()

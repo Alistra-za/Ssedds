@@ -93,7 +93,7 @@ impl AppModel {
                 }
             }
         }
-        self.retype_untouched = keep;
+        self.history.retype_untouched = keep;
         self.replan();
     }
 
@@ -105,11 +105,12 @@ impl AppModel {
         if self.export.running.is_some() || self.crash_restore_on_top() {
             return false;
         }
-        // R5: after a presets save, an untouched sub-type follows the new pick (`presets_saved`).
-        let retype = std::mem::take(&mut self.retype_untouched);
         let Some(doc) = self.project.as_ref().filter(|p| !p.read_only()) else {
             return false;
         };
+        // R5: after a presets save, an untouched sub-type follows the new pick (`presets_saved`). Taken only once the
+        // recording can write, so a blocked recording keeps it for the next one.
+        let retype = std::mem::take(&mut self.history.retype_untouched);
         let mut writes: Vec<(String, &'static str, serde_json::Value)> = vec![];
         let mut lines = vec![];
         let mut only_types = true;

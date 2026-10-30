@@ -299,7 +299,7 @@ fn a_scan_vote_retype_cleans_up_in_its_own_step() {
     assert!(m.wait_idle(Duration::from_secs(60)));
     let last = m.history.undo.last().cloned().expect("a step");
     // Accepted from the scan's plan on: a High type accepted before it would be recorded, and a recorded type is the
-    // project's, which the scan does not re-type (Note FC1, R1).
+    // project's, which the scan does not re-type (Note FC1, R1/R5): under accept High from the open this path cannot occur.
     m.accept = engine::policy::AcceptSuggestions::High;
     let dbdir = tempfile::tempdir().unwrap();
     m.scan_db = Some(gras_db(dbdir.path(), r"textures\plants\g.dds"));

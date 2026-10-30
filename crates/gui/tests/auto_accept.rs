@@ -197,6 +197,56 @@ fn pbr_follow_retypes_an_untouched_recorded_member() {
     assert_eq!(subtype(&m, "a/iron_n.png"), Some(json!("msn")));
 }
 
+fn set_id(m: &AppModel, key_end: &str) -> String {
+    sdc_gui::model::sets::views(m)
+        .iter()
+        .find(|v| v.key.ends_with(key_end))
+        .unwrap_or_else(|| panic!("no set {key_end}"))
+        .id
+        .clone()
+}
+
+/// Note FC1 R5 (round 3): a shader pick re-types an untouched recorded member, and the new type is recorded, so the
+/// saved text plans the same under `sdc convert`.
+#[test]
+fn a_shader_pick_records_the_member_type_it_re_types() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/eye.png", [120, 90, 60]);
+    rgb(&root, "a/eye_n.png", [128, 128, 255]);
+    let mut m = support::opened_as_the_app(root.clone(), d.path().join("export"));
+    assert_eq!(subtype(&m, "a/eye_n.png"), Some(json!("normal")));
+    let id = set_id(&m, "eye");
+    m.set_shader(&id, Some(Shader::Eye));
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/eye_n.png"), Some(json!("msn")));
+    let cli = cli_plan(&root, &text(&m));
+    assert_eq!(cli_job(&cli, "eye_n.png").profile.subtype, Subtype::Msn);
+}
+
+/// Note FC1 R5 (round 3): going back to Auto re-types an untouched member too, also after a reopen (a new history).
+#[test]
+fn choosing_auto_re_types_an_untouched_member_after_a_reopen() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/eye.png", [120, 90, 60]);
+    rgb(&root, "a/eye_n.png", [128, 128, 255]);
+    let mut m = support::opened_as_the_app(root.clone(), d.path().join("export"));
+    let id = set_id(&m, "eye");
+    m.set_shader(&id, Some(Shader::Eye));
+    assert!(m.wait_idle(WAIT));
+    m.save().unwrap();
+    m.open_folder(root.clone());
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/eye_n.png"), Some(json!("msn")));
+    let id = set_id(&m, "eye");
+    m.set_shader(&id, None);
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(subtype(&m, "a/eye_n.png"), Some(json!("normal")));
+    let cli = cli_plan(&root, &text(&m));
+    assert_eq!(cli_job(&cli, "eye_n.png").profile.subtype, Subtype::Normal);
+}
+
 /// Note FB5: a crash restore's toast can undo it while it is the top step, so nothing is recorded over it.
 #[test]
 fn nothing_is_recorded_over_a_crash_restore() {
