@@ -177,6 +177,9 @@ fn file_name(p: &Path) -> String {
         .into_owned()
 }
 
+/// The PACK-UNUSED-INPUT reason of a `_curves`/cavity map (Note CN3); the GUI shows it as an Info row (FC7).
+pub const ALSO_ONLY: &str = "read only by Also export as (Vanilla / Complex material)";
+
 /// Why a raw map of `role` takes part in no recipe of `target` (DECISIONS Note M2); `complex` is a vanilla set
 /// that packs the complex `_m` (Note AZ).
 fn unused_reason(
@@ -195,9 +198,7 @@ fn unused_reason(
     match (target, role) {
         (_, RawMap::Orm) => "a loose map is used for each channel it could supply".into(),
         // `Rmaos` is never a file-name role (`raw_role`), so its arm is a fallback only.
-        (_, RawMap::Curves | RawMap::Cavity | RawMap::Rmaos) => {
-            "read only by Also export as (Vanilla / Complex material)".into()
-        }
+        (_, RawMap::Curves | RawMap::Cavity | RawMap::Rmaos) => ALSO_ONLY.into(),
         (_, RawMap::Opacity) => "only fills a colour texture's alpha; no target in the set".into(),
         (_, RawMap::FuzzWeight) => "only fills a PBR _f alpha; no _f planned".into(),
         (_, RawMap::SubsurfaceWeight) => "only fills a PBR _s alpha; no _s planned".into(),

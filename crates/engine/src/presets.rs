@@ -678,7 +678,7 @@ impl PresetRegistry {
             }
             if crate::group::is_vocabulary(alias) {
                 return Err(bad(format!(
-                    "suffix alias '{alias}' is an exporter vocabulary term (spec §4.4)"
+                    "suffix alias '{alias}' is an exporter vocabulary term"
                 )));
             }
             // Audit 08e-11: layer terms are file-name terms too (`rnm::split_layer`).

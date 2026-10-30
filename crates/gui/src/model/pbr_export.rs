@@ -480,9 +480,20 @@ pub fn path_collisions(m: &AppModel) -> Vec<ExportIssue> {
     out
 }
 
-/// What Review asks to acknowledge: the pitfalls of every PBR set. Cached like `export_blocks`, plus
-/// `evidence_rev` (the known texture paths and the mesh tree flags it reads).
+/// What Review asks to acknowledge: first what re-encodes after an upgrade (FC7, project-wide), then the pitfalls
+/// of every PBR set.
 pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
+    let recode = m
+        .recode
+        .iter()
+        .filter(|c| !matches!(c.why, engine::manifest::RecodeWhy::FirstExport { .. }))
+        .map(|c| general(c.line()));
+    recode.chain(set_asks(m)).collect()
+}
+
+/// The PBR sets' pitfalls. Cached like `export_blocks`, plus `evidence_rev` (the known texture paths and the mesh
+/// tree flags it reads).
+fn set_asks(m: &AppModel) -> Vec<ExportIssue> {
     let key = m.view_key();
     {
         let c = m.views.borrow();
@@ -838,7 +849,8 @@ pub fn json_issues(m: &AppModel, entry_ids: &[&str]) -> JsonIssues {
     for i in export_blocks(m) {
         place(i, true);
     }
-    for i in export_asks(m) {
+    // FC7's re-encode rows are not the JSON's: the sets' pitfalls only.
+    for i in set_asks(m) {
         place(i, false);
     }
     out

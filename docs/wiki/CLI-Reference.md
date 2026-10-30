@@ -260,6 +260,7 @@ Runs the post-encode checks on DDS files that already exist, including files mad
 | `--subtype <id>` | inferred from the file's suffix, its game path and, for formats with alpha, its mip-0 alpha | What the files are meant to be. A sub-type the target does not have is an error. |
 | `--alpha-policy remove\|cutout\|blend\|cutout_blend\|data` | inferred | The alpha meaning to check against. Inferred as `remove` when every mip-0 alpha value is at least 254. Otherwise the sub-type's default, except that a sub-type whose default is `remove` is inferred as `data`. |
 | `--exact-opaque` | off | Hold BC7 files under `remove` to Tessalith's own guarantee that opaque alpha decodes as exactly 255. Off by default because other encoders do not promise it. |
+| `--strict-cubemaps` | off | Fail a flat 2D file the game reads as a cube (a name ending in `_e`, or under `textures\cubemaps\`). Without it that check is a warning and the file passes. See [Cubemaps](Cubemaps.md). |
 | `--json` | off | One JSON object per file on stdout; the human report moves to stderr. |
 | `--bc1-decoder <model>` | `ideal` | Decoder model for BC1/BC3. |
 

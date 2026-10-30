@@ -137,6 +137,87 @@ fn cli_inspect_lists_cube_issues() {
     assert!(!all.contains("cubemap is expected"), "{all}");
 }
 
+/// FC7 (supersedes DS12's FAIL-by-default in 1.x): a 2D `_e` or `cubemaps\` file is a warning and exits 0;
+/// `--strict-cubemaps` makes it FAIL.
+#[test]
+fn validate_warns_on_2d_e_files_by_default() {
+    let dir = scratch("warn2d").join("textures").join("cubemaps");
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["x_e.dds", "plain.dds"] {
+        let p = dir.join(name);
+        std::fs::write(&p, dds(false, 4, 1)).unwrap();
+        let o = sdc().args(["validate", "--json"]).arg(&p).output().unwrap();
+        assert_eq!(o.status.code(), Some(0), "{name}: {}", text(&o));
+        let line = String::from_utf8_lossy(&o.stdout);
+        let v: serde_json::Value = serde_json::from_str(line.lines().next().unwrap()).unwrap();
+        assert_eq!(v["passed"], true, "{line}");
+        let w = v["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| {
+                w["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("cubemap is expected")
+            })
+            .unwrap_or_else(|| panic!("{line}"));
+        assert_eq!(w["severity"], "warning", "{line}");
+        assert!(
+            text(&o).contains("  warning VAL-HEADER 2D texture where"),
+            "{}",
+            text(&o)
+        );
+    }
+}
+
+#[test]
+fn strict_cubemaps_fails() {
+    let dir = scratch("strict2d");
+    let p = dir.join("x_e.dds");
+    std::fs::write(&p, dds(false, 4, 1)).unwrap();
+    let o = sdc()
+        .args(["validate", "--strict-cubemaps"])
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(4), "{}", text(&o));
+    assert!(text(&o).contains("FAIL "), "{}", text(&o));
+}
+
+/// FC7: `sdc convert` says what re-encodes before the run; a fresh output folder is a first export.
+#[test]
+fn convert_says_what_re_encodes_before_the_run() {
+    let dir = scratch("recode");
+    let input = dir.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 120, 30, 255]))
+        .save(input.join("x.png"))
+        .unwrap();
+    let out = dir.join("out");
+    let _ = std::fs::remove_dir_all(&out);
+    let o = sdc()
+        .args(["convert", "--accept-suggestions", "high"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o));
+    let want = format!("First export with {}: 1 file", env!("CARGO_PKG_VERSION"));
+    assert!(text(&o).contains(&want), "{}", text(&o));
+    // Up to date: nothing to say.
+    let o = sdc()
+        .args(["convert", "--accept-suggestions", "high"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .unwrap();
+    assert!(!text(&o).contains("re-encode"), "{}", text(&o));
+    assert!(!text(&o).contains("First export"), "{}", text(&o));
+}
+
 #[test]
 fn cli_validate_flags_a_mipless_cube() {
     let dir = scratch("validate");

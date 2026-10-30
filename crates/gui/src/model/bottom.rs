@@ -402,7 +402,12 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         });
     }
     for a in pbr_export::export_asks(m) {
-        let at = set_at(&a.set_key, &a.set_id);
+        // FC7: a re-encode row is project-wide.
+        let at = if a.set_id.is_empty() {
+            At::Project
+        } else {
+            set_at(&a.set_key, &a.set_id)
+        };
         out.push(row(Level::Warning, at, a.text, None));
     }
     for i in m
@@ -412,6 +417,13 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
     {
         for w in i.warnings.iter().filter(|w| counts_toward_badge(w)) {
             let at = At::Texture(i.key.clone());
+            // FC7 (CN3): a `_curves`/cavity map no recipe reads is Also export's input, not a mistake: an Info row
+            // with no button (the generic PACK-UNUSED-INPUT sentence says to remove it).
+            if w.code == Code::PackUnusedInput && w.message.contains(engine::pack::ALSO_ONLY) {
+                let text = "Read only by Also export; not written on its own".to_string();
+                out.push(row(Level::Info, at, text, None));
+                continue;
+            }
             // Note DP: a short normal's row rebuilds Z in place.
             let fix = (w.code == Code::ChanNormalLength).then(|| Fix::RebuildZ(i.key.clone()));
             out.push(Problem {

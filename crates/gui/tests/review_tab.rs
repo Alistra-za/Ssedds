@@ -603,3 +603,73 @@ fn a_review_resize_sticks_across_a_tab_switch() {
     h.run_steps(4);
     assert!((height(&h) - want).abs() < 2.0, "{}", height(&h));
 }
+
+/// FC7: one Warning row per re-encode cause, with Acknowledge, project-wide in Problems; the export waits for the
+/// ticks as for any other warning. A first export (no manifest) is a line, never an ask.
+#[test]
+fn review_shows_one_row_per_cause() {
+    use engine::config::Subtype;
+    use engine::manifest::{RecodeCause, RecodeWhy};
+    use sdc_gui::model::bottom::{problems, At, Level};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    // A fresh export folder: the plan says it is a first export, and nothing asks.
+    let first = m.recode.clone();
+    assert!(
+        matches!(&first[..], [RecodeCause { why: RecodeWhy::FirstExport { .. }, count }] if *count > 0),
+        "{first:?}"
+    );
+    assert!(pbr_export::export_asks(&m).is_empty());
+    let normal = RecodeCause {
+        why: RecodeWhy::EncodeVersion {
+            subtype: Subtype::Normal,
+            from: "1.0.0".into(),
+            to: "1.1.0".into(),
+        },
+        count: 2,
+    };
+    let settings = RecodeCause {
+        why: RecodeWhy::ProfileChanged {
+            subtype: Subtype::Diffuse,
+        },
+        count: 3,
+    };
+    m.recode = [first.clone(), vec![normal, settings]].concat();
+    let rows = [
+        "2 files re-encode: the normal encoder changed in 1.1.0",
+        "3 files re-encode: their settings changed",
+    ];
+    let asks: Vec<String> = pbr_export::export_asks(&m)
+        .into_iter()
+        .map(|a| a.text)
+        .collect();
+    assert_eq!(asks, rows);
+    for r in rows {
+        let p = problems(&m).iter().find(|p| p.text == r).cloned();
+        let p = p.unwrap_or_else(|| panic!("{r} is not a Problems row"));
+        assert_eq!((p.level, p.at), (Level::Warning, At::Project));
+    }
+    m.open_review();
+    let gate = m.review_gate();
+    assert!(
+        gate.as_ref()
+            .is_err_and(|e| e.starts_with("Acknowledge") || e.starts_with("Fix")),
+        "{gate:?}"
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label(&first[0].line());
+    for r in rows {
+        h.get_by_role_and_label(Role::CheckBox, r);
+    }
+    h.get_by_label_contains("Warnings (2");
+    h.get_by_label("Acknowledge all").click();
+    h.run();
+    let acked = &h.state().review.as_ref().unwrap().acknowledged;
+    assert!(rows.iter().all(|r| acked.contains(*r)), "{acked:?}");
+    assert!(h
+        .state()
+        .review_gate()
+        .err()
+        .is_none_or(|e| !e.starts_with("Acknowledge")));
+}

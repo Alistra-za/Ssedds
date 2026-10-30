@@ -128,6 +128,17 @@ The JSON Schema is available with `sdc presets schema manifest`.
 
 So editing a source, changing a setting in `sdc.toml` or a preset re-encodes exactly the files affected. A new Tessalith version re-encodes only the texture types whose output changed, and nothing when none did. Touching an output by hand (or replacing it) also re-encodes it.
 
+### After an upgrade
+
+Before the run, `sdc convert` prints what the new version re-encodes and why, one line per cause, and the GUI's Review lists the same lines as warnings to tick:
+
+- `2 files re-encode: the normal encoder changed in 1.1.0`: that texture type's encode version moved;
+- `3 files re-encode: their settings changed`: the resolved settings differ from what the older version recorded (for example, a changed default);
+- `1 file re-encodes: new output type`: the plan writes a file the older version did not;
+- `First export with 1.1.0: 20 files`: no manifest to compare with (a new output folder, or records from before encode versions existed). In the GUI this is a plain line, not a warning.
+
+Only records an older version wrote are compared this way, so your own edits after the first export with the new version say nothing. Changed source files are never listed.
+
 An existing output with no manifest record is never overwritten by `if-changed`. It is kept and reported as `OUT-UNKNOWN-EXISTING`, and the run exits with 1. Use `--on-existing overwrite` to replace it.
 
 | `--on-existing` | Existing output with a current record | Changed record | No record |

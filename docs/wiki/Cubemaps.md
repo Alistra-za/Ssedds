@@ -237,13 +237,13 @@ An `.hdr` or `.exr` face whose brightest value is above 1 and that has no `cubem
 
 A cube has no mips: `CUBE-NO-MIPS` warns when `mips.levels` is `none` or 1. A cube without mips sparkles and looks pixelated in game.
 
-`sdc inspect` and `sdc validate` flag these broken cube files (as `VAL-HEADER` warnings in `validate`, and they fail the file):
+`sdc inspect` and `sdc validate` flag these broken cube files (as `VAL-HEADER` warnings in `validate`; all but the second fail the file):
 - a cube wider than 1 pixel with only one mip (a 1×1 marker is not flagged);
 - a flat 2D texture whose name ends in `_e`, or that sits in `textures\cubemaps\`, where a cube is expected;
 - a 1×1 cube whose +Y isn't black (Community Shaders shows it as a nearly black static reflection);
 - a cube in an sRGB format.
 
-Note that the second check fails a 2D `_e` or `cubemaps\` file that earlier versions passed. The game reads those files as cubes, so a 2D one is a fault.
+The second check is a warning in 1.x: a 2D `_e` or `cubemaps\` file that earlier versions passed still passes (exit 0), with the warning. The game reads those files as cubes, so a 2D one is a fault; pass `--strict-cubemaps` to fail it. Failing it by default would break existing use, so it waits for 2.0.
 
 The messages read:
 

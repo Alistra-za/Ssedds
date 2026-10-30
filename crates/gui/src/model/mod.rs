@@ -308,6 +308,9 @@ pub struct AppModel {
     pub skipped_user_presets: Vec<(String, String)>,
     /// Note FC3 (Y4): the last plan's IN-UNREADABLE warnings, one Problems row each.
     pub unreadable: Vec<engine::codes::Warning>,
+    /// FC7: what the last plan re-encodes after an upgrade, one Review Warning row per cause (`FirstExport` a line).
+    /// Emptied when an export starts.
+    pub recode: Vec<engine::manifest::RecodeCause>,
     /// Note FC3: the last Also export's conversion report, the DERIVE rows' Open report.
     pub also_report: Option<PathBuf>,
     /// Note FC3: the NIF edit's problems, handed over by `app.rs` each frame (`set_nif_problems`).
@@ -633,6 +636,7 @@ impl AppModel {
             loaded_user_presets: vec![],
             skipped_user_presets: vec![],
             unreadable: vec![],
+            recode: vec![],
             also_report: None,
             nif_problems: Default::default(),
             scan_db: None,
@@ -1959,6 +1963,9 @@ impl AppModel {
         // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
         self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
         self.review_json_cache.take();
+        // FC7: this export does the re-encodes; the next plan says what is left.
+        // shortcut: a cancelled export also drops the rows until the next plan; keep them if users miss them.
+        self.recode.clear();
         // Note FC2: the stamps this export runs on, so a half-size row drops out once its source changes.
         let sources = self
             .items
@@ -2276,6 +2283,7 @@ impl AppModel {
         self.loaded_user_presets = view.user_presets;
         self.skipped_user_presets = view.skipped_user_presets;
         self.unreadable = view.unreadable;
+        self.recode = view.recode;
         // The count of textures that need a decision is shown (amber) in the Textures column header.
         self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
         // The undo note stays through the plan the undo started, and goes with the next one.

@@ -3294,6 +3294,22 @@ fn the_curvature_box_writes_curves_generated() {
         "{:?}",
         item.warnings
     );
+    // FC7 (CN3): an Info row with no button, not the generic "remove it" warning.
+    use sdc_gui::model::bottom::{problems, At, Level};
+    let rows: Vec<_> = problems(&m)
+        .iter()
+        .filter(|p| p.at == At::Texture(CURVES_KEY.into()))
+        .cloned()
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        (rows[0].level, rows[0].text.as_str(), rows[0].fix.is_none()),
+        (
+            Level::Info,
+            "Read only by Also export; not written on its own",
+            true
+        )
+    );
 }
 
 #[test]

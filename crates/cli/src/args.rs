@@ -203,6 +203,9 @@ pub struct ValidateArgs {
     /// default: only sdc's own encoder promises it, so third-party files are not judged by it.
     #[arg(long)]
     pub exact_opaque: bool,
+    /// Fail a 2D file the game reads as a cubemap (`_e`, `textures\cubemaps\`); a warning without it (1.x).
+    #[arg(long)]
+    pub strict_cubemaps: bool,
     /// Write one JSON object per file to stdout (the human report goes to stderr).
     #[arg(long)]
     pub json: bool,

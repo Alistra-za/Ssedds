@@ -795,7 +795,7 @@ fn sidecar_present(output: &Path, e: &ManifestEntry) -> bool {
 
 /// Whether the record's encode version equals the type's version now. A record without one (written by 1.0.0)
 /// counts as `LEGACY_ENCODE_VERSION`, so it is current only when the type's version is still that.
-fn encode_current(e: &ManifestEntry, now: &str) -> bool {
+pub(crate) fn encode_current(e: &ManifestEntry, now: &str) -> bool {
     match &e.encode_version {
         Some(v) => v == now,
         None => e.engine_version == LEGACY_ENCODE_VERSION && now == LEGACY_ENCODE_VERSION,

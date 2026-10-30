@@ -15,6 +15,7 @@ use crate::model::review::{
 use crate::model::{also, pbr_export, sets, Answer, AppModel};
 use eframe::egui;
 use engine::config::{AlphaPolicy, CubeLayout, Subtype, Target};
+use engine::manifest::RecodeWhy;
 use engine::presets::{AlsoTarget, ExportConfig};
 
 /// What a click on an undecided row asks for.
@@ -880,6 +881,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             );
         }
         2 => {
+            // FC7 (Review Focus 5): no manifest to compare with is a fact, not an ask.
+            for c in m
+                .recode
+                .iter()
+                .filter(|c| matches!(c.why, RecodeWhy::FirstExport { .. }))
+            {
+                ui.weak(c.line());
+            }
             if asks.is_empty() && nif_skipped.is_empty() {
                 ui.weak("None that block the export");
             }
@@ -894,7 +903,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 // Grouped by set: `export_asks` lists each set's pitfalls together.
                 if set != Some(&a.set_id) {
                     set = Some(&a.set_id);
-                    ui.colored_label(AMBER, &a.set_id);
+                    // FC7's re-encode rows come first and belong to no set.
+                    if !a.set_id.is_empty() {
+                        ui.colored_label(AMBER, &a.set_id);
+                    }
                 }
                 let mut on = review.acknowledged.contains(&a.text);
                 if ui.checkbox(&mut on, &a.text).changed() {

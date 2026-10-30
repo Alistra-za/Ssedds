@@ -725,9 +725,17 @@ pub fn validate_files(a: ValidateArgs) -> Result<i32, EngineError> {
             }
         };
         let mut report = report;
+        // FC7: a 2D file where a cube is expected (the one issue of a 2D file) is a warning in 1.x; failing it by
+        // default is MAJOR (DM8). A cube's own issues still fail.
+        let fail = file.is_cubemap || a.strict_cubemaps;
         for m in engine::cube::checks::inspect_issues(&path_s, &file) {
-            report.warnings.push(Warning::new(Code::ValHeader, m));
-            report.summary.passed = false;
+            let mut w = Warning::new(Code::ValHeader, m);
+            if fail {
+                report.summary.passed = false;
+            } else {
+                w.severity = engine::codes::Severity::Warning;
+            }
+            report.warnings.push(w);
         }
         let passed = report.summary.passed;
         let alpha_part = match policy {

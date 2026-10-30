@@ -105,6 +105,8 @@ pub struct PlanView {
     pub rnm_keys: BTreeMap<PathBuf, String>,
     /// The export folder the plan ran with: set keys are under it (audit 08c-3).
     pub output_root: PathBuf,
+    /// FC7: what this plan re-encodes after an upgrade, and why.
+    pub recode: Vec<engine::manifest::RecodeCause>,
 }
 
 /// The `[files]` key of a path under `root` (DECISIONS N2).
@@ -452,6 +454,13 @@ impl PlanView {
             rnm_notes,
             rnm_keys,
             output_root: out_root.clone(),
+            // FC7: one manifest read per plan, on the planning thread.
+            // shortcut: a large manifest is parsed again on every re-plan; cache it by its size and mtime if a
+            // profile of a big project shows it.
+            recode: engine::manifest::recode_causes(
+                &engine::manifest::Manifest::at(out_root),
+                plan,
+            ),
         }
     }
 }

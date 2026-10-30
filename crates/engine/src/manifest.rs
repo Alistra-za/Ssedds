@@ -547,6 +547,104 @@ pub fn profile_sha256(p: &Profile) -> Result<String, serde_json::Error> {
     sha256_json(p)
 }
 
+/// Why planned outputs re-encode after an upgrade (DECISIONS FC7), with how many.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecodeCause {
+    pub why: RecodeWhy,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecodeWhy {
+    /// The record's encode version is not the sub-type's now (Note DM).
+    EncodeVersion {
+        subtype: Subtype,
+        from: String,
+        to: String,
+    },
+    /// Same encode version, another profile hash, in a record an older engine wrote.
+    ProfileChanged { subtype: Subtype },
+    /// No record for this output, in a manifest no record of which this engine wrote.
+    NewOutput { subtype: Subtype },
+    /// FC7 (Review Focus 5): no baseline: no manifest, or a record from before encode versions that is not 1.0.0's.
+    FirstExport { version: String },
+}
+
+impl RecodeCause {
+    /// The line Review and the CLI show: `2 files re-encode: the normal encoder changed in 1.1.0`.
+    pub fn line(&self) -> String {
+        let n = self.count;
+        let name = |st: &Subtype| st.id().replace('_', " ");
+        let (files, verb) = if n == 1 {
+            ("file", "re-encodes")
+        } else {
+            ("files", "re-encode")
+        };
+        let why = match &self.why {
+            RecodeWhy::FirstExport { version } => {
+                return format!("First export with {version}: {n} {files}")
+            }
+            RecodeWhy::EncodeVersion { subtype, to, .. } => {
+                format!("the {} encoder changed in {to}", name(subtype))
+            }
+            RecodeWhy::ProfileChanged { .. } => "their settings changed".into(),
+            RecodeWhy::NewOutput { .. } => "new output type".into(),
+        };
+        format!("{n} {files} {verb}: {why}")
+    }
+}
+
+/// What the plan's written (`Ready`) jobs re-encode for, read from `recorded` only (FC7): per sub-type, an encode
+/// version that moved, a changed profile hash in a record an older engine wrote, and outputs with no record in a
+/// manifest this engine has not written to yet. A source edit is not a cause. No manifest gives `FirstExport`.
+pub fn recode_causes(recorded: &Manifest, plan: &crate::api::Plan) -> Vec<RecodeCause> {
+    // A reader: `read`, never `load`'s compaction. An unreadable manifest is `run`'s error to report.
+    let records = recorded.read().unwrap_or_default();
+    let root = &plan.request.output_root;
+    let ours = records.values().any(|e| e.engine_version == ENGINE_VERSION);
+    let mut out: Vec<RecodeCause> = vec![];
+    for job in plan
+        .jobs
+        .iter()
+        .filter(|j| matches!(j.status, crate::policy::JobStatus::Ready))
+    {
+        let st = job.profile.subtype;
+        let now = encode_version(st);
+        let why = match records.get(&output_key(root, &job.output)) {
+            None if records.is_empty() => RecodeWhy::FirstExport {
+                version: ENGINE_VERSION.into(),
+            },
+            None if ours => continue,
+            None => RecodeWhy::NewOutput { subtype: st },
+            Some(e) if e.encode_version.is_none() && e.engine_version != LEGACY_ENCODE_VERSION => {
+                RecodeWhy::FirstExport {
+                    version: ENGINE_VERSION.into(),
+                }
+            }
+            Some(e) if !crate::api::encode_current(e, now) => RecodeWhy::EncodeVersion {
+                subtype: st,
+                from: e
+                    .encode_version
+                    .clone()
+                    .unwrap_or_else(|| LEGACY_ENCODE_VERSION.into()),
+                to: now.into(),
+            },
+            Some(e)
+                if e.engine_version != ENGINE_VERSION
+                    && profile_sha256(&job.profile).is_ok_and(|h| h != e.profile_sha256) =>
+            {
+                RecodeWhy::ProfileChanged { subtype: st }
+            }
+            Some(_) => continue,
+        };
+        match out.iter_mut().find(|c| c.why == why) {
+            Some(c) => c.count += 1,
+            None => out.push(RecodeCause { why, count: 1 }),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
