@@ -6751,6 +6751,38 @@ fn a_crashing_json_anywhere_makes_every_shape_red() {
     }
 }
 
+/// One BSTriShape (0) whose BSLSP (1) has no texture set.
+fn shape_without_texture_set() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let s = n.string("S");
+    n.block("BSTriShape", one_tri(s, 1));
+    n.block("BSLightingShaderProperty", scenes::lsp(0, -1));
+    n.bytes()
+}
+
+/// GE15: the crash lines come before the eligibility exits, so a shape with no texture set and a PG_IGNORE shape
+/// get them too (PG_IGNORE keeps its own line after them).
+#[test]
+fn a_crashing_json_reaches_shapes_pgpatcher_would_not_patch() {
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json).";
+    for (nif, want) in [
+        (shape_without_texture_set(), vec![line]),
+        (shader_pg_ignore(1), vec![line, PG_IGNORED]),
+    ] {
+        let d = pg_files();
+        put(d.path(), "mods/A/meshes/x.nif", Some(&nif));
+        put(
+            d.path(),
+            "mods/PGP/PBRNifPatcher/z.json",
+            Some(br#"[{"match_diffuse": 5}]"#),
+        );
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        assert_eq!(notes(&m, shape), want);
+    }
+}
+
 /// GE14: the set preview reads the same whole-run crash lines: `pg_crashes` starts the JSON read and, once it
 /// lands, returns one line per crashing file (an unrelated `[{"match_diffuse": 5}]` included).
 #[test]

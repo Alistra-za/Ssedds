@@ -3,8 +3,8 @@
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
 use super::pg_entries::{
-    candidates, pg_ignore, pg_stock, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED,
-    PG_STOCK_REVERT,
+    candidates, crash_lines, pg_ignore, pg_stock, simulate_shape, PgFile, PGP_ENV_SCALE,
+    PG_IGNORED, PG_STOCK_REVERT,
 };
 use super::worklist::{NifProblem, NifTab};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
@@ -1403,7 +1403,7 @@ impl NifEdit {
 
     /// v2 B8 (closes R11): each shape's material as PGPatcher would leave the edited NIF (`pg_entries::simulate_shape`
     /// over `files`, the JSON of read `gen`), with its lines. Shapes without a texture set keep their material and get no
-    /// line; PG_IGNORE ones keep it with `PG_IGNORED`. Those two checks run every time; only the simulation is cached
+    /// line; PG_IGNORE ones keep it with `PG_IGNORED`; with a crashing JSON loaded both get its lines first (GE15). Those two checks run every time; only the simulation is cached
     /// (fix F1, keyed on the parsed material, `gen` and the scan `rev`). From the parsed edit (not `preview_nif`).
     pub fn in_game_materials(
         &mut self,
@@ -1415,6 +1415,8 @@ impl NifEdit {
         let nif_path = self.data_path.replace('/', "\\");
         let parsed = self.parsed.clone();
         let mut rows = Vec::with_capacity(parsed.shapes.len());
+        // GE15: the whole run stops, so every shape gets the crash lines, ahead of the eligibility exits below.
+        let crashes = crash_lines(files);
         for s in &parsed.shapes {
             let shape = self.model.shape(s.id.0);
             let lit = shape
@@ -1422,11 +1424,13 @@ impl NifEdit {
                 .and_then(|b| self.model.lighting.get(&b))
                 .is_some_and(|l| l.texture_set.is_some());
             if !lit {
-                rows.push((s.id, s.material.clone(), vec![]));
+                rows.push((s.id, s.material.clone(), crashes.clone()));
                 continue;
             }
             if shape.is_some_and(|sm| pg_ignore(&self.model, sm)) {
-                rows.push((s.id, s.material.clone(), vec![PG_IGNORED.to_string()]));
+                let mut notes = crashes.clone();
+                notes.push(PG_IGNORED.to_string());
+                rows.push((s.id, s.material.clone(), notes));
                 continue;
             }
             // B-P41: outside the cache, whose key (the material) does not change when a controller is added.
