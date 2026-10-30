@@ -105,6 +105,8 @@ pub enum Fix {
     RebuildZ(String),
     /// DERIVE-* (CN67): open the Also export's conversion report.
     OpenReport(PathBuf),
+    /// DERIVE-* with no report written: open the Messages tab, which says why.
+    ShowMessages,
     /// IN-UNREADABLE (Y4): open the folder that holds the skipped entry.
     OpenFolder(PathBuf),
     /// CHK-GREEN-GUESS (CL5): answer this item's green convention as OpenGL.
@@ -520,9 +522,12 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                     None => Level::Warning,
                 };
                 let fix = match w.code {
-                    Code::DeriveNoEnvmap | Code::DeriveNifSuggest => {
-                        m.also_report.clone().map(Fix::OpenReport)
-                    }
+                    // No report written: Messages says why (fix round 1: a row always carries its action).
+                    Code::DeriveNoEnvmap | Code::DeriveNifSuggest => Some(
+                        m.also_report
+                            .clone()
+                            .map_or(Fix::ShowMessages, Fix::OpenReport),
+                    ),
                     // Note FC3 (DP7d): after Rebuild Z the file on disk is still short; the row keeps the button.
                     Code::ChanNormalLength => live.map(|i| Fix::RebuildZ(i.key.clone())),
                     _ => None,
@@ -554,7 +559,9 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
     out
 }
 
-/// The folder that holds an IN-UNREADABLE entry: the engine writes `skipped: <path>: <error>`.
+/// The folder that holds an IN-UNREADABLE entry: the engine writes `skipped: <path>: <error>` (engine `api.rs`,
+/// `discover.rs`), with no `data` field.
+/// shortcut: parses the engine's human message; switch to `w.data` once the engine puts the path there.
 fn unreadable_folder(message: &str) -> Option<PathBuf> {
     let rest = message.strip_prefix("skipped: ")?;
     // A drive's `C:\` has no space after its colon; the error's separator does.
@@ -619,4 +626,17 @@ pub fn set_problem_count(m: &AppModel, key: &str) -> usize {
         .iter()
         .filter(|p| in_set(p, key, &members))
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the engine's IN-UNREADABLE message shape (`skipped: <path>: <error>`) that `unreadable_folder` parses.
+    #[test]
+    fn unreadable_folder_reads_the_engine_message() {
+        let m = r"skipped: C:\mods\a\locked: Access is denied. (os error 5)";
+        assert_eq!(unreadable_folder(m), Some(PathBuf::from(r"C:\mods\a")));
+        assert_eq!(unreadable_folder("not the shape"), None);
+    }
 }

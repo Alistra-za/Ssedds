@@ -592,9 +592,10 @@ pub fn summary_text(n: usize, textures: usize, sets: usize) -> String {
 }
 
 /// The end-of-export line: the Warning-level check rows in Problems (item, set and export-row results; the
-/// Info-level green guess is a row since Note FC3 but is not counted here). `None` when there are none. It covers what this export wrote: once the export has rows, only the
-/// textures (and sets with a member) that have one are counted; with no rows it covers the whole project. A texture
-/// counts once, whether its rows are keyed by item or by job (CL19).
+/// Info-level green guess is a row since Note FC3 but is not counted here). `None` when there are none. It covers
+/// what this export wrote: once the export has rows, only the textures (and sets with a member) that have one are
+/// counted; with no rows it covers the whole project. A texture counts once, whether its rows are keyed by item or
+/// by job (CL19).
 pub fn checks_summary(m: &AppModel) -> Option<String> {
     use super::bottom::{problems, At, Level};
     use std::collections::HashSet;

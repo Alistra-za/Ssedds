@@ -103,6 +103,20 @@ fn derive_results_are_rows_that_open_the_report() {
     h.query_all_by_label("Open report").next().unwrap().click();
     h.run();
     assert_eq!(h.state().shell, vec![ShellRequest::Open(report)]);
+    // Fix round 1: with no report written the row still carries an action, Show in Messages.
+    h.state_mut().also_report = None;
+    h.state_mut().invalidate_views();
+    assert_eq!(
+        row_of(h.state(), Code::DeriveNoEnvmap).fix,
+        Some(Fix::ShowMessages)
+    );
+    h.run();
+    h.query_all_by_label("Show in Messages")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    assert_eq!(h.state().bottom.tab, bottom::BottomTab::Messages);
 }
 
 /// The fixture with only the plastic check on and one plain warning row: a Warning row and a Check row.
@@ -123,18 +137,45 @@ fn with_a_check(d: &std::path::Path) -> AppModel {
     m
 }
 
-/// CL5/CL18 amended: a check row is drawn weak, not amber, and is no ready signal: the set dot and the project's
-/// clean state are what they are with the check off.
+/// One PBR set whose dark albedo raises a check and nothing else (as `checks.rs`'s `pbr_wall`).
+fn wall_with_a_check(dir: &std::path::Path) -> AppModel {
+    use image::{ImageBuffer, Rgb};
+    let r = dir.join("textures/test");
+    std::fs::create_dir_all(&r).unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([20u8, 20, 20]))
+        .save(r.join("wall.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 10, 200]))
+        .save(r.join("wall_rmaos.png"))
+        .unwrap();
+    ImageBuffer::from_fn(64, 64, |_, _| Rgb([128u8, 128, 255]))
+        .save(r.join("wall_n.png"))
+        .unwrap();
+    let mut m = opened_as_the_app(dir.join("textures"), dir.join("export"));
+    let id = sdc_gui::model::sets::views(&m)
+        .iter()
+        .find(|v| v.key.ends_with("wall"))
+        .expect("the set")
+        .id
+        .clone();
+    m.set_shader(&id, Some(engine::shader::Shader::Pbr));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m
+}
+
+/// CL5/CL18 amended: a check row is drawn weak, not amber, and is no ready signal: with only a check row the set dot
+/// is green and the project is clean.
 #[test]
 fn checks_are_not_amber_and_not_blocking() {
     let d = tempfile::tempdir().unwrap();
-    let m = with_a_check(d.path());
+    let m = wall_with_a_check(d.path());
     let checks: Vec<_> = problems(&m)
         .iter()
         .filter(|p| p.level == Level::Check)
         .cloned()
         .collect();
     assert_eq!(checks.len(), 1, "{:?}", problems(&m));
+    assert_eq!(problems(&m).len(), 1, "the check is the only row");
     assert!(!bottom::counts_as_ready_problem(&checks[0]));
     let status = sdc_gui::ui::problems::status_of(Level::Check);
     assert_eq!(status, Status::Check);
@@ -147,34 +188,8 @@ fn checks_are_not_amber_and_not_blocking() {
         .iter()
         .find(|v| v.members.contains(k))
         .expect("its set");
-    // This fixture's set also has a plain warning, so the ready signals are compared with the check off; the green
-    // dot and a clean project with only a check row are pinned in `checks.rs` (`soft_check_rows_are_listed_but_leave_
-    // ready_alone`).
-    let ready = bottom::set_ready(&m, v);
-    let clean = m.export_is_clean();
-    let mut off = with_a_check(tempfile::tempdir().unwrap().path());
-    off.set_checks(sdc_gui::settings::ChecksSettings {
-        plastic: false,
-        ..off.settings.checks
-    });
-    off.poll();
-    off.invalidate_views();
-    assert!(problems(&off).iter().all(|p| p.level != Level::Check));
-    let off_views = sdc_gui::model::sets::views(&off);
-    let off_v = off_views
-        .iter()
-        .find(|w| w.members.contains(k))
-        .expect("its set, check off");
-    assert_eq!(
-        ready,
-        bottom::set_ready(&off, off_v),
-        "a check changes no set dot"
-    );
-    assert_eq!(
-        clean,
-        off.export_is_clean(),
-        "a check changes nothing of export_is_clean"
-    );
+    assert!(bottom::set_ready(&m, v), "green set dot");
+    assert!(m.export_is_clean(), "a check leaves the project clean");
     let mut h = harness(m);
     h.run();
     // The row's dot is a "check" dot, never a "warning" one.
@@ -248,6 +263,10 @@ fn info_rows_never_count_against_ready() {
         "an Info row is not a check"
     );
     assert_eq!(m.export_is_clean(), clean);
+    // Fix round 1: the button names the tab in the panel's own words.
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Open the Extra data tab");
 }
 
 /// GD1 interface: NIF Blocks and Warning map to rows at `At::Nif` whose fix asks for the NIF tab; the same snapshot
@@ -328,6 +347,12 @@ fn a_feature_clash_offers_turn_it_off() {
     assert!(matches!(&row.fix, Some(Fix::TurnFeatureOff(i, _)) if *i == id));
     let mut h = harness(m);
     h.run();
+    // Fix round 1: the set row keeps Go to set beside its fix.
+    let name = format!("{id}: {}", row.shown());
+    let y = h.get_by_label(&name).rect().center().y;
+    assert!(h
+        .query_all_by_label("Go to set")
+        .any(|n| (n.rect().center().y - y).abs() < 8.0));
     h.get_by_label("Turn glint off").click();
     idle(&mut h);
     assert!(!problems(h.state())
@@ -366,5 +391,48 @@ fn a_path_blocker_offers_fix_path() {
     assert_eq!(
         focused.accesskit_node().value().as_deref(),
         Some("sub\\name")
+    );
+    // Fix round 1: the request is one-shot, so the group it opened can be collapsed again and stays collapsed.
+    h.get_by_label("Advanced TruePBR settings").click();
+    for _ in 0..4 {
+        h.run();
+    }
+    assert!(
+        !h.query_all_by_role(egui::accesskit::Role::TextInput)
+            .any(|n| n.accesskit_node().value().as_deref() == Some("sub\\name")),
+        "the Advanced group collapsed"
+    );
+}
+
+/// Fix round 1: a slot path has no box to focus (the JSON editor holds it), so its row offers Go to set, not Fix path.
+#[test]
+fn a_slot_path_blocker_goes_to_its_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    let (id, key) = rock_id(&m);
+    m.set_json_value(&id, "slot1", Some(serde_json::json!("..\\up.dds")));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let row = problems(&m)
+        .iter()
+        .find(|p| p.text.contains("slot1"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the slot1 blocker: {:?}", problems(&m)));
+    assert_eq!(row.fix, None);
+    let mut h = harness(m);
+    h.run();
+    assert!(h.query_by_label("Fix path").is_none());
+    let y = h
+        .get_by_label(&format!("{id}: {}", row.shown()))
+        .rect()
+        .center()
+        .y;
+    h.query_all_by_label("Go to set")
+        .find(|n| (n.rect().center().y - y).abs() < 8.0)
+        .expect("Go to set on the slot row")
+        .click();
+    h.run();
+    assert!(
+        matches!(&h.state().selection, sdc_gui::model::Selection::Set(k) if *k == key),
+        "the set is selected"
     );
 }

@@ -436,7 +436,7 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 | Parallax | A height map, judged against the set's neutral height (0.5, or 1.0 with a multilayer coat), that uses little range, clips, is mostly white or is too steep; landscape sets whose displacement scales differ by more than 2x. |
 | UV coverage | UV islands closer than 8 texels for more than 2 % of used texels, so colour bleeds at a distance. Needs a Meshes scan. |
 
-- **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings, with a grey **check** dot (a check is never amber and never changes "ready"). One **Checks N** pill narrows the list to them.
+- **Problems rows.** Each warning is a row in the bottom panel's Problems tab, after the ordinary warnings, with a grey **check** dot (a check is never amber and never changes "ready"). A **Checks** pill narrows the list to them; the Problems tab's number counts every row shown.
 - **Short normals.** A normal far from unit length gets one `CHAN-NORMAL-LENGTH` row with a **Rebuild Z** button (sets `channels.reconstruct_z`); it is greyed out with the reason when `sdc.toml` is read-only.
 - **ⓘ badge.** A set card shows **ⓘ n** beside **⚠ n**. Hover it for the list, click it to open Problems on the set. The green-direction guess is a check row with **Treat as OpenGL**; it also shows on the badge and in the texture's own settings panel.
 - **End of export.** One Info line counts them, for example "Checks: 3 warnings on 1 texture and 1 set; see Problems".

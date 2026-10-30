@@ -345,10 +345,13 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
                 }
             }
         }
-        // Note FC3 (P13): every path error starts with its field's key; the row goes to that field.
+        // Note FC3 (P13): every path error starts with its field's key; the row goes to that field when it has a box
+        // to focus, else it keeps Go to set.
         let fix_path = |e: &str| {
             let field = e.split_once(':').map_or(e, |(f, _)| f);
-            Some(Fix::FixPath(v.key.clone(), field.to_string()))
+            // `rename` and `match1`-`match8` have boxes in the Advanced group's Match block.
+            crate::pgp::prefix::is_path_key(field)
+                .then(|| Fix::FixPath(v.key.clone(), field.to_string()))
         };
         if let Some(e) = &v.prefix_error {
             out.push(ExportIssue {
@@ -360,10 +363,8 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
             if let Some(Value::String(p)) = s.get(&format!("slot{n}")) {
                 if !p.is_empty() {
                     if let Err(e) = check_json_path(p, &format!("slot{n}")) {
-                        out.push(ExportIssue {
-                            fix: fix_path(&e.0),
-                            ..issue(v, format!("{}: {}", v.id, e.0))
-                        });
+                        // Slot paths have no focusable box (the JSON editor holds them): the row offers Go to set.
+                        out.push(issue(v, format!("{}: {}", v.id, e.0)));
                     }
                 }
             }

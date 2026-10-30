@@ -1689,6 +1689,14 @@ fn a_stale_generated_map_is_a_regenerate_row_its_set_dot_reads() {
     let mut m = relief_rock(d.path());
     generate_height(&mut m);
     decide_p(&mut m);
+    // Fill the packed channels that would default, so the set is ready before the map goes stale.
+    for (map, v) in [
+        (engine::config::RawMap::Metallic, 0),
+        (engine::config::RawMap::Specular, 255),
+    ] {
+        m.set_pack_fill("landscape/rock01_rmaos", map, Some(v));
+    }
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
     let set_key = rock_view(&m).key;
     // The rows about the generated item or its set (the rewrite adds rows about the normal itself).
     let rows = |m: &AppModel| -> Vec<bottom::Problem> {
@@ -1711,13 +1719,15 @@ fn a_stale_generated_map_is_a_regenerate_row_its_set_dot_reads() {
         )
     };
     let before = dots(&m);
+    let all_before = bottom::problems(&m);
     rewrite_normal(&mut m, d.path());
     assert_eq!(stale(&m).as_deref(), Some(EARLIER));
     // Note FC3 (supersedes CO70/CO71): a stale map is a Warning row with Regenerate, so its set is not ready; the
     // tile and the export do not read it.
     let after = dots(&m);
     assert_eq!((before.1, before.2), (after.1, after.2));
-    assert!(!after.0, "the set dot reads the row (before: {})", before.0);
+    assert!(before.0, "the set was ready before: {all_before:?}");
+    assert!(!after.0, "the set dot reads the row");
     let new: Vec<_> = rows(&m)
         .into_iter()
         .filter(|p| !rows_before.contains(p))
@@ -1778,18 +1788,29 @@ fn the_stale_row_regenerates_only_from_its_own_click() {
     m.open_problems(None);
     let mut h = harness(m);
     h.run();
-    // A plan in flight: the row's button is off.
+    // A plan in flight: the row's button is off. The UI never polls, so the plan stays in flight until `idle`.
     h.state_mut().replan();
+    assert!(h.state().fix_off().is_some(), "a plan is in flight");
     h.run();
-    if h.state().fix_off().is_some() {
-        assert!(h.get_by_label("Regenerate…").accesskit_node().is_disabled());
-    }
+    assert!(h.get_by_label("Regenerate…").accesskit_node().is_disabled());
     idle(h.state_mut());
     h.run();
     assert!(h.state().gen.is_none());
+    // Enter on the focused stale row does nothing: only the button's own click opens Generate.
+    let name = format!(
+        "{P_KEY}: {}",
+        sdc_gui::model::code_text::code_sentence(engine::codes::Code::GenStale)
+    );
+    h.get_by_label(&name).focus();
+    h.run();
+    assert!(
+        h.get_by_label(&name).accesskit_node().is_focused(),
+        "the row has the keyboard"
+    );
     h.key_press(eframe::egui::Key::Enter);
     h.run();
     assert!(h.state().gen.is_none(), "Enter does not regenerate");
+    assert_eq!(std::fs::read(&p).unwrap(), bytes, "Enter wrote nothing");
     h.get_by_label("Regenerate…").click();
     h.run();
     let g = h.state().gen.as_ref().expect("the Generate dialog");

@@ -4,6 +4,7 @@
 use super::review::{apply, fix_buttons, RowPick};
 use super::status::{dot, Status};
 use crate::model::bottom::{filtered, flagged, problems, At, Fix, Level, Problem, ProblemsFilter};
+use crate::model::meshes::NifTab;
 use crate::model::sets::Missing;
 use crate::model::shell::ShellRequest;
 use crate::model::{Answer, AppModel};
@@ -168,6 +169,12 @@ fn fix_button(
         }
         Fix::OpenReport(path) => button(ui, "Open report", &path.display().to_string(), None),
         Fix::OpenFolder(path) => button(ui, "Open folder", &path.display().to_string(), None),
+        Fix::ShowMessages => button(
+            ui,
+            "Show in Messages",
+            "No conversion report was written; Messages says why",
+            None,
+        ),
         Fix::TreatAsOpenGl(_) => button(
             ui,
             "Treat as OpenGL",
@@ -185,7 +192,19 @@ fn fix_button(
             button(ui, UNDO_ROW, &tip, off)
         }
         Fix::ShowNifTab(_, tab, _) => {
-            button(ui, &format!("Open the {tab:?} tab"), "Open this NIF on the tab that holds the field", None)
+            // The Meshes edit panel's own tab names (`ui/meshes/edit_panel.rs` TABS).
+            let name = match tab {
+                NifTab::Shader => "Shader",
+                NifTab::Alpha => "Alpha",
+                NifTab::Controllers => "Controllers",
+                NifTab::Extra => "Extra data",
+            };
+            button(
+                ui,
+                &format!("Open the {name} tab"),
+                "Open this NIF on the tab that holds the field",
+                None,
+            )
         }
     }
 }
@@ -365,9 +384,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                             At::Texture(k) if p.level == Level::Decide => {
                                 fix_buttons(ui, m, k, off.as_deref()).map(Act::Pick)
                             }
-                            At::Set { key, .. }
-                                if p.fix.is_none() && ui.button("Go to set").clicked() =>
-                            {
+                            // Fix round 1: a set row keeps Go to set beside its fix.
+                            At::Set { key, .. } if ui.button("Go to set").clicked() => {
                                 Some(Act::Set(key.clone()))
                             }
                             _ => None,
@@ -450,12 +468,18 @@ fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
                 .iter()
                 .find(|v| Some(&v.key) == set.as_ref())
                 .map(|v| v.id.clone());
-            if let Some(id) = id {
-                model.open_gen(&id, map);
+            match id {
+                Some(id) => model.open_gen(&id, map),
+                None => {
+                    model.status_line = format!(
+                        "Cannot regenerate {k}: it is no longer in a set; generate it from its set"
+                    )
+                }
             }
         }
         Fix::RebuildZ(k) => model.set_field(&k, "channels.reconstruct_z", json!(true)),
         Fix::OpenReport(p) | Fix::OpenFolder(p) => model.shell.push(ShellRequest::Open(p)),
+        Fix::ShowMessages => model.show_tab(crate::model::bottom::BottomTab::Messages),
         Fix::TreatAsOpenGl(k) => {
             model.decide(&k, Answer::Green(engine::config::GreenConvention::Opengl))
         }
@@ -468,8 +492,9 @@ fn apply_fix(ui: &egui::Ui, model: &mut AppModel, fix: Fix, at: At) {
             model.select_set(&key);
             to_textures(ui);
             if let Some(id) = id {
+                let at = ui.ctx().cumulative_pass_nr();
                 ui.ctx()
-                    .data_mut(|d| d.insert_temp(egui::Id::new(FOCUS_FIELD), (id, field)));
+                    .data_mut(|d| d.insert_temp(egui::Id::new(FOCUS_FIELD), (id, field, at)));
             }
         }
         Fix::UndoLast => model.undo(),

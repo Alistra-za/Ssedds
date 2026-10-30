@@ -236,10 +236,9 @@ pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
 pub fn panel_advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
-    // Note FC3 (P13): `Fix path` on a field in here opens the group.
-    let asked = ui
-        .data(|d| d.get_temp::<(String, String)>(egui::Id::new(super::problems::FOCUS_FIELD)))
-        .is_some_and(|(s, _)| s == c.set);
+    // Note FC3 (P13): `Fix path` on a field in here opens the group (only while the one-shot request lives).
+    let asked = focus_request(ui.ctx())
+        .is_some_and(|(s, k)| s == c.set && crate::pgp::prefix::is_path_key(&k));
     super::group::group_with(
         ui,
         ("pgp-advanced", &c.set),
@@ -423,14 +422,27 @@ fn matching(ui: &mut egui::Ui, c: &Ctx, edits: &mut Vec<Edit>) {
     );
 }
 
-/// Note FC3 (P13): a Problems row's `Fix path` asked this field of set `set` for focus.
-/// shortcut: a request for a field that is not drawn (a slot path, a collapsed group) waits until it is; clear it on
-/// set change if that ever surprises.
-fn take_focus(ui: &egui::Ui, r: &egui::Response, set: &str, key: &str) {
+/// Passes a `Fix path` request lives: long enough for the view switch and the set editor to draw the field.
+const FOCUS_PASSES: u64 = 10;
+
+/// Note FC3 (P13): the live `Fix path` request (set id, field), one-shot: it is dropped once taken or after
+/// `FOCUS_PASSES`, so it never holds the Advanced group open.
+fn focus_request(ctx: &egui::Context) -> Option<(String, String)> {
     let id = egui::Id::new(super::problems::FOCUS_FIELD);
-    let asked = ui.data(|d| d.get_temp::<(String, String)>(id));
-    if asked.is_some_and(|(s, k)| s == set && k == key) {
-        ui.data_mut(|d| d.remove::<(String, String)>(id));
+    let (s, k, at) = ctx.data(|d| d.get_temp::<(String, String, u64)>(id))?;
+    if ctx.cumulative_pass_nr() > at + FOCUS_PASSES {
+        ctx.data_mut(|d| d.remove::<(String, String, u64)>(id));
+        return None;
+    }
+    Some((s, k))
+}
+
+/// Note FC3 (P13): a Problems row's `Fix path` asked this field of set `set` for focus.
+fn take_focus(ui: &egui::Ui, r: &egui::Response, set: &str, key: &str) {
+    if focus_request(ui.ctx()).is_some_and(|(s, k)| s == set && k == key) {
+        ui.data_mut(|d| {
+            d.remove::<(String, String, u64)>(egui::Id::new(super::problems::FOCUS_FIELD))
+        });
         r.request_focus();
         r.scroll_to_me(Some(egui::Align::Center));
     }
