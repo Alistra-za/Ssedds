@@ -676,13 +676,37 @@ fn rows_group_by_nif_and_keep_only_shapes_pgpatcher_matches() {
         assert!(nif.starts_with(r"meshes\"), "PGPatcher form: {nif}");
         block != 4 && copy != 5
     };
-    let c = group_rows(&rows, None, &check);
+    let c = group_rows(&rows, &check);
     assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 9]);
     assert_eq!(c[0].nif_path, r"meshes\a\rock.nif");
     assert_eq!(c[0].shapes, vec![(3, Some("S3".into()))]);
     assert!(c[1].derived && c[1].copy_id == 2);
-    let f = group_rows(&rows, Some(r"ARMOR\"), &check);
-    assert_eq!(f.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [9]);
+}
+
+/// GE10: `nif_filter` is left to `pgpsim::shape_matches`, so a FaceGeom mesh stays a candidate (PGPatcher 2.3.1
+/// applies no filter there, GE2) and a normal mesh outside the filter is dropped.
+#[test]
+fn group_rows_leaves_nif_filter_to_the_shared_matcher() {
+    let rows = vec![
+        row(
+            1,
+            1,
+            "meshes/actors/character/facegendata/facegeom/skyrim.esm/00000801.nif",
+            0,
+            false,
+        ),
+        row(2, 2, "meshes/landscape/rock.nif", 0, false),
+        row(3, 3, "meshes/clutter/rock.nif", 0, false),
+    ];
+    let entry = pgpsim::prepare(
+        &json!({"match_diffuse": "white", "nif_filter": "clutter"}),
+        &Value::Null,
+    );
+    let mut m = pgpsim::MaterialState::builtin_default();
+    m.set_slot_raw(0, r"textures\white.dds");
+    let check = |_: i64, nif: &str, _: u32| pgpsim::shape_matches(&entry, nif, &m.slots);
+    let c = group_rows(&rows, &check);
+    assert_eq!(c.iter().map(|c| c.load_copy_id).collect::<Vec<_>>(), [1, 3]);
 }
 
 /// Polls like the app does (panel drawn, input every frame) until nothing is in flight.

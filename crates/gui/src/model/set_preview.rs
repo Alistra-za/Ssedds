@@ -990,7 +990,7 @@ Subsurface Scattering, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadow
 water, fog, Volumetric Shadows";
 /// How often the fingerprint is checked when no input arrived (02 §3.2).
 pub const THROTTLE: Duration = Duration::from_millis(200);
-/// Rows asked of the scan DB; `nif_filter` and `shape_matches` thin them out afterwards.
+/// Rows asked of the scan DB; `shape_matches` (with `nif_filter`) thins them out afterwards.
 pub const QUERY_LIMIT: usize = 500;
 pub const BUILTINS: [(Builtin, &str); 4] = [
     (Builtin::Sphere, "Sphere"),
@@ -1230,23 +1230,12 @@ pub enum Candidates {
     Error(String),
 }
 
-/// Rows → one candidate per copy to load, in row order. `filter` is `nif_filter` (`icontains` on the `meshes\…`
-/// path, 01 §1.3); `check(load copy, nif path, block)` is the `shape_matches` re-check.
-pub fn group_rows(
-    rows: &[MatchRow],
-    filter: Option<&str>,
-    check: &dyn Fn(i64, &str, u32) -> bool,
-) -> Vec<Candidate> {
-    let filter = filter.map(str::to_ascii_lowercase);
+/// Rows → one candidate per copy to load, in row order. `check(load copy, nif path, block)` is the `shape_matches`
+/// re-check, which also applies `nif_filter` (with 2.3.1's facegen / ShapeData exception, Note GE10).
+pub fn group_rows(rows: &[MatchRow], check: &dyn Fn(i64, &str, u32) -> bool) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = vec![];
     for r in rows {
         let nif = r.nif_path.replace('/', "\\");
-        if filter
-            .as_deref()
-            .is_some_and(|f| !nif.to_ascii_lowercase().contains(f))
-        {
-            continue;
-        }
         if !check(r.load_copy_id, &nif, r.shape_block) {
             continue;
         }
@@ -1302,12 +1291,7 @@ fn view_slots(v: &ShapeView) -> Vec<TexPath> {
 }
 
 /// The worker side of a query: its own read-only connection (a `Connection` is not `Sync`; a scan may be writing).
-fn query(
-    path: &Path,
-    key: &TexKey,
-    filter: Option<&str>,
-    prepared: &Value,
-) -> Result<Vec<Candidate>, String> {
+fn query(path: &Path, key: &TexKey, prepared: &Value) -> Result<Vec<Candidate>, String> {
     let store = Store::open_read_only(path).map_err(|e| e.to_string())?;
     let rows = store
         .nifs_using_texture(key, QUERY_LIMIT)
@@ -1327,7 +1311,7 @@ fn query(
             .find(|s| s.block == block)
             .is_some_and(|s| pgpsim::shape_matches(prepared, nif, &view_slots(s)))
     };
-    let mut out = group_rows(&rows, filter, &check);
+    let mut out = group_rows(&rows, &check);
     if let Some(e) = failed.into_inner() {
         return Err(format!("reading the shapes of a mesh: {e}"));
     }
@@ -1877,7 +1861,7 @@ impl SetPreview {
             self.candidates = Candidates::NoStore(NO_SCAN.into());
             return;
         };
-        let Some((key, filter)) = tex_key(&entry, &self.default) else {
+        let Some((key, _)) = tex_key(&entry, &self.default) else {
             self.candidates = Candidates::Ready(vec![]);
             return;
         };
@@ -1890,7 +1874,7 @@ impl SetPreview {
             self.tx.clone(),
             move || {
                 let t0 = Instant::now();
-                let result = query(&path, &key, filter.as_deref(), &prepared).map(|c| (c, ms(t0)));
+                let result = query(&path, &key, &prepared).map(|c| (c, ms(t0)));
                 SpMsg::Queried { token, result }
             },
             move |e| SpMsg::Queried {
