@@ -44,6 +44,8 @@ pub struct PgFile {
     pub entries: Vec<Value>,
     /// `entries` by the names they can match (fix round 2, B-P38): a shape tests only its candidates.
     pub index: MatchIndex,
+    /// The first entry's non-string match key, as its crash text (Note GE11): PGPatcher 2.3 stops the whole run.
+    pub crash: Option<String>,
 }
 
 /// Every loose `PBRNifPatcher\**\*.json` of Data, the enabled mods and overwrite (the VFS winning copy of each
@@ -108,10 +110,12 @@ pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
                 .map(|e| pgpsim::prepare(e, &default))
                 .collect();
             let index = MatchIndex::new(&entries);
+            let crash = entries.iter().find_map(pgpsim::crash_of);
             Some(PgFile {
                 file,
                 entries,
                 index,
+                crash,
             })
         })
         .collect())
@@ -196,8 +200,8 @@ pub fn candidates(
 
 /// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
 /// patches it wins; a file that would skip it (a missing texture) is rejected for this shape and the next may win; a
-/// file PGPatcher crashes on (a wrong-typed match key, Note GE5) leaves the shape unpatched. Returns the material and
-/// its lines.
+/// JSON PGPatcher crashes on leaves the shape unpatched: any file with a wrong-typed match key (Note GE11), or a
+/// matching `coat_color` object (GE5). Returns the material and its lines.
 pub fn simulate_shape(
     files: &[PgFile],
     cands: &[(usize, Vec<usize>)],
@@ -205,6 +209,14 @@ pub fn simulate_shape(
     source: &MaterialState,
     exists: &dyn Fn(&str) -> bool,
 ) -> (MaterialState, Vec<String>) {
+    // GE11: one crashing file anywhere stops PGPatcher's whole run (T1a, T1b), whatever this shape matches.
+    let crashes: Vec<String> = files
+        .iter()
+        .filter_map(|f| Some(format!("In game: {} ({}).", f.crash.as_ref()?, f.file)))
+        .collect();
+    if !crashes.is_empty() {
+        return (source.clone(), crashes);
+    }
     let mut skip = None;
     for (i, hit) in cands {
         let f = &files[*i];
@@ -228,8 +240,7 @@ pub fn simulate_shape(
             SimResult::Skip(why) => {
                 skip.get_or_insert_with(|| format!("In game: {}{NOT_APPLIED}{why}).", f.file));
             }
-            // GE5: the throw stops PGPatcher's whole run, so no later file can win.
-            // shortcut: a crashing file below the one that patches is not seen; scan every candidate if that matters.
+            // GE5: coat_color as an object throws only when a matching shape is patched, so it stays per shape (GE11).
             SimResult::Error(why) => {
                 return (
                     source.clone(),

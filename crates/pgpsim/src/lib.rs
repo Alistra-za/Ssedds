@@ -61,6 +61,12 @@ pub enum SimResult {
 /// The start of every `SimResult::Error` text (owner ruling R4, Note GE5).
 pub const CRASHES: &str = "PGPatcher 2.3 crashes on this JSON";
 
+/// The crash text of a prepared entry with a non-string match key, `None` otherwise (Note GE11). 2.3.1 reads these
+/// keys for every entry at load or on the first shape it checks, so one such entry stops the whole run.
+pub fn crash_of(prepared: &Value) -> Option<String> {
+    prepared.as_object().and_then(check::match_key_error)
+}
+
 /// One entry (sdc's case): prepare, match (with `nif_filter`), then patch.
 pub fn simulate(i: &SimInput) -> SimResult {
     let prepared = prepare(i.entry, i.default);

@@ -6717,6 +6717,40 @@ fn wrong_typed_match_key_is_a_red_line() {
     h.get_by_label(line);
 }
 
+/// GE11: a crashing JSON anywhere in the load order stops the whole run (T1a, T1b), so every lit shape is red and
+/// unpatched even when the file matches nothing or sits below the file that would patch it. One line per file.
+#[test]
+fn a_crashing_json_anywhere_makes_every_shape_red() {
+    for (file, json, key) in [
+        (
+            "mods/PGP/PBRNifPatcher/z.json",
+            &br#"[{"match_diffuse": 5}]"#[..],
+            "match_diffuse",
+        ),
+        (
+            "mods/Low/PBRNifPatcher/z.json",
+            &br#"[{"match_diffuse": "other", "path_contains": 5}]"#[..],
+            "path_contains",
+        ),
+    ] {
+        let d = pg_files();
+        put(d.path(), file, Some(json));
+        let mut m = pg_session_in(d.path());
+        let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+        in_game(&mut m);
+        let line = format!(
+            r"In game: PGPatcher 2.3 crashes on this JSON: {key} is not a string (PBRNifPatcher\z.json)."
+        );
+        assert_eq!(notes(&m, shape), [line.clone()], "{file}");
+        assert!(is_error(&line));
+        assert_eq!(
+            shown(&m, shape).slots[0].raw,
+            r"textures\white.dds",
+            "{file}"
+        );
+    }
+}
+
 /// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
 /// does not count.
 #[test]
