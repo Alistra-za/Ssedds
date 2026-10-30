@@ -52,7 +52,8 @@ impl Area {
         }
     }
 
-    /// Two areas that are never live at once may share a key (Enter opens the preview from the grid and presses a dialog's default).
+    /// Two areas that are never live at once may share a key (Enter opens the preview from the grid and presses a
+    /// dialog's default).
     pub fn exclusive_with(self, other: Area) -> bool {
         use Area::*;
         let both = |a, b| (self == a && other == b) || (self == b && other == a);

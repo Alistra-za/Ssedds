@@ -149,7 +149,7 @@ In the Textures or Sets column:
 | Ctrl+click | Add or remove one entry. |
 | Shift+click | Select the range from the last clicked entry, in the order shown. |
 | Ctrl+A | Select everything shown (in the Sets column, the visible sets only). With nothing shown it does nothing and keeps the selection. |
-| Esc | Clear the selection. |
+| Esc | Closes a popup, the preview or a dialog. It never clears the selection. |
 
 Textures and sets are never selected together. The column heading counts the selection, for example "12 selected (4 hidden by filter)". Textures and sets hidden by the search or a filter stay selected and are edited too (sets: "2 selected (1 hidden by filter)").
 
@@ -488,7 +488,7 @@ See also [Troubleshooting](Troubleshooting.md).
 | Ctrl+S | Save. |
 | Ctrl+Z / Ctrl+Y | Undo / redo (Textures and Meshes views). |
 | Ctrl+M | Messages. |
-| Arrow keys, Shift+arrows, Ctrl+A, Esc | Move through the Textures grid, extend the selection, select all, clear. |
+| Arrow keys, Shift+arrows, Ctrl+A | Move through the Textures grid, extend the selection, select all. |
 | Enter / Space | Expand the preview of the active texture. |
 | F2 | Rename. |
 | In the preview: [ ], 1-6, PageUp/PageDown, L, T, P | Previous/next texture, channel, mip, lens, tiling, pin. |

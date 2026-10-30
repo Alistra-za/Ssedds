@@ -629,20 +629,25 @@ fn the_palette_and_the_sheet_open_without_a_fade() {
 #[test]
 fn esc_keeps_the_selection() {
     let d = tempfile::tempdir().unwrap();
-    let mut m = ten(d.path());
-    m.selection = Selection::Item(k(2));
-    let mut h = keys_only(m);
-    press(&mut h, Modifiers::NONE, Key::Escape);
-    assert_eq!(h.state().1, None, "no action runs on Esc");
-    assert_eq!(h.state().0.selection, Selection::Item(k(2)));
-    assert_eq!(h.state().0.selected_items(), vec![k(2)]);
+    let mut m = opened(d.path());
+    m.selection = Selection::Item("landscape/leaf.png".into());
+    let mut h = app_harness(m);
+    h.run();
+    h.run();
+    let panel = |h: &Harness<'static, AppModel>| {
+        h.query_all_by_role_and_label(egui::accesskit::Role::ComboBox, "Sub-type")
+            .count()
+    };
+    assert_eq!(panel(&h), 1, "the settings panel shows the texture");
+    h.key_press(Key::Escape);
+    h.run();
+    h.run();
     assert_eq!(
-        actions::keys_text("clear"),
-        "",
-        "the palette entry has no key"
+        h.state().selection,
+        Selection::Item("landscape/leaf.png".into())
     );
+    assert_eq!(panel(&h), 1, "and still shows it after Esc");
 }
-
 #[test]
 fn esc_still_closes() {
     let d = tempfile::tempdir().unwrap();
@@ -671,6 +676,13 @@ fn esc_still_closes() {
     h.key_press(Key::Escape);
     h.run();
     assert!(h.state().nav.palette.is_none(), "Esc closes the palette");
+    h.key_press(Key::F1);
+    h.run();
+    h.run();
+    assert!(h.state().nav.sheet, "F1 opens the sheet");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().nav.sheet, "Esc closes the sheet");
     assert_eq!(
         h.state().selection,
         Selection::Item("landscape/leaf.png".into()),
