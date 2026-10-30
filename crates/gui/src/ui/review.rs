@@ -2,6 +2,7 @@
 //! the export writes, and one Export button. Not a dialog: Enter does nothing here (N3).
 use super::settings_panel::{alpha_hint, alpha_options, offered_groups, subtype_label};
 use super::status::{AMBER, RED};
+use super::type_picker::{self, TypeKind};
 use crate::model::bottom::{problems, Level};
 use crate::model::code_text::code_line;
 use crate::model::items::Decision;
@@ -115,8 +116,29 @@ pub fn undecided_row(
     pick
 }
 
-/// A Problems row's fix buttons (A1), one set per open question of the texture `key`: Set type… (the suggestion
-/// first), Decide… (the alpha options), Acknowledge. All disabled with `off` as hover.
+/// The text of a Problems row's one-click accept (Note FB9).
+fn accept_text(st: Subtype) -> String {
+    format!("Set type: {} \u{2713}", subtype_label(st))
+}
+
+/// Two buttons drawn as one, `[text] ▾`, in reading order in either layout direction: (main, arrow).
+fn split_button(ui: &mut egui::Ui, text: &str) -> (egui::Response, egui::Response) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        if ui.layout().prefer_right_to_left() {
+            let arrow = ui.button("\u{25BE}");
+            (ui.button(text), arrow)
+        } else {
+            let main = ui.button(text);
+            (main, ui.button("\u{25BE}"))
+        }
+    })
+    .inner
+}
+
+/// A Problems row's fix buttons (A1), one set per open question of the texture `key`: the suggestion's one-click
+/// accept with ▾ for the type picker, or a plain Set type… (Note FB9), Decide… (the alpha options), Acknowledge. All
+/// disabled with `off` as hover.
 pub fn fix_buttons(
     ui: &mut egui::Ui,
     model: &AppModel,
@@ -134,30 +156,39 @@ pub fn fix_buttons(
     ui.add_enabled_ui(off.is_none(), |ui| {
         for d in decisions {
             match d {
+                // Note FB9 (owner amendment A): `[Set type: {suggestion} ✓] ▾`, the main part accepts, ▾ opens the
+                // picker; without a suggestion the plain "Set type…" opens it.
                 Decision::Subtype { suggested } => {
-                    ui.menu_button("Set type…", |ui| {
-                        if let Some(st) = suggested {
-                            if ui
-                                .button(format!("{} (suggested)", subtype_label(*st)))
+                    let opener = match suggested {
+                        Some(st) => {
+                            let (accept, arrow) = split_button(ui, &accept_text(*st));
+                            if accept
+                                .on_hover_text("Use the suggested type")
+                                .on_disabled_hover_text(why)
                                 .clicked()
                             {
                                 pick = Some(RowPick::Decide(key.to_string(), *st));
-                                ui.close();
                             }
-                            ui.separator();
+                            // ▾ is what the plain button was: the picker, so it keeps its name.
+                            arrow.widget_info(|| {
+                                egui::WidgetInfo::labeled(
+                                    egui::WidgetType::Button,
+                                    arrow.enabled(),
+                                    "Set type…",
+                                )
+                            });
+                            arrow.on_hover_text("Pick another type")
                         }
-                        for (heading, members) in offered_groups(model.target) {
-                            ui.label(egui::RichText::new(heading).weak());
-                            for st in members {
-                                if ui.button(subtype_label(st)).clicked() {
-                                    pick = Some(RowPick::Decide(key.to_string(), st));
-                                    ui.close();
-                                }
-                            }
-                        }
-                    })
-                    .response
+                        None => ui.button("Set type…"),
+                    }
                     .on_disabled_hover_text(why);
+                    let id = egui::Id::new(("set-type-picker", key));
+                    let kind = TypeKind::SetType;
+                    if let Some(st) =
+                        type_picker::show(ui, id, &opener, None, *suggested, kind, model.target)
+                    {
+                        pick = Some(RowPick::Decide(key.to_string(), st));
+                    }
                 }
                 Decision::AlphaMeaning => {
                     ui.menu_button("Decide…", |ui| {

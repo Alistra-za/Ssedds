@@ -38,6 +38,7 @@ pub mod skin_card;
 pub mod slot_commands;
 pub mod status;
 pub mod thumbs;
+pub mod type_picker;
 pub mod viewport3d;
 
 use crate::model::picker::{PickerPurpose, PickerSpec};

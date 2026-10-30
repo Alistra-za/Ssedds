@@ -2,6 +2,7 @@
 //! each with where its value came from. Drawing only: every edit is a call on the model, applied after drawing.
 use super::columns::{AMBER, RED};
 use super::status::code_hover;
+use super::type_picker::TypeKind;
 use crate::model::code_text::{code_line, shown_for, without_codes};
 use crate::model::fields::{
     auto_subtype_reason, backend_lock, channel_text, edge_view, encoding_options, field_hidden,
@@ -606,6 +607,9 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
             if f.lock.is_some() {
                 ui.disable();
             }
+            if f.field == "subtype" {
+                return subtype_field(ui, cx, f);
+            }
             editor(ui, cx.key, cx.target, cx.job, cx.busy, f, false)
         })
         .inner;
@@ -658,6 +662,24 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
     }
     ui.end_row();
     edit
+}
+
+/// The Sub-type field (Note FB9, owner amendment J): a button showing the type that opens the type picker, the
+/// engine's suggestion pinned on top. Named and valued as the combo it replaces.
+fn subtype_field(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> (Option<Value>, egui::Response) {
+    let current = serde_json::from_value::<Subtype>(f.value.clone()).ok();
+    let shown = current.map_or_else(|| display_value(&f.value), subtype_label);
+    let r = ui.button(format!("{shown} \u{25BE}"));
+    r.widget_info(|| {
+        let mut i = egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, r.enabled(), f.label);
+        i.current_text_value = Some(shown.clone());
+        i
+    });
+    let id = egui::Id::new(("sub-type-picker", cx.key));
+    let suggested = cx.job.suggestions.first().map(|s| s.subtype);
+    let picked =
+        super::type_picker::show(ui, id, &r, current, suggested, TypeKind::SubType, cx.target);
+    (picked.filter(|s| Some(*s) != current).map(|s| json!(s)), r)
 }
 
 /// The basic Mipmaps rows: the on/off tick box (the level count lives in the Advanced drawer), then the filter.

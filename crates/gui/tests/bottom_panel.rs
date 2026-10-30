@@ -259,6 +259,13 @@ fn a_read_only_project_disables_the_fix_buttons_with_the_reason() {
         }
     }
     assert!(seen >= 3, "only {seen} fix buttons found");
+    // Note FB9: the one-click accepts and "Accept all suggestions (n)" too.
+    let accepts: Vec<_> = h
+        .query_all_by_label_contains("Set type: ")
+        .chain(h.query_all_by_label_contains("Accept all suggestions"))
+        .collect();
+    assert!(accepts.len() >= 2, "only {} accept buttons", accepts.len());
+    assert!(accepts.iter().all(|n| n.accesskit_node().is_disabled()));
     assert!(h
         .state()
         .fix_off()
@@ -546,16 +553,31 @@ fn at_1280x800_a_long_problems_row_keeps_its_buttons_on_screen() {
     let mut h = harness_at(m, egui::vec2(1280.0, 800.0));
     idle(&mut h);
     let panel = outer(&h, "bottom");
+    // The list scrolls: a row cut by its bottom edge is clipped there (`show_rows` draws one more), so the bottom is
+    // not checked; the right edge (final review I2) and the top are.
+    let inside = |r: egui::Rect| {
+        r.left() >= panel.left() && r.right() <= panel.right() && r.top() >= panel.top()
+    };
     let mut seen = 0;
     for label in ["Go to set", "Set type…", "Decide…", "Acknowledge"] {
         for n in h.query_all_by_label(label) {
             seen += 1;
             assert!(
-                panel.contains_rect(n.rect()),
+                inside(n.rect()),
                 "{label} at {:?} is outside the panel {panel:?}",
                 n.rect()
             );
         }
+    }
+    // Note FB9: the wider one-click accept stays inside too.
+    for n in h.query_all_by_label_contains("Set type: ") {
+        seen += 1;
+        assert!(
+            inside(n.rect()),
+            "{:?} at {:?} is outside the panel {panel:?}",
+            n.accesskit_node().label(),
+            n.rect()
+        );
     }
     assert!(seen >= 3, "only {seen} buttons");
     let long = sdc_gui::model::pbr_export::export_asks(h.state())

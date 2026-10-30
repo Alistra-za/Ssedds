@@ -74,7 +74,7 @@ A texture whose name follows the conventions decides itself. A High-confidence s
 - a file with no suffix, as its set's colour map;
 - `_n` in a PBR set.
 
-Choose another sub-type to override it: your choice is written to `sdc.toml` and always wins. Naming that breaks the conventions (a normal map saved without `_n`) is read as a colour map, so rename the file or choose its sub-type. A texture that still needs an answer has an **amber border**: a Medium or Low sub-type suggestion, the meaning of its alpha, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
+Choose another sub-type to override it: your choice is written to `sdc.toml` and always wins. The **Sub-type** field opens the same type picker as the Problems tab's **Set type…** (see [The bottom panel](#the-bottom-panel)), with the engine's suggestion on top. Naming that breaks the conventions (a normal map saved without `_n`) is read as a colour map, so rename the file or choose its sub-type. A texture that still needs an answer has an **amber border**: a Medium or Low sub-type suggestion, the meaning of its alpha, or a blocking warning you must acknowledge. Select it and use the confirm controls in the centre column (for example the sub-type buttons, the *Remove / Cutout / Blend / Cutout + Blend / Data* alpha buttons, or an acknowledge button for a blocking warning). Each answer is written explicitly, as a field value or as an `allow` code, so it stays in your project file.
 
 **Alpha from the meshes.** When a scan database exists (the Meshes view), a colour map whose alpha varies takes its alpha meaning from the meshes that use it, and the alpha question is not asked:
 
@@ -545,7 +545,7 @@ A panel runs along the bottom of the window in both views, full width. Collapsed
 
 - Blockers the export would stop on, for example a set that matches nothing.
 - *Failed: …* for a texture that failed to plan.
-- *Needs a decision: sub-type; what its alpha means; <the warning's sentence>* for an undecided texture (a question that is an acknowledgement shows the sentence of its warning, for example "This texture's size isn't a power of two — resize it or acknowledge"; its code is on the hover), with the fix in the row: **Set type…** (the suggested type first), **Decide…** (the alpha choices) and **Acknowledge**. These buttons are greyed out, with the reason on hover, while `sdc.toml` is read-only ("Wait for the plan to finish" while a plan runs).
+- *Needs a decision: sub-type; what its alpha means; <the warning's sentence>* for an undecided texture (a question that is an acknowledgement shows the sentence of its warning, for example "This texture's size isn't a power of two — resize it or acknowledge"; its code is on the hover), with the fix in the row: the suggested type as one button, **Set type: subsurface tint ✓** (a click decides it), with **▾** beside it for the type picker, or a plain **Set type…** that opens the picker when there is no suggestion; **Decide…** (the alpha choices) and **Acknowledge**. The type picker opens at its button: the suggestion first, marked *(suggested)*, a search box that has the keyboard (type `tint` to list only the types with "tint" in their name), and the grouped list below it, which scrolls; Esc closes it and does nothing else. **Accept all suggestions (n)** at the top of the list decides every texture that has a suggestion, as one undo step. A row takes the keyboard (Tab, or Shift+Tab back): **Enter** or **Space** on a row with a suggestion accepts it and moves to the next row; on the last row the keyboard stays on the list. A row without a suggestion ignores both. Every accept edits the project in memory, like any other edit: **Save** writes it to `sdc.toml`. These buttons are greyed out, with the reason on hover, while `sdc.toml` is read-only ("Wait for the plan to finish" while a plan runs).
 - Export pitfalls, texture and set warnings, with **Go to set** on a set's row.
 - Artist-check warnings (see Artist checks), after the other warnings, with an amber dot that does not change "ready". The tab shows **Checks N** to narrow the list to them.
 - A file's export warnings, once the export has ended. Click the file to select it.
@@ -648,6 +648,7 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
 | JSON editor | F8 | Next error in the PGPatcher JSON editor |
 | JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
+| Problems list | Enter or Space | Accept the focused Problems row's suggestion and go to the next row |
 | Dialogs | Enter | Press the dialog's safe default |
 | Dialogs | Esc | Cancel the dialog |
 

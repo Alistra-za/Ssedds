@@ -23,16 +23,19 @@ pub enum Area {
     View3d,
     /// The PGPatcher JSON editor (`ui::json_editor` handles its keys, docked or popped out).
     JsonEditor,
+    /// A focused Problems row (`ui::problems` handles its keys); only listed here.
+    Problems,
 }
 
 impl Area {
-    pub const ALL: [Area; 7] = [
+    pub const ALL: [Area; 8] = [
         Area::Global,
         Area::Grid,
         Area::Preview,
         Area::Sets,
         Area::View3d,
         Area::JsonEditor,
+        Area::Problems,
         Area::Dialogs,
     ];
 
@@ -45,6 +48,7 @@ impl Area {
             Area::Dialogs => "Dialogs",
             Area::View3d => "3D preview",
             Area::JsonEditor => "JSON editor",
+            Area::Problems => "Problems list",
         }
     }
 
@@ -205,7 +209,7 @@ pub fn actions() -> &'static [Action] {
     ACTIONS
 }
 
-use Area::{Dialogs, Global, Grid, JsonEditor, Preview, Sets, View3d};
+use Area::{Dialogs, Global, Grid, JsonEditor, Preview, Problems, Sets, View3d};
 
 pub static ACTIONS: &[Action] = &[
     // Global
@@ -546,6 +550,13 @@ pub static ACTIONS: &[Action] = &[
         JsonEditor,
         &[shift(Key::F8)],
     ),
+    // A focused Problems row (Note FB9)
+    listed(
+        "problems-accept",
+        "Accept the focused Problems row's suggestion and go to the next row",
+        Problems,
+        &[key(Key::Enter), key(Key::Space)],
+    ),
     // Dialogs
     listed(
         "dialog-enter",
@@ -597,7 +608,7 @@ fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
         Area::Global => true,
         Area::Grid | Area::Sets => !meshes_view && model.expanded.is_none(),
         Area::Preview => !meshes_view && model.expanded.is_some(),
-        Area::Dialogs | Area::View3d | Area::JsonEditor => false,
+        Area::Dialogs | Area::View3d | Area::JsonEditor | Area::Problems => false,
     }
 }
 

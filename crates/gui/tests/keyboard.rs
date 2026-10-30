@@ -63,6 +63,7 @@ fn the_action_table_has_unique_ids_and_shortcuts() {
         ("clear", "Esc"),
         ("rename", "F2"),
         ("close-preview", "Esc"),
+        ("problems-accept", "Enter or Space"),
         ("dialog-enter", "Enter"),
         ("dialog-esc", "Esc"),
         ("palette", "Ctrl+K"),
@@ -78,9 +79,12 @@ fn every_shortcut_runs_its_action() {
     let mut checked = 0;
     for a in actions() {
         if a.run.is_none() {
-            // A dialog's keys, the 3D panel's and the JSON editor's are handled where they belong (the 3D viewports are not in AppModel).
+            // A dialog's keys, the 3D panel's, the JSON editor's and a Problems row's are handled where they belong (the 3D viewports are not in AppModel).
             assert!(
-                matches!(a.area, Area::Dialogs | Area::View3d | Area::JsonEditor),
+                matches!(
+                    a.area,
+                    Area::Dialogs | Area::View3d | Area::JsonEditor | Area::Problems
+                ),
                 "{} is only listed",
                 a.id
             );

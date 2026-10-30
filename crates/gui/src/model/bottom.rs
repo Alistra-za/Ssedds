@@ -59,7 +59,7 @@ impl AppModel {
 
 /// Red blocks the export; the others are orange in the list (A12). `Check` rows (artist checks, DECISIONS Note CL)
 /// are listed but never change "ready" (`counts_as_ready_problem`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
     Blocks,
     Decide,
@@ -72,7 +72,7 @@ pub fn counts_as_ready_problem(p: &Problem) -> bool {
     p.level != Level::Check
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum At {
     /// An item key.
     Texture(String),
@@ -95,6 +95,8 @@ pub struct Problem {
     pub also: Vec<engine::codes::Code>,
     /// Note DU3: the set entry that matches no file, which the row's fix button removes.
     pub missing: Option<sets::Missing>,
+    /// Note FB9: a Decide row's suggested sub-type, which its ✓ button, Enter and Space accept.
+    pub suggested: Option<engine::config::Subtype>,
 }
 
 impl Problem {
@@ -262,6 +264,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
         code,
         also: vec![],
         missing: None,
+        suggested: None,
     };
     let mut out = vec![];
     for b in pbr_export::export_blocks(m) {
@@ -311,8 +314,13 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             })
             .collect();
         let text = format!("Needs a decision: {}", parts.join("; "));
+        let suggested = i.decisions.iter().find_map(|d| match d {
+            Decision::Subtype { suggested } => *suggested,
+            _ => None,
+        });
         out.push(Problem {
             also,
+            suggested,
             ..row(Level::Decide, At::Texture(i.key.clone()), text, None)
         });
     }
