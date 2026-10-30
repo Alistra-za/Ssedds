@@ -137,7 +137,7 @@ Before the run, `sdc convert` prints what the new version re-encodes and why, on
 - `1 file re-encodes: new output type`: the plan writes a file the older version did not;
 - `First export with 1.1.0: 20 files`: no manifest to compare with (a new output folder, or records from before encode versions existed). In the GUI this is a plain line, not a warning.
 
-Only records an older version wrote are compared this way, so your own edits after the first export with the new version say nothing. Changed source files are never listed.
+Only records an older version wrote are compared this way. A record keeps the version that wrote it until that file is encoded again, so a setting you change later on a file the upgrade left alone is still listed once, as "their settings changed". New files stop being listed once the new version has written any file to the folder. Changed source files are never listed, and the CLI prints these lines only with `--on-existing if-changed` (the default).
 
 An existing output with no manifest record is never overwritten by `if-changed`. It is kept and reported as `OUT-UNKNOWN-EXISTING`, and the run exits with 1. Use `--on-existing overwrite` to replace it.
 

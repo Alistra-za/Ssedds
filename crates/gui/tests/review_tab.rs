@@ -650,11 +650,9 @@ fn review_shows_one_row_per_cause() {
         assert_eq!((p.level, p.at), (Level::Warning, At::Project));
     }
     m.open_review();
-    let gate = m.review_gate();
-    assert!(
-        gate.as_ref()
-            .is_err_and(|e| e.starts_with("Acknowledge") || e.starts_with("Fix")),
-        "{gate:?}"
+    assert_eq!(
+        m.review_gate(),
+        Err("Acknowledge 2 warnings first".to_string())
     );
     let mut h = harness(m);
     h.run();

@@ -158,6 +158,23 @@ fn profile_changed_cause() {
             "{c:?}"
         );
     }
+    // Per record: one normal rewritten by this engine (its edit is not listed), the other still 1.0.0's (listed).
+    rewrite(d.path(), |k, v| {
+        if k.ends_with("a_n.dds") {
+            v["engine_version"] = ENGINE_VERSION.into();
+            v["encode_version"] = encode_version(Subtype::Normal).into();
+        }
+        true
+    });
+    if encode_version(Subtype::Normal) == LEGACY_ENCODE_VERSION {
+        assert_eq!(
+            causes(d.path(), &p),
+            [RecodeCause {
+                count: 1,
+                ..want(Subtype::Normal)
+            }]
+        );
+    }
 }
 
 #[test]

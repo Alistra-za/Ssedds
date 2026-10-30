@@ -92,9 +92,12 @@ fn convert(a: ConvertArgs) -> Result<i32, EngineError> {
     let rep = reporter(a.batch.json);
     let plan = engine.plan(req, &rep, &cancel)?;
     // FC7: what re-encodes after an upgrade, and why, before the run (Review's Warning rows).
-    let manifest = engine::manifest::Manifest::at(&plan.request.output_root);
-    for c in engine::manifest::recode_causes(&manifest, &plan) {
-        err!("{}", c.line());
+    // Only `if-changed` re-encodes by the record; `skip` and `overwrite` ignore it.
+    if plan.request.on_existing == engine::api::OnExisting::IfChanged {
+        let manifest = engine::manifest::Manifest::at(&plan.request.output_root);
+        for c in engine::manifest::recode_causes(&manifest, &plan) {
+            err!("{}", c.line());
+        }
     }
     Ok(engine.run(plan, &rep, &cancel)?.exit_code())
 }
