@@ -1,9 +1,8 @@
 //! Note AR: a main-thread panic writes unsaved edits to `<file>.recovery` through the real hook; a worker's panic
-//! does not; the next open says so while the recovery file is newer; a save removes it.
+//! does not; a save removes it (the next open restores it: `recovery.rs`, Note FB5).
 //! One test: the panic hook and the snapshot are process-wide.
 mod support;
 use sdc_gui::crash_log;
-use std::time::{Duration, SystemTime};
 use support::*;
 
 fn panic_on(thread: &str) {
@@ -50,28 +49,9 @@ fn a_main_thread_panic_keeps_unsaved_edits_beside_the_untouched_original() {
         "crash log written"
     );
 
-    let name = |p: &std::path::Path| p.file_name().unwrap().to_string_lossy().into_owned();
-    let note = format!(
-        "Unsaved edits from a crash were kept in {}: rename it over {} to restore, or delete it.",
-        name(&rec),
-        name(&path)
-    );
+    // Note FB5: the file is no banner; the next open restores it (`tests/recovery.rs`).
     m.refresh_banner();
-    assert!(
-        m.banner.as_deref().unwrap_or("").contains(&note),
-        "{:?}",
-        m.banner
-    );
-
-    // A recovery file older than its document is ignored.
-    std::fs::File::options()
-        .write(true)
-        .open(&rec)
-        .unwrap()
-        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(86_400))
-        .unwrap();
-    m.refresh_banner();
-    assert!(!m.banner.as_deref().unwrap_or("").contains("from a crash"));
+    assert!(!m.banner.as_deref().unwrap_or("").contains(".recovery"));
 
     m.save().unwrap();
     assert!(!rec.exists(), "a save removes the recovery file");

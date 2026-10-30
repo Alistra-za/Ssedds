@@ -1,12 +1,12 @@
-//! Layout v2 A3 / C6: every set editor has a right-hand panel with a Material (JSON set) or Set tab and an Advanced
-//! tab; the window-edge Advanced strip stays for a texture, the preview, a bulk selection, nothing selected and 3D.
+//! Layout v2 A3 / C6: every set editor has a Material (JSON set) or Set tab and an Advanced tab, under the slot rows
+//! since Note FB2 (one column); the window-edge Advanced strip stays for a texture, the preview, a bulk selection,
+//! nothing selected and 3D.
 mod support;
 use eframe::egui::{self, accesskit::Role, containers::panel::PanelState, Id};
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
 use sdc_gui::model::AppModel;
-use sdc_gui::ui::set_preview::CENTRE_MIN;
 use sdc_gui::ui::State;
 use support::*;
 
@@ -54,10 +54,22 @@ fn rock_selected(m: &mut AppModel) {
     m.select_set(&key);
 }
 
-fn panel(h: &H) -> egui::Rect {
-    PanelState::load(&h.ctx, Id::new("set-panel"))
-        .expect("the set panel")
-        .outer_rect
+/// Note FB2: the set editor is one column in the centre; its tabs and groups end at the centre's visible edge (the
+/// panel's rect grows with its content, so it is cut at the window).
+fn centre(h: &H) -> egui::Rect {
+    sdc_gui::ui::centre_rect(&h.ctx)
+        .expect("the centre is drawn")
+        .intersect(h.ctx.content_rect())
+}
+
+/// The set editor's tabs are drawn: its "Advanced" tab in the centre (the drawer's strip is at the window edge).
+fn set_tabs(h: &H) -> bool {
+    sdc_gui::ui::centre_rect(&h.ctx).is_some_and(|c| {
+        h.query_all_by_role(Role::Button).any(|n| {
+            n.accesskit_node().label().as_deref() == Some("Advanced")
+                && c.contains(n.rect().center())
+        })
+    })
 }
 
 #[test]
@@ -84,12 +96,6 @@ fn a_pbr_set_has_a_material_tab() {
     // K11: the pgp group "Material" shares the label; the tab is the Button.
     h.get_by_role_and_label(Role::Button, "Material");
     h.get_by_label("Features");
-    // The PBR Landscape card is wider than the default: it scrolls in the panel, the panel does not grow.
-    let w = panel(&h).width();
-    assert!(
-        (w - sdc_gui::ui::set_editor::SET_PANEL_WIDTH).abs() <= 1.0,
-        "panel {w}"
-    );
 }
 
 #[test]
@@ -109,8 +115,10 @@ fn the_advanced_tab_shows_the_drawer_body_and_is_remembered() {
     assert!(h.query_by_label("Features").is_none(), "one tab at a time");
 }
 
+/// Note FB2 (was "the slot rows stay put while the material panel scrolls"): one column scrolls as one, so the rows
+/// move with the groups under them.
 #[test]
-fn the_slot_rows_stay_put_while_the_material_panel_scrolls() {
+fn the_slot_rows_scroll_with_the_material_groups() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     rock_selected(&mut m);
@@ -121,14 +129,12 @@ fn the_slot_rows_stay_put_while_the_material_panel_scrolls() {
     h.get_by_label("Advanced TruePBR settings").scroll_to_me();
     h.run();
     let moved = h.get_by_label("Advanced TruePBR settings").rect();
+    let dy = target.min.y - moved.min.y;
+    assert!(dy > 0.0, "the column scrolled ({target:?} → {moved:?})");
+    let now = slot_rect(&h, "Diffuse");
     assert!(
-        moved.min.y < target.min.y,
-        "the panel scrolled ({target:?} → {moved:?})"
-    );
-    assert_eq!(
-        slot_rect(&h, "Diffuse"),
-        diffuse,
-        "the slot rows stayed put"
+        (diffuse.min.y - now.min.y - dy).abs() < 1.0,
+        "the rows moved with it ({diffuse:?} → {now:?}, {dy})"
     );
 }
 
@@ -140,7 +146,7 @@ fn a_selected_texture_keeps_the_window_edge_advanced_strip() {
     let mut h = harness(m);
     h.run();
     assert!(drawer_drawn(&h), "the strip at the window edge");
-    assert!(PanelState::load(&h.ctx, Id::new("set-panel")).is_none());
+    assert!(!set_tabs(&h));
 }
 
 #[test]
@@ -157,67 +163,6 @@ fn a_set_in_3d_keeps_the_window_edge_advanced_strip() {
         s.set3d.poll(&*m);
     }
     assert!(drawer_drawn(&h), "the strip at the window edge");
-}
-
-/// Layout v2 ruling (row width, moved from set_editor_ui.rs): at 1400 the rows fit beside the panel at its default
-/// width, and no row widget reaches under it (no sideways scroll). A narrower centre scrolls them sideways.
-#[test]
-fn the_slot_rows_stay_in_their_column() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened_plain(d.path());
-    rock_selected(&mut m);
-    let mut h = harness(m);
-    h.run();
-    let edge = panel(&h).min.x;
-    let left = slot_rect(&h, "Diffuse").min.x;
-    let mut right = 0.0f32;
-    for l in [
-        "Diffuse thumbnail",
-        "Match on this",
-        "Opaque",
-        "Assign…",
-        "ready",
-        "warning",
-        "blocks export",
-    ] {
-        for n in h.query_all_by_label(l) {
-            if n.rect().min.x >= left && n.rect().min.x < edge {
-                right = right.max(n.rect().max.x);
-            }
-        }
-    }
-    for n in h.query_all_by_role(Role::ComboBox) {
-        if n.rect().min.x >= left && n.rect().min.x < edge {
-            right = right.max(n.rect().max.x);
-        }
-    }
-    assert!(right > left, "found the row widgets");
-    assert!(
-        right < edge,
-        "the rows ({left}..{right}) reach under the panel at {edge}"
-    );
-}
-
-/// A8: a panel dragged (here: stored) far wider still leaves the rows CENTRE_MIN / 2.
-#[test]
-fn the_rows_keep_their_minimum_beside_a_wide_panel() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_opened_plain(d.path());
-    rock_selected(&mut m);
-    let mut h = harness(m);
-    let outer_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1400.0, 900.0));
-    h.ctx
-        .data_mut(|d| d.insert_persisted(Id::new("set-panel"), PanelState { outer_rect }));
-    h.run();
-    let edge = panel(&h).min.x;
-    let left = slot_rect(&h, "Diffuse").min.x;
-    assert!(
-        edge - left >= CENTRE_MIN / 2.0,
-        "rows {left}..{edge} beside a panel {} wide",
-        panel(&h).width()
-    );
-    // The panel never sits over the rows: the first cell (the slot label) ends left of it; the rest scroll sideways.
-    assert!(slot_rect(&h, "Diffuse").max.x < edge);
 }
 
 /// A group's title (K11: not the tab, which is a Button).
@@ -272,31 +217,39 @@ fn turning_multilayer_on_opens_the_coat_group() {
     let mut h = harness(m);
     h.run();
     assert!(h.query_by_label("Coat colour").is_none());
-    // K21: the checkbox's label.
+    // K21: the checkbox's label. Note FB2: below the slot rows; scroll to it as a user would.
+    h.get_by_label("Multilayer (coat)").scroll_to_me();
+    h.run();
     h.get_by_label("Multilayer (coat)").click();
     h.run();
     assert_eq!(header_value(&h, "Coat"), "on");
     h.get_by_label("Coat colour");
 }
 
+/// Note FB2 (C14): the button sits on the tab row, after the Advanced tab.
 #[test]
-fn the_json_editor_button_is_small_and_in_the_panel_header() {
+fn the_json_editor_button_is_small_and_on_the_tab_row() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
     let mut h = harness(m);
     h.run();
+    let tab = h.get_by_role_and_label(Role::Button, "Advanced").rect();
     let b = h.get_by_label("TruePBR JSON editor…");
     assert!(b.rect().width() < 220.0);
-    assert!(b.rect().min.x > panel(&h).min.x, "in the panel");
+    assert!(
+        b.rect().min.x > tab.max.x && tab.y_range().contains(b.rect().center().y),
+        "button {:?} beside the tab {tab:?}",
+        b.rect()
+    );
     b.click();
     h.run();
     assert!(h.state().0.json_editor_open);
 }
 
-/// Note DO: in a narrow set panel the button stays inside the panel and the set's name never runs under it.
+/// Note DO, then FB2: at 1000 px with a long set name the button stays inside the centre.
 #[test]
-fn the_json_editor_button_stays_beside_the_name_in_a_narrow_panel() {
+fn the_json_editor_button_stays_inside_a_narrow_centre() {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened_plain(d.path());
     rock_selected(&mut m);
@@ -316,30 +269,14 @@ fn the_json_editor_button_stays_beside_the_name_in_a_narrow_panel() {
         .clone();
     m.select_set(&key);
     let mut h = harness_with(m, 1000.0, 800.0, false);
-    // The panel at its narrowest: a drag far right on its left edge.
     h.run();
-    let p = panel(&h);
-    let edge = egui::pos2(p.min.x + 1.0, p.center().y);
-    h.drag_at(edge);
-    h.hover_at(edge + egui::vec2(600.0, 0.0));
-    h.drop_at(edge + egui::vec2(600.0, 0.0));
-    h.run();
-    let p = panel(&h);
+    let p = centre(&h);
     let b = h.get_by_label("TruePBR JSON editor…").rect();
-    assert!(b.max.x <= p.max.x, "button {b:?} inside panel {p:?}");
-    let name = h
-        .query_all_by_role(Role::Label)
-        .map(|n| n.rect())
-        .filter(|r| p.contains_rect(*r) && r.y_range().intersects(b.y_range()))
-        .collect::<Vec<_>>();
-    assert!(!name.is_empty(), "the name is on the button's row");
-    for r in name {
-        assert!(r.max.x <= b.min.x, "name {r:?} runs under the button {b:?}");
-    }
+    assert!(b.max.x <= p.max.x, "button {b:?} inside the centre {p:?}");
 }
 
 /// `set_editor_shown` mirrors `centre`'s and `set_editor::draw`'s routing: in every centre state exactly one of the
-/// window-edge drawer and the set panel is drawn (3D: the drawer); with no folder (the start screen), neither. Each
+/// window-edge drawer and the set editor's tabs is drawn (3D: the drawer); with no folder (the start screen), neither. Each
 /// case is a fresh harness, so the persisted panel states are this case's own. The last field is (panel, drawer).
 #[test]
 fn drawer_and_panel_never_both_or_neither() {
@@ -416,7 +353,7 @@ fn drawer_and_panel_never_both_or_neither() {
         } else {
             h.run();
         }
-        let panel = PanelState::load(&h.ctx, Id::new("set-panel")).is_some();
+        let panel = set_tabs(&h);
         assert_eq!(panel, want_panel, "{name}: the set panel");
         assert_eq!(drawer_drawn(&h), want_drawer, "{name}: the drawer");
     }
@@ -432,11 +369,11 @@ fn a_set_no_longer_in_the_plan_keeps_the_window_edge_advanced_strip() {
     h.run();
     h.get_by_label("This set is no longer in the plan.");
     assert!(drawer_drawn(&h), "the strip at the window edge");
-    assert!(PanelState::load(&h.ctx, Id::new("set-panel")).is_none());
+    assert!(!set_tabs(&h));
 }
 
-/// I1 (final review): a group wider than the panel (the Coat colour row) widens the scroll content, and egui unions
-/// that into every later header row; each header value must still sit inside the panel's visible rect.
+/// I1 (final review): a group wider than its column (the Coat colour row) widens the scroll content, and egui unions
+/// that into every later header row; each header value must still sit inside the centre (Note FB2: one column).
 #[test]
 fn header_values_stay_inside_the_panel_with_coat_on() {
     let d = tempfile::tempdir().unwrap();
@@ -444,9 +381,12 @@ fn header_values_stay_inside_the_panel_with_coat_on() {
     rock_selected(&mut m);
     let mut h = harness(m);
     h.run();
+    h.get_by_label("Multilayer (coat)").scroll_to_me();
+    h.run();
     h.get_by_label("Multilayer (coat)").click();
     h.run();
-    let p = panel(&h);
+    assert_eq!(header_value(&h, "Coat"), "on");
+    let p = centre(&h);
     for t in [
         "Coat",
         "Subsurface",

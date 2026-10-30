@@ -224,7 +224,8 @@ fn a_replace_asked_by_a_drop_shows_its_prompt_with_the_sets_column_hidden() {
     assert!(h.state().1.drops.pending.is_none());
 }
 
-/// Trace-debug #51: a drop above the set editor's scroll area, over a card scrolled out of view, opens the folder.
+/// Trace-debug #51: a drop above the set editor's scroll area (the window header, Note FB2), over a card scrolled out of
+/// view, opens the folder.
 #[test]
 fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
     let d = tempfile::tempdir().unwrap();
@@ -236,7 +237,7 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
         .key;
     m.select_set(&key);
     let mut h = Harness::builder()
-        // Layout v2 A3: the rows scroll alone (the material cards are in the panel), so a lower window.
+        // A low window, so the column scrolls.
         .with_size(eframe::egui::vec2(1400.0, 240.0))
         .build_ui_state(
             |ui, (model, state): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, model, state),
@@ -245,15 +246,10 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     let card = slot_rect(&h, "Diffuse");
-    // The set's header row, above the scroll area that holds the cards.
-    let header = h
-        .get(
-            egui_kittest::kittest::by()
-                .role(eframe::egui::accesskit::Role::TextInput)
-                .label(sdc_gui::ui::input_name::HINT),
-        )
-        .rect();
-    let y = header.center().y;
+    // Note FB2: the set editor is one scroll area filling the centre (its heading scrolls too); the window header is
+    // above it.
+    let header = sdc_gui::ui::centre_rect(&h.ctx).expect("the centre is drawn");
+    let y = header.top() - 6.0;
     h.hover_at(eframe::egui::pos2(card.center().x, card.bottom() + 40.0));
     h.event(eframe::egui::Event::MouseWheel {
         unit: eframe::egui::MouseWheelUnit::Point,
@@ -267,7 +263,7 @@ fn drop_on_card_scrolled_out_of_view_opens_folder_not_slot() {
     let moved = slot_rect(&h, "Diffuse");
     assert!(
         moved.top() < y,
-        "the Diffuse card scrolled up under the header row: {card:?} -> {moved:?}, header {header:?}"
+        "the Diffuse card scrolled up out of the centre: {card:?} -> {moved:?}, centre {header:?}"
     );
     let other = tempfile::tempdir().unwrap();
     let outside = other.path().join("brick.png");

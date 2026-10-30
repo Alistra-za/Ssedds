@@ -302,6 +302,13 @@ fn rock_settings(
         .unwrap_or_default() // no entry yet = nothing written
 }
 
+/// Note FB2: the groups sit under the slot rows in one scrolling column, so a control can be below the fold; scroll
+/// it into view as a user would before clicking or hovering it.
+fn reveal(h: &mut Harness<'static, AppModel>, label: &str) {
+    h.get_by_label(label).scroll_to_me();
+    h.run();
+}
+
 #[test]
 fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
     let d = tempfile::tempdir().unwrap();
@@ -314,9 +321,11 @@ fn feature_toggles_grey_their_exclusions_and_reveal_their_groups() {
         h.query_by_label("Displacement scale").is_none(),
         "parallax group hidden while off"
     );
+    reveal(&mut h, "Parallax");
     h.get_by_label("Parallax").click();
     h.run();
     h.get_by_label("Displacement scale");
+    reveal(&mut h, "Hair");
     h.get_by_label("Hair").click();
     h.run();
     let s = rock_settings(&h);
@@ -379,8 +388,10 @@ fn an_unset_number_shows_the_fixed_default_and_an_edit_is_the_sets_own() {
         spin_values(&h).contains(&"1.0".to_string()),
         "displacement scale"
     );
+    reveal(&mut h, "Parallax");
     h.get_by_label("Parallax").click();
     h.run();
+    reveal(&mut h, "Glint");
     h.get_by_label("Glint").click();
     h.run();
     let v = spin_values(&h);
@@ -550,6 +561,7 @@ fn rock_with(keys: &[(&str, serde_json::Value)]) -> Harness<'static, AppModel> {
     h.run();
     // Layout v2 A3: the selector is the first row of the Subsurface group, which is closed while Subsurface is off.
     if subsurface_combo(&h).is_none() {
+        reveal(&mut h, "Subsurface");
         h.get_by_label("Subsurface").click();
         h.run();
     }
@@ -601,6 +613,7 @@ fn hair_greys_the_six_features_it_excludes() {
 #[test]
 fn unticking_a_switch_removes_its_key() {
     let mut h = rock_with(&[("parallax", serde_json::json!(true))]);
+    reveal(&mut h, "Parallax");
     h.get_by_label("Parallax").click();
     h.run();
     assert!(!rock_settings(&h).contains_key("parallax"));
@@ -668,6 +681,7 @@ fn glint_and_fuzz_switch_the_gui_keys_and_exclude_each_other() {
     let mut h = harness(m);
     h.run();
     assert!(h.query_by_label("Screen-space scale").is_none());
+    reveal(&mut h, "Glint");
     h.get_by_label("Glint").click();
     h.run();
     h.get_by_label("Screen-space scale");
@@ -677,6 +691,7 @@ fn glint_and_fuzz_switch_the_gui_keys_and_exclude_each_other() {
         !s.contains_key("glint"),
         "the switch never writes the table key"
     );
+    reveal(&mut h, "Fuzz");
     h.get_by_label("Fuzz").click();
     h.run();
     assert!(
@@ -744,6 +759,7 @@ fn a_filled_coat_slot_greys_fuzz_with_its_reason() {
     let mut h = harness(m);
     instant_tooltips(&h);
     h.run();
+    reveal(&mut h, "Fuzz");
     let fuzz = h.get_by_label("Fuzz");
     assert!(
         fuzz.accesskit_node().is_disabled(),
@@ -1524,12 +1540,14 @@ fn an_empty_slot_is_one_dim_row_with_assign() {
     // Height _p, slot 3, slot 7 and Subsurface _s are empty in the fixture (K6).
     assert_eq!(h.query_all_by_label("Assign…").count(), 4);
     let height = slot_rect(&h, "Height _p");
+    let before = h.query_all_by_label("Height _p").count();
     h.query_all_by_label("Assign…")
         .find(|n| (n.rect().center().y - height.center().y).abs() < 20.0)
         .expect("Assign… on the Height _p row")
         .click();
     h.run();
-    h.get_by_label_contains("Slot 4: Height");
+    // Note FB2 (C14): the menu's header is the slot label ("Height _p"), no "Slot 4:" prefix.
+    assert_eq!(h.query_all_by_label("Height _p").count(), before + 1);
 }
 
 #[test]

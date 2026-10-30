@@ -46,6 +46,8 @@ type CacheInputs = (
     u64,
     u64,
     String,
+    u64,
+    bool,
 );
 
 /// What `bulk_view` computed and what it was computed from: the multi-selection and active entry, the picked kind,
@@ -555,6 +557,13 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
         .collect();
     let mut values: Vec<Vec<Value>> = vec![vec![]; fields.len()];
     let locked = locked_items(m);
+    // Note FB3: while a plan runs, the jobs are the ones from before the last edit; a field the document sets itself
+    // is read from the document, so a partial write shows mixed at once.
+    let live = if m.planning.is_some() {
+        m.project.as_ref()
+    } else {
+        None
+    };
     for k in keys {
         let job = m.item(k).and_then(|i| i.job.as_ref());
         // One profile serialisation per texture, not one per row.
@@ -577,17 +586,24 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
                 None => {
                     row.applies += 1;
                     if let Some(v) = view {
+                        let own = live.and_then(|p| own_value(p, k, row.field));
                         // The Format row shows and writes the (format, tag) pair, as the single panel does.
                         let value = match (row.field, job) {
                             ("format", Some(j)) => {
-                                serde_json::json!((j.profile.format, j.profile.color.tag))
+                                let doc = |f| live.and_then(|p| p.file_value(k, f));
+                                serde_json::json!([
+                                    doc("format")
+                                        .unwrap_or_else(|| serde_json::json!(j.profile.format)),
+                                    doc("color.tag")
+                                        .unwrap_or_else(|| serde_json::json!(j.profile.color.tag)),
+                                ])
                             }
-                            _ => v.value.clone(),
+                            _ => own.clone().unwrap_or_else(|| v.value.clone()),
                         };
                         if !values[n].contains(&value) {
                             values[n].push(value);
                         }
-                        row.edited += usize::from(v.edited);
+                        row.edited += usize::from(v.edited || own.is_some());
                     }
                 }
             }
@@ -1029,6 +1045,9 @@ impl AppModel {
             self.inputs_rev,
             self.sets_doc.as_ref().map_or(0, |d| d.rev()),
             format!("{:?}", self.target),
+            // Note FB3: an edit changes the document before the plan lands, and the view reads the document then.
+            self.project.as_ref().map_or(0, |p| p.rev()),
+            self.planning.is_some(),
         )
     }
 

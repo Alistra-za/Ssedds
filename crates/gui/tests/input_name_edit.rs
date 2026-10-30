@@ -97,6 +97,9 @@ fn harness_dt(dt: f32) -> (tempfile::TempDir, H) {
     let mut h = Harness::builder()
         .with_size(egui::vec2(1600.0, 900.0))
         .with_step_dt(dt)
+        // Note FB2: the name box sits in the set editor's scroll area, whose floating bar fades in while the pointer
+        // is over it; with a short step and a 0.2 s animation time that fade must fit in one `run()`.
+        .with_max_steps(((0.5 / dt) as u64).max(4))
         .build_ui_state(
             |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
             (m, State::default()),

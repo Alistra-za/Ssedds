@@ -42,6 +42,8 @@ pub(crate) struct TomlFile {
     pub(crate) doc: DocumentMut,
     disk: Option<SourceStamp>,
     pub(crate) dirty: bool,
+    /// The text last loaded or saved: `restore` compares with it, so an Undo back to it is clean (Note FB3).
+    saved_text: String,
     pub(crate) error: Option<String>,
     /// Changes with every edit, restore and reload, from one counter for every document (DECISIONS Note Y7).
     pub(crate) rev: u64,
@@ -54,6 +56,7 @@ impl TomlFile {
             doc: DocumentMut::new(),
             disk: None,
             dirty: false,
+            saved_text: String::new(),
             error: None,
             rev: 0,
         };
@@ -75,6 +78,7 @@ impl TomlFile {
                 Err(e) => self.error = Some(format!("{}: {e}", self.path.display())),
             },
         }
+        self.saved_text = self.doc.to_string();
         self.rev = crate::sets_doc::next_rev();
     }
 
@@ -92,7 +96,8 @@ impl TomlFile {
         self.doc.to_string()
     }
 
-    /// Replace the document with `text` (an undo or redo): an unsaved change. A read-only document is left alone:
+    /// Replace the document with `text` (an undo, a redo or recovered edits): an unsaved change unless `text` is the
+    /// saved text (Note FB3). The one place that recomputes `dirty` from the text. A read-only document is left alone:
     /// its edits never happened.
     pub(crate) fn restore(&mut self, text: &str) {
         if self.read_only() {
@@ -101,6 +106,7 @@ impl TomlFile {
         if let Ok(doc) = text.parse::<DocumentMut>() {
             self.doc = doc;
             self.touch();
+            self.dirty = self.doc.to_string() != self.saved_text;
         }
     }
 
@@ -116,8 +122,10 @@ impl TomlFile {
         if !force && self.changed_on_disk() {
             return Err(SaveError::ChangedOnDisk);
         }
-        engine::dds::write_atomic(&self.path, self.doc.to_string().as_bytes())
+        let text = self.doc.to_string();
+        engine::dds::write_atomic(&self.path, text.as_bytes())
             .map_err(|e| write_error(&self.path, e))?;
+        self.saved_text = text;
         self.disk = SourceStamp::of(&self.path);
         // The `.recovery` file stays: only a user's Save holds the recovered edits (`AppModel::save`, wave 2 #3).
         self.dirty = false;

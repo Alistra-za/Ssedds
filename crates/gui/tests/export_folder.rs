@@ -178,6 +178,8 @@ fn review_lists_the_blocker_and_its_choose_button_picks_the_folder() {
     h.run();
     // The footer repeats the gate's reason; the Blockers column has its own row.
     assert!(h.query_all_by_label(NO_FOLDER).count() >= 1);
+    // The missing folder counts in the heading, because the gate enforces it (Note FB4).
+    h.get_by_label("Blockers (1)");
     h.get_by_label("Choose the export folder…").click();
     h.run();
     let end = std::time::Instant::now() + Duration::from_secs(10);
@@ -195,6 +197,7 @@ fn review_lists_the_blocker_and_its_choose_button_picks_the_folder() {
     );
     h.run();
     assert_eq!(h.query_all_by_label(NO_FOLDER).count(), 0);
+    h.get_by_label("Blockers (0)");
 }
 
 /// A clean project with no folder chosen does not write into `sdc-out`: the click opens Review instead.

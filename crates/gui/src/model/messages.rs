@@ -40,11 +40,19 @@ pub struct Entry {
     pub text: String,
 }
 
+/// What a toast's button does (Note FB5): the toast draws it as `Undo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastAction {
+    /// Takes back the crash-edit restore and deletes the `.recovery` files (`AppModel::undo_crash_restore`).
+    UndoCrashRestore,
+}
+
 #[derive(Debug, Clone)]
 pub struct Toast {
     pub id: u64,
     pub severity: Severity,
     pub text: String,
+    pub action: Option<ToastAction>,
     /// Time left on screen; frozen while the pointer is over the toast.
     pub left: Duration,
 }
@@ -99,6 +107,16 @@ impl Messages {
 
     /// The log and a toast (a routine result).
     pub fn notify(&mut self, severity: Severity, text: impl Into<String>) {
+        self.notify_with(severity, text, None);
+    }
+
+    /// [`Self::notify`] with a button on the toast.
+    pub fn notify_with(
+        &mut self,
+        severity: Severity,
+        text: impl Into<String>,
+        action: Option<ToastAction>,
+    ) {
         let text = text.into();
         self.log(severity, text.clone());
         self.next_id += 1;
@@ -113,6 +131,7 @@ impl Messages {
             id: self.next_id,
             severity,
             text,
+            action,
             left: if severity == Severity::Info {
                 FADE
             } else {
@@ -147,6 +166,11 @@ impl Messages {
         self.fill();
         self.last_tick = (!self.shown.is_empty()).then_some(now);
         self.last_tick.is_some()
+    }
+
+    /// Takes a toast off the screen (its button was clicked); the log keeps the entry.
+    pub fn dismiss(&mut self, id: u64) {
+        self.shown.retain(|t| t.id != id);
     }
 
     pub fn toasts(&self) -> &[Toast] {

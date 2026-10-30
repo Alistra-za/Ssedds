@@ -182,7 +182,11 @@ pub fn draw_with_scan(
     if model.root.is_some() {
         let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
         // Each column stops at its minimum and leaves the columns after it theirs and the centre its floor.
-        let floor = centre_floor(model);
+        let mut floor = centre_floor(model);
+        // Note FB2: the 2D set editor's one column needs its slot rows' width, so the columns yield it.
+        if !three_d && set_editor_shown(model, false) {
+            floor = floor.max(set_editor::ROWS_MIN);
+        }
         let textures_max = ui.available_width() - columns::SETS_MIN - floor;
         column_panel(
             ui,

@@ -126,8 +126,10 @@ fn text_and_restore_round_trip_and_mark_dirty() {
     let after = s.text();
     s.restore(&before);
     assert_eq!(s.text(), before);
-    assert!(s.is_dirty(), "an undo is an unsaved change");
+    // Note FB3: the text last loaded or saved is the clean state, however it is reached.
+    assert!(!s.is_dirty(), "an undo back to the saved text is clean");
     s.restore(&after);
+    assert!(s.is_dirty(), "a redo away from it is an unsaved change");
     assert_eq!(s.entries()[0].settings["hair"], json!(true));
 }
 

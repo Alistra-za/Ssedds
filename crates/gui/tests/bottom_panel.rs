@@ -459,7 +459,8 @@ fn the_other_warnings_link_in_review_opens_the_problems_tab() {
     let mut h = harness(m);
     h.run();
     assert_eq!(h.state().bottom.tab, BottomTab::Review);
-    h.get_by_label_contains("other warning").click();
+    h.get_by_label_contains("in Problems (do not block)")
+        .click();
     h.run();
     assert!(h.state().bottom.open && h.state().bottom.tab == BottomTab::Problems);
     assert!(h.state().bottom.filter.is_none());

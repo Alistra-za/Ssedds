@@ -86,9 +86,9 @@ fn export_opens_the_review_tab_and_no_modal() {
     let mut h = harness(opened(d.path()));
     h.run();
     press_export(&mut h);
-    h.get_by_label("Blockers");
-    h.get_by_label("Undecided");
-    h.get_by_label("Warnings");
+    h.get_by_label_contains("Blockers (");
+    h.get_by_label_contains("Undecided (");
+    h.get_by_label_contains("Warnings (");
     h.get_by_label("What will be written");
     assert!(
         h.query_by_label("Undecided textures").is_none(),
@@ -98,6 +98,37 @@ fn export_opens_the_review_tab_and_no_modal() {
     // The primary button.
     h.get_by_label_contains("undecided)");
     h.get_by_label("Review");
+}
+
+/// Review C9 (Note FB4): the headings carry their counts, and Warnings says what it does not block.
+#[test]
+fn the_review_headings_count_and_the_warnings_column_says_what_does_not_block() {
+    use sdc_gui::model::bottom::{problems, Level};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.open_review();
+    // Note FB1: the missing export folder is a blocker, so it counts.
+    let blockers =
+        pbr_export::export_blocks(&m).len() + usize::from(m.export_folder_chosen().is_none());
+    let undecided = m.undecided_keys().len();
+    assert_eq!(pbr_export::export_asks(&m).len(), 0, "nothing asks");
+    let others = problems(&m)
+        .iter()
+        .filter(|p| p.level == Level::Warning)
+        .count();
+    assert!(
+        undecided >= 1 && others >= 1,
+        "undecided {undecided}, others {others}"
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label(&format!("Blockers ({blockers})"));
+    h.get_by_label(&format!("Undecided ({undecided})"));
+    h.get_by_label("Warnings (0)");
+    h.get_by_label("None that block the export");
+    let s = if others == 1 { "" } else { "s" };
+    h.get_by_label(&format!("{others} warning{s} in Problems (do not block)"));
+    assert!(h.query_by_label_contains("see Problems").is_none());
 }
 
 #[test]

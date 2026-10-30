@@ -279,3 +279,26 @@ fn a_mixed_slider_shows_mixed_and_an_idle_frame_writes_nothing() {
     assert!(h.query_all_by_value("— mixed").count() >= 1);
     assert_eq!(h.state_mut().bulk_view().rows, before);
 }
+
+/// Review C4 (Note FB4): a row that applies to none of the selection shows "— not set", never the word `null`.
+#[test]
+fn a_bulk_row_that_applies_to_nothing_reads_not_set_never_null() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.click_item(ROCK, false, false);
+    m.click_item(LEAF, true, false);
+    let rows = m.bulk_view().rows.clone();
+    assert!(
+        rows.iter().any(|r| r.applies == 0),
+        "the fixture has a row that applies to 0"
+    );
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.get_by_label("2 textures selected");
+    let shown = |h: &Harness<'static, AppModel>, s: &str| {
+        h.query_all_by_label(s).count() + h.query_all_by_value(s).count()
+    };
+    assert_eq!(shown(&h, "null"), 0, "the word null is never drawn");
+    assert!(shown(&h, "— not set") >= 1, "an unset combo says so");
+}

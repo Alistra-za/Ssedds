@@ -120,10 +120,7 @@ pub fn close_after_device_loss() -> ! {
                     so Tessalith has to close."
         .to_string();
     if !kept.is_empty() {
-        text += &format!(
-            "\n\nUnsaved edits were kept in:\n{}\n\nRename a .recovery file over its original to restore it.",
-            kept.join("\n")
-        );
+        text += "\n\nUnsaved edits were kept and come back the next time you open the folder.";
     }
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
@@ -166,25 +163,71 @@ pub fn discard_recovery(file: &Path) {
     let _ = std::fs::remove_file(recovery_path(file));
 }
 
-/// The banner line for a recovery file newer than its document (or one whose document is gone); older ones are
-/// ignored.
-pub fn recovery_note(file: &Path) -> Option<String> {
+/// What `file`'s recovery file holds (Note FB5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Recovery {
+    /// No file, or an older one than the document: leave it alone.
+    None,
+    /// Nothing to restore (empty, whitespace only, or the same text as the file or the document): delete it.
+    Empty,
+    /// Newer than the document (or the document is gone) and different: restore this text.
+    Pending(String),
+}
+
+/// Line endings as `\n`, so a CRLF copy of the same text compares equal.
+fn lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
+/// Reads `file`'s recovery file. `doc_text` is the document as loaded, if any.
+pub fn recovery_text(file: &Path, doc_text: Option<&str>) -> Recovery {
+    recovery_text_held(file, doc_text, false)
+}
+
+/// [`recovery_text`]; `held` skips the age test: the document was read-only while the file waited, and fixing it by
+/// hand made it newer than the file.
+pub fn recovery_text_held(file: &Path, doc_text: Option<&str>, held: bool) -> Recovery {
     let rec = recovery_path(file);
-    let rec_time = std::fs::metadata(&rec).and_then(|m| m.modified()).ok()?;
-    let newer = std::fs::metadata(file)
-        .and_then(|m| m.modified())
-        .map_or(true, |t| rec_time > t);
+    let Ok(text) = std::fs::read_to_string(&rec) else {
+        return Recovery::None;
+    };
+    let on_disk = std::fs::read_to_string(file).ok();
+    let norm = lf(&text);
+    if norm.trim().is_empty()
+        || [on_disk.as_deref(), doc_text]
+            .into_iter()
+            .flatten()
+            .any(|t| lf(t) == norm)
+    {
+        return Recovery::Empty;
+    }
+    let rec_time = std::fs::metadata(&rec).and_then(|m| m.modified()).ok();
+    let newer = held
+        || std::fs::metadata(file)
+            .and_then(|m| m.modified())
+            .map_or(true, |t| rec_time.is_some_and(|r| r > t));
+    if newer {
+        Recovery::Pending(text)
+    } else {
+        Recovery::None
+    }
+}
+
+/// The banner line for a read-only document that has crash edits waiting: they are not applied, and come back once
+/// the file is fixed and reloaded (Note FB5). A document that can be edited gets no banner; its edits are restored.
+pub fn recovery_note(file: &Path, doc_text: &str, held: bool) -> Option<String> {
+    let Recovery::Pending(_) = recovery_text_held(file, Some(doc_text), held) else {
+        return None;
+    };
     let name = |p: &Path| {
         p.file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
     };
-    newer.then(|| {
-        format!(
-            "Unsaved edits from a crash were kept in {}: rename it over {} to restore, or delete it.",
-            name(&rec),
-            name(file)
-        )
-    })
+    Some(format!(
+        "Unsaved edits from a crash are in {}; they come back when {} is fixed and reloaded.",
+        name(&recovery_path(file)),
+        name(file)
+    ))
 }
 
 /// [`install_in`] the `%LOCALAPPDATA%\sdc\logs` folder.
@@ -250,6 +293,70 @@ mod tests {
         assert_eq!(stamp(0), "19700101-000000");
         assert_eq!(stamp(1_760_000_000), "20251009-085320");
         assert_eq!(stamp(951_782_400 + 3661), "20000229-010101");
+    }
+
+    fn age(p: &Path, secs: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(p)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs))
+            .unwrap();
+    }
+
+    /// Note FB5: only a newer, non-empty, different recovery file is restored; an empty or equal one is deleted
+    /// (Review Focus 2); an older one is left alone.
+    #[test]
+    fn recovery_text_sorts_files_into_pending_empty_and_none() {
+        let d = tempfile::tempdir().unwrap();
+        let doc = d.path().join("sdc.toml");
+        let rec = recovery_path(&doc);
+        assert_eq!(recovery_text(&doc, None), Recovery::None, "no file");
+        std::fs::write(&doc, "a = 1\n").unwrap();
+        age(&doc, 1_000);
+        std::fs::write(&rec, "a = 2\n").unwrap();
+        assert_eq!(
+            recovery_text(&doc, Some("a = 1\n")),
+            Recovery::Pending("a = 2\n".into())
+        );
+        std::fs::write(&rec, " \r\n\t").unwrap();
+        assert_eq!(recovery_text(&doc, None), Recovery::Empty, "whitespace");
+        std::fs::write(&rec, "a = 1\r\n").unwrap();
+        assert_eq!(
+            recovery_text(&doc, None),
+            Recovery::Empty,
+            "CRLF copy of the file"
+        );
+        std::fs::write(&rec, "b = 1\r\n").unwrap();
+        assert_eq!(
+            recovery_text(&doc, Some("b = 1\n")),
+            Recovery::Empty,
+            "equal to the document"
+        );
+        std::fs::write(&rec, "a = 2\n").unwrap();
+        age(&rec, 10);
+        assert_eq!(
+            recovery_text(&doc, None),
+            Recovery::None,
+            "older than the file"
+        );
+        std::fs::remove_file(&doc).unwrap();
+        assert_eq!(
+            recovery_text(&doc, None),
+            Recovery::Pending("a = 2\n".into()),
+            "the document is gone"
+        );
+    }
+
+    #[test]
+    fn the_read_only_note_names_both_files() {
+        let d = tempfile::tempdir().unwrap();
+        let doc = d.path().join("sdc.toml");
+        std::fs::write(recovery_path(&doc), "a = 2\n").unwrap();
+        assert_eq!(
+            recovery_note(&doc, "", false).as_deref(),
+            Some("Unsaved edits from a crash are in sdc.toml.recovery; they come back when sdc.toml is fixed and reloaded.")
+        );
     }
 
     /// Trace-debug 2026-10-16 #47: a second crash keeps the first crash's unrestored `.recovery` beside the new one.

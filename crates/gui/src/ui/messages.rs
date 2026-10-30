@@ -2,7 +2,7 @@
 //! frame by `SdcApp` for both views; the store is `model::messages`.
 use super::motion;
 use super::status::{AMBER, RED};
-use crate::model::messages::{Severity, Toast, FADE_OUT};
+use crate::model::messages::{Severity, Toast, ToastAction, FADE_OUT};
 use crate::model::AppModel;
 use eframe::egui::{self, emath};
 use std::collections::HashSet;
@@ -58,6 +58,7 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
         RISE
     };
     let mut rects = Rects::default();
+    let mut clicked: Option<(u64, ToastAction)> = None;
     if !toasts.is_empty() {
         // shortcut: the anchored Area places itself from last frame's size, so a new toast's first visible frame
         // draws the stack one toast low; `request_discard` would fix it but can handle a click twice. Upgrade if
@@ -65,7 +66,8 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
         egui::Area::new(egui::Id::new("toasts"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .order(egui::Order::Foreground)
-            .interactable(false)
+            // Clicks pass through, unless a toast has a button (Note FB5).
+            .interactable(toasts.iter().any(|t| t.action.is_some()))
             // Each toast fades itself; the Area's own fade would fade the first one twice.
             .fade_in(false)
             .show(ctx, |ui| {
@@ -91,9 +93,30 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
                         ui.multiply_opacity(a);
                         let shift = emath::TSTransform::from_translation(egui::vec2(0.0, dy));
                         ui.with_visual_transform(shift, |ui| {
-                            egui::Frame::popup(ui.style()).show(ui, |ui| match color(t.severity) {
-                                Some(c) => ui.colored_label(c, &t.text),
-                                None => ui.label(&t.text),
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                let text = |ui: &mut egui::Ui| match color(t.severity) {
+                                    Some(c) => ui.colored_label(c, &t.text),
+                                    None => ui.label(&t.text),
+                                };
+                                let Some(action) = t.action else {
+                                    text(ui);
+                                    return;
+                                };
+                                ui.horizontal(|ui| {
+                                    text(ui);
+                                    let b = ui.small_button("Undo");
+                                    // The header has an Undo too: this one names what it takes back.
+                                    b.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::WidgetType::Button,
+                                            true,
+                                            "Undo the restored crash edits",
+                                        )
+                                    });
+                                    if b.clicked() {
+                                        clicked = Some((t.id, action));
+                                    }
+                                });
                             })
                         })
                     });
@@ -102,6 +125,12 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
             });
     }
     ctx.data_mut(|d| d.insert_temp(id, rects));
+    if let Some((toast, action)) = clicked {
+        model.messages.dismiss(toast);
+        match action {
+            ToastAction::UndoCrashRestore => model.undo_crash_restore(),
+        }
+    }
     // A resting toast wakes once, when its fade is due; the animate call above repaints while anything moves. A
     // hovered toast's clock is stopped, so it needs no timer: the pointer leaving is an input event.
     let next = toasts
@@ -117,7 +146,8 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
 /// The Messages tab: time, severity and text of the last entries, newest first, and a Clear button.
 pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     ui.horizontal(|ui| {
-        ui.label(format!("{} messages", model.messages.len()));
+        let n = model.messages.len();
+        ui.label(format!("{n} message{}", super::review::plural(n)));
         if ui
             .add_enabled(!model.messages.is_empty(), egui::Button::new("Clear"))
             .clicked()
