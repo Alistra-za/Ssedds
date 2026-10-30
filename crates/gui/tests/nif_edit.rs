@@ -4355,6 +4355,42 @@ fn an_undone_session_keeps_its_live_document_on_a_folder_change() {
     assert_eq!(op_values(&m)[0].1, 12.5);
 }
 
+/// Note GD21: a recovered autosave with no ops (every edit undone without a folder) is unsaved live state: a folder
+/// change before the next edit keeps it, and the new folder's saved edit is replaced (said in Messages).
+#[test]
+fn a_recovered_empty_autosave_stays_on_a_folder_change() {
+    let (d, mut m) = export_session();
+    let out = d.path().join(r"mods\MyOut");
+    m.set_nif_export_root(Some(out.clone()));
+    m.open_edit();
+    gloss(&mut m, 7.5);
+    m.close_edit();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(m.undo_edit());
+    m.close_edit();
+    assert!(load(&autosave(&d)).unwrap().unwrap().ops.is_empty());
+    m.set_nif_export_root(Some(d.path().join(r"mods\Good")));
+    m.open_edit();
+    assert!(
+        m.edit.as_ref().unwrap().doc.ops.is_empty(),
+        "the empty autosave is recovered"
+    );
+    m.messages.clear();
+    m.set_nif_export_root(Some(out.clone()));
+    let e = m.edit.as_ref().unwrap();
+    assert_eq!(e.doc_path, nif_doc(&out));
+    assert!(e.doc.ops.is_empty(), "the recovered state stays");
+    assert_eq!(
+        m.messages.first(),
+        Some(&format!(
+            "Export folder changed: the open edit of meshes/x.nif replaced {}'s saved edits.",
+            nif_doc(&out).display()
+        ))
+    );
+}
+
 /// Note GD12: back to the folder the edit never left, the block clears and the edit saves there.
 #[test]
 fn going_back_from_a_failed_folder_change_clears_the_block() {

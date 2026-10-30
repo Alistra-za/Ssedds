@@ -718,9 +718,11 @@ impl NifEdit {
     /// Why the current state cannot be exported, from memory alone (export steps 2-4): refused ops first (A16 keeps
     /// them as conflicts), then conflicts, new validation errors and bytes that do not read back.
     /// Note GD13: the session holds live work: ops, an undo or redo step, or an export to put back (every edit undone
-    /// after an export). Only an untouched session may be replaced by a folder's saved document.
+    /// after an export) or, Note GD21, an unsaved state (a recovered autosave, even one with no ops). Only an
+    /// untouched session may be replaced by a folder's saved document.
     pub fn touched(&self) -> bool {
-        !self.doc.ops.is_empty()
+        self.unsaved
+            || !self.doc.ops.is_empty()
             || self.history.can_undo()
             || self.history.can_redo()
             || self.doc.pending()
