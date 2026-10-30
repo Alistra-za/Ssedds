@@ -60,7 +60,7 @@ fn the_action_table_has_unique_ids_and_shortcuts() {
         ("undo", "Ctrl+Z"),
         ("redo", "Ctrl+Y or Ctrl+Shift+Z"),
         ("select-all", "Ctrl+A"),
-        ("clear", "Esc"),
+        ("clear", ""),
         ("rename", "F2"),
         ("close-preview", "Esc"),
         ("problems-accept", "Enter or Space"),
@@ -623,4 +623,57 @@ fn the_palette_and_the_sheet_open_without_a_fade() {
     h.state_mut().dialog = Some(sdc_gui::model::Dialog::Error("Boom".into()));
     let (first, rest) = first_and_rest(&mut h);
     assert!(first < rest, "the control must fade: {first} vs {rest}");
+}
+
+/// Owner amendment G (Note FB11): Esc closes things and never clears the selection.
+#[test]
+fn esc_keeps_the_selection() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ten(d.path());
+    m.selection = Selection::Item(k(2));
+    let mut h = keys_only(m);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(h.state().1, None, "no action runs on Esc");
+    assert_eq!(h.state().0.selection, Selection::Item(k(2)));
+    assert_eq!(h.state().0.selected_items(), vec![k(2)]);
+    assert_eq!(
+        actions::keys_text("clear"),
+        "",
+        "the palette entry has no key"
+    );
+}
+
+#[test]
+fn esc_still_closes() {
+    let d = tempfile::tempdir().unwrap();
+    // The expanded preview.
+    let mut m = ten(d.path());
+    m.selection = Selection::Item(k(2));
+    m.expanded = Some(k(2));
+    let mut h = keys_only(m);
+    press(&mut h, Modifiers::NONE, Key::Escape);
+    assert_eq!(h.state().0.expanded, None, "Esc collapses the preview");
+    assert_eq!(h.state().0.selection, Selection::Item(k(2)));
+    // A dialog and a popup (the palette), in the whole app.
+    let mut m = opened(d.path());
+    m.selection = Selection::Item("landscape/leaf.png".into());
+    let mut h = app_harness(m);
+    h.run();
+    h.state_mut().dialog = Some(sdc_gui::model::Dialog::Error("Boom".into()));
+    h.run();
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().dialog.is_none(), "Esc closes the dialog");
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    h.run();
+    assert!(h.state().nav.palette.is_some());
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.state().nav.palette.is_none(), "Esc closes the palette");
+    assert_eq!(
+        h.state().selection,
+        Selection::Item("landscape/leaf.png".into()),
+        "the selection stayed through every Esc"
+    );
 }

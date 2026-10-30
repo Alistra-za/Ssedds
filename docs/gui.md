@@ -112,7 +112,7 @@ Per-texture `[files]` entries sit above preset and config rules and analysis, an
 - **Shift+click** selects the range from the last clicked entry, in the order shown (search and filters applied).
 - **Ctrl+A** selects everything shown (in the Sets column, the visible sets only). With nothing shown, because a filter hides everything, it does nothing and keeps the selection, in both columns.
 - Helper rows: Ctrl+click and Shift+click work on them (a Shift+click range runs over the tiles, then the helper rows shown). Ctrl+A and the arrow keys (with or without Shift) cover tiles only.
-- **Esc** clears the selection.
+- **Esc** never clears the selection (it only closes a popup, the preview or a dialog). *Clear the selection* is in the command palette (Ctrl+K), with no key.
 
 Textures and sets are never selected together. The column heading counts the selection, for example *12 selected (4 hidden by filter)*: textures hidden by the search or a filter stay selected and are edited too. Sets work the same way (*2 selected (1 hidden by filter)*).
 
@@ -619,7 +619,6 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | Global | Ctrl+Z | Undo |
 | Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
 | Textures grid | Ctrl+A | Select every visible texture (every set when a set is active) |
-| Textures grid | Esc | Clear the selection |
 | Textures grid | Left | Select the texture to the left |
 | Textures grid | Right | Select the texture to the right |
 | Textures grid | Up | Select the texture above |

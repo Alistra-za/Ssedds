@@ -52,8 +52,7 @@ impl Area {
         }
     }
 
-    /// Two areas that are never live at once may share a key (Esc clears the selection in the grid and closes the
-    /// preview; Enter opens the preview from the grid and presses a dialog's default).
+    /// Two areas that are never live at once may share a key (Enter opens the preview from the grid and presses a dialog's default).
     pub fn exclusive_with(self, other: Area) -> bool {
         use Area::*;
         let both = |a, b| (self == a && other == b) || (self == b && other == a);
@@ -319,13 +318,9 @@ pub static ACTIONS: &[Action] = &[
         &[ctrl(Key::A)],
         |m, _| m.select_all_visible(),
     ),
-    a(
-        "clear",
-        "Clear the selection",
-        Grid,
-        &[key(Key::Escape)],
-        |m, _| m.clear_selection(),
-    ),
+    a("clear", "Clear the selection", Grid, &[], |m, _| {
+        m.clear_selection()
+    }),
     unlisted(a(
         "left",
         "Select the texture to the left",
