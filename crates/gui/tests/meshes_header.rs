@@ -42,7 +42,15 @@ fn the_meshes_view_keeps_the_header() {
     h.get_by_label("Files");
     header_export_label(&h);
     // Meshes UI T3 (owner decision 4): in the Meshes view the textures Export's hover says where NIF edits export.
+    // Note FD: step egui's simulated clock past the tooltip delay, not `run()`; a live worker's poll keeps frames
+    // coming, and `run()` stops after 4 of them.
+    const TIP: &str = "NIF edits export with Export NIF in the edit panel.";
     h.get_by_label(&header_export_label(&h)).hover();
-    h.run();
-    h.get_by_label_contains("NIF edits export with Export NIF in the edit panel.");
+    for _ in 0..12 {
+        h.step();
+        if h.query_by_label_contains(TIP).is_some() {
+            break;
+        }
+    }
+    h.get_by_label_contains(TIP);
 }
