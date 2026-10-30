@@ -112,7 +112,8 @@ impl Sim {
         // Vertex-colour multipliers run only on shapes that have vertex colours (after `vertex_colors`).
         let vc_after = get_bool(e, "vertex_colors").unwrap_or(self.m.has_vertex_colors);
         for k in BADGE_KEYS {
-            if !e.contains_key(k) {
+            // 2.x skips a non-number value [Src 2.2.0 TP:756, 763, 787-788], so the preview misses nothing.
+            if !e.get(k).is_some_and(Value::is_number) {
                 continue;
             }
             let shown = match k {
@@ -229,22 +230,25 @@ impl Sim {
                 self.mlp[2] = v;
                 self.mlp[3] = v;
             }
-        } else if let Some(glint) = e.get("glint") {
+        } else if let Some(g) = e.get("glint").and_then(Value::as_object) {
+            // [Src 2.2.0 TP:1162]: only an object picks the branch.
             self.m.shader_type = TYPE_MLP;
             self.f2(SLSF2_FIT_SLOPE, true);
-            if let Some(g) = glint.as_object() {
-                for (slot, k) in self.mlp.iter_mut().zip(GLINT_KEYS) {
-                    if let Some(v) = get_num(g, k) {
-                        *slot = v;
-                    }
+            for (slot, k) in self.mlp.iter_mut().zip(GLINT_KEYS) {
+                if let Some(v) = get_num(g, k) {
+                    *slot = v;
                 }
             }
-        } else if let Some(fuzz) = e.get("fuzz") {
+        } else if let Some(z) = e.get("fuzz").and_then(Value::as_object) {
+            // [Src 2.2.0 TP:1191, 1201-1206]: an object; `color` exactly three numbers, else black.
             self.m.shader_type = TYPE_MLP;
             self.f2(SLSF2_SOFT, true);
-            let z = fuzz.as_object();
-            let [r, g, b] = z.and_then(|z| rgb(z, "color", 3)).unwrap_or([0.0; 3]);
-            let w = z.and_then(|z| get_num(z, "weight")).unwrap_or(1.0);
+            let three = z
+                .get("color")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.len() == 3);
+            let [r, g, b] = rgb(z, "color", 3).filter(|_| three).unwrap_or([0.0; 3]);
+            let w = get_num(z, "weight").unwrap_or(1.0);
             self.mlp = [r, g, b, w];
         } else {
             self.m.shader_type = TYPE_DEFAULT;
@@ -254,7 +258,8 @@ impl Sim {
             if !hair {
                 self.f2(SLSF2_BACK, false);
             }
-            if !e.contains_key("fuzz") {
+            // [Src 2.2.0 TP:1230]: absent or not an object.
+            if !e.get("fuzz").is_some_and(Value::is_object) {
                 self.f2(SLSF2_SOFT, false);
             }
         }

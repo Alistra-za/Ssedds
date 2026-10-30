@@ -383,22 +383,105 @@ fn facegen_rgb_tint_is_patched_and_cleared() {
     assert!(!bit(m.slsf1, 21));
 }
 
+/// GE4: 2.x reads each patch key only when it has its type and skips it otherwise; the valid keys still apply
+/// [Src 2.2.0 TP:52-57, 744-1235; measured T9].
 #[test]
-fn wrong_json_type_is_a_skip() {
-    let r = sim(&with(json!({"emissive": "yes"})), &sdc_default(), &rock());
-    assert!(
-        matches!(&r, SimResult::Skip(s) if s.contains("\"emissive\"")),
-        "{r:?}"
+fn wrong_typed_patch_key_is_ignored() {
+    let src = shape(&[D, N, "textures\\landscape\\rock01_g.dds"]);
+    let e = with(json!({
+        "emissive": "yes", "specular_level": "high", "displacement_scale": 0.75, "roughness_scale": 0.5,
+        "subsurface_color": "red", "emissive_color": [0.1, 0.2, 0.3, "x"], "uv_scale": [2],
+        "vertex_colors": 1, "slot1": 5, "cubemap": 5, "lock_diffuse": "yes", "smooth_angle": "60"
+    }));
+    let (m, mp, badges) = patched(sim(&e, &Value::Null, &src));
+    assert_eq!(mp, MP);
+    assert!(badges.is_empty(), "{badges:?}");
+    assert_eq!(m.params.lighting_effect_2, f(0.75));
+    assert_eq!(m.params.specular_strength, f(0.5));
+    assert_eq!(m.params.glossiness, src.params.glossiness);
+    assert_eq!(m.params.specular_color, src.params.specular_color);
+    assert_eq!(m.params.emissive_color, src.params.emissive_color);
+    assert_eq!(m.params.uv_scale, src.params.uv_scale);
+    assert_eq!(m.has_vertex_colors, src.has_vertex_colors);
+    assert_eq!(
+        m.slots[0].raw,
+        format!("{MP}.dds"),
+        "slot1 and lock_diffuse ignored"
     );
+    assert_eq!(m.slots[2].raw, "textures\\landscape\\rock01_g.dds");
+    assert_eq!(m.slots[4].raw, "", "a non-string cubemap clears slot 4");
+    assert!(!bit(m.slsf1, 29));
     let r = sim(
-        &with(json!({"fuzz": {"color": [1, 1]}})),
+        &with(json!({"fuzz": {"color": [1, 1], "weight": "x", "texture": 1}})),
         &sdc_default(),
         &rock(),
     );
-    assert!(
-        matches!(&r, SimResult::Skip(s) if s.contains("fuzz.color")),
-        "{r:?}"
-    );
+    let (m, _, _) = patched(r);
+    assert_eq!(m.params.trailer, mlp(0.0, 0.0, 0.0, 1.0));
+    assert_eq!(m.slots[6].raw, "");
+}
+
+/// GE4: `fuzz.color` must be exactly three numbers, else (0, 0, 0) [Src 2.2.0 TP:1201-1206; measured T10].
+#[test]
+fn fuzz_color_with_four_numbers_is_black() {
+    let e = with(json!({"fuzz": {"color": [0.5, 0.5, 0.5, 1.0], "weight": 0.5}}));
+    let (m, _, _) = patched(sim(&e, &sdc_default(), &rock()));
+    assert_eq!(m.shader_type, 11);
+    assert!(bit(m.slsf2, 25));
+    assert_eq!(m.params.trailer, mlp(0.0, 0.0, 0.0, 0.5));
+}
+
+/// GE4: `glint` / `fuzz` pick their branch only as objects; a non-object `fuzz` clears SLSF2.25 like an absent
+/// one [Src 2.2.0 TP:1162, 1191, 1230].
+#[test]
+fn non_object_glint_or_fuzz_gives_type_0() {
+    let mut src = rock();
+    src.slsf2 = with_bits(0, &[25]);
+    for e in [
+        json!({"glint": 1}),
+        json!({"glint": true}),
+        json!({"fuzz": [0.5, 0.5, 0.5]}),
+        json!({"fuzz": true}),
+    ] {
+        let (m, _, _) = patched(sim(&with(e.clone()), &sdc_default(), &src));
+        assert_eq!(m.shader_type, 0, "{e}");
+        assert!(!bit(m.slsf2, 12), "{e}: Fit_Slope");
+        assert!(!bit(m.slsf2, 25), "{e}: Soft");
+        assert_eq!(m.params.trailer, LightingTrailer::None, "{e}");
+    }
+}
+
+/// GE4: `emissive` / `parallax` touch their slot only as booleans [Src 2.2.0 TP:966, 977; measured T9].
+#[test]
+fn non_boolean_emissive_leaves_the_slot() {
+    let g = "textures\\landscape\\rock01_g.dds";
+    let p = "textures\\landscape\\rock01_p.dds";
+    let mut src = shape(&[D, N, g, p]);
+    src.slsf1 = with_bits(0, &[29]);
+    for v in [json!("yes"), json!(1), json!(null)] {
+        let e = with(json!({"emissive": v.clone(), "parallax": v.clone()}));
+        let (m, _, _) = patched(sim(&e, &Value::Null, &src));
+        assert_eq!(m.slots[2].raw, g, "{v}");
+        assert_eq!(m.slots[3].raw, p, "{v}");
+        assert!(bit(m.slsf1, 29), "{v}: SLSF1.29 untouched");
+    }
+}
+
+/// GE4: a boolean is not a number in 2.x (`is_number()`), and only boolean `true` deletes [Src 2.2.0 TP:396-397, 868].
+#[test]
+fn boolean_number_is_ignored() {
+    let src = rock();
+    let e = with(json!({
+        "roughness_scale": true, "specular_level": false, "subsurface_color": [true, 0, 0],
+        "multilayer": true, "coat_strength": true, "smooth_angle": true, "auto_uv": false, "delete": 1
+    }));
+    let (m, _, badges) = patched(sim(&e, &Value::Null, &src));
+    assert!(!m.hidden, "delete: 1 is not true");
+    assert!(badges.is_empty(), "{badges:?}");
+    assert_eq!(m.params.specular_strength, src.params.specular_strength);
+    assert_eq!(m.params.glossiness, src.params.glossiness);
+    assert_eq!(m.params.specular_color, src.params.specular_color);
+    assert_eq!(m.params.lighting_effect_1, src.params.lighting_effect_1);
 }
 
 // ---- PGPatcher 2.2 alphaprop_* (GUI suggestions item 5) ----

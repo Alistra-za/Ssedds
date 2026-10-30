@@ -1,6 +1,6 @@
 //! The slot rewrite (`applyOnePatchSlots`, 01 §2.3 slot table) and the missing-texture check (01 §1.4).
 
-use crate::json::flag;
+use crate::json::{flag, get_bool};
 use serde_json::{Map, Value};
 
 /// `applyOnePatchSlots` [Src 1.2.0 TP:865-965]. `slots` are PGPatcher's lower-cased strings; `mp` is the
@@ -15,15 +15,16 @@ pub(crate) fn apply_slots(slots: &mut [String; 9], e: &Map<String, Value>, mp: &
     if !flag(e, "lock_normal") {
         slots[1] = format!("{mp}_n.dds");
     }
-    if e.contains_key("emissive") && !flag(e, "lock_emissive") {
-        slots[2] = if flag(e, "emissive") {
+    // Only a boolean touches the slot [Src 2.2.0 TP:966, 977].
+    if let Some(on) = get_bool(e, "emissive").filter(|_| !flag(e, "lock_emissive")) {
+        slots[2] = if on {
             format!("{mp}_g.dds")
         } else {
             String::new()
         };
     }
-    if e.contains_key("parallax") && !flag(e, "lock_parallax") {
-        slots[3] = if flag(e, "parallax") {
+    if let Some(on) = get_bool(e, "parallax").filter(|_| !flag(e, "lock_parallax")) {
+        slots[3] = if on {
             format!("{mp}_p.dds")
         } else {
             String::new()
