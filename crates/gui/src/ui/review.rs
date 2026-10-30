@@ -260,11 +260,11 @@ fn json_line_text(l: &JsonLine) -> String {
     }
 }
 
-/// A column: its heading, then `body` in a scroll area of its own.
-/// `key` names the scroll area, so a heading that carries a count keeps the column's scroll position.
-/// Note FB10: under this width the Review sections stack in one scroll area.
+/// Note FB10: under this window width the Review sections stack in one scroll area.
 const STACK_BELOW: f32 = 1200.0;
 
+/// A column: its heading, then `body` in a scroll area of its own.
+/// `key` names the scroll area, so a heading that carries a count keeps the column's scroll position.
 fn column(ui: &mut egui::Ui, key: &str, heading: &str, body: impl FnOnce(&mut egui::Ui)) {
     ui.strong(heading);
     // ui-rules 3.2: a bar drawn without hover, so a column that overflows says so.
@@ -623,41 +623,37 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     // One body per column, drawn side by side or stacked (Note FB10).
     let mut body = |ui: &mut egui::Ui, i: usize| match i {
         0 => {
-            {
-                {
-                    if blockers == 0 {
-                        ui.weak("None");
+            if blockers == 0 {
+                ui.weak("None");
+            }
+            // Note FB1: the export folder is a blocker until one is chosen for this project.
+            if !folder_chosen {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(RED, NO_EXPORT_FOLDER);
+                    let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                    r.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            r.enabled(),
+                            "Choose the export folder…",
+                        )
+                    });
+                    let r = r
+                        .on_hover_text("Choose where converted textures are written")
+                        .on_disabled_hover_text(picker::BUSY_HOVER);
+                    if r.clicked() {
+                        act = Some(Act::ChooseExport);
                     }
-                    // Note FB1: the export folder is a blocker until one is chosen for this project.
-                    if !folder_chosen {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(RED, NO_EXPORT_FOLDER);
-                            let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
-                            r.widget_info(|| {
-                                egui::WidgetInfo::labeled(
-                                    egui::WidgetType::Button,
-                                    r.enabled(),
-                                    "Choose the export folder…",
-                                )
-                            });
-                            let r = r
-                                .on_hover_text("Choose where converted textures are written")
-                                .on_disabled_hover_text(picker::BUSY_HOVER);
-                            if r.clicked() {
-                                act = Some(Act::ChooseExport);
-                            }
-                        });
+                });
+            }
+            for b in &blocks {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(RED, &b.text);
+                    // A project-wide issue has no set to go to.
+                    if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
+                        act = Some(Act::GoTo(b.set_key.clone()));
                     }
-                    for b in &blocks {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(RED, &b.text);
-                            // A project-wide issue has no set to go to.
-                            if !b.set_key.is_empty() && ui.button("Go to set").clicked() {
-                                act = Some(Act::GoTo(b.set_key.clone()));
-                            }
-                        });
-                    }
-                }
+                });
             }
         }
         1 => {
@@ -684,40 +680,38 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             }
         }
         2 => {
+            if asks.is_empty() {
+                ui.weak("None that block the export");
+            }
+            let mut set = None;
+            for a in &asks {
+                // Grouped by set: `export_asks` lists each set's pitfalls together.
+                if set != Some(&a.set_id) {
+                    set = Some(&a.set_id);
+                    ui.colored_label(AMBER, &a.set_id);
+                }
+                let mut on = review.acknowledged.contains(&a.text);
+                if ui.checkbox(&mut on, &a.text).changed() {
+                    act = Some(Act::Tick(a.text.clone(), on));
+                }
+            }
+            if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
+                act = Some(Act::AckAll);
+            }
+            if others > 0
+                && ui
+                    .link(format!(
+                        "{others} warning{} in Problems (do not block)",
+                        plural(others)
+                    ))
+                    .clicked()
             {
-                if asks.is_empty() {
-                    ui.weak("None that block the export");
-                }
-                let mut set = None;
-                for a in &asks {
-                    // Grouped by set: `export_asks` lists each set's pitfalls together.
-                    if set != Some(&a.set_id) {
-                        set = Some(&a.set_id);
-                        ui.colored_label(AMBER, &a.set_id);
-                    }
-                    let mut on = review.acknowledged.contains(&a.text);
-                    if ui.checkbox(&mut on, &a.text).changed() {
-                        act = Some(Act::Tick(a.text.clone(), on));
-                    }
-                }
-                if !asks.is_empty() && ui.button("Acknowledge all").clicked() {
-                    act = Some(Act::AckAll);
-                }
-                if others > 0
-                    && ui
-                        .link(format!(
-                            "{others} warning{} in Problems (do not block)",
-                            plural(others)
-                        ))
-                        .clicked()
-                {
-                    act = Some(Act::Others);
-                }
+                act = Some(Act::Others);
             }
         }
         _ => also_section(ui, m, also_err.as_deref(), &mut act),
     };
-    if ui.available_width() < STACK_BELOW {
+    if ui.ctx().content_rect().width() < STACK_BELOW {
         // Note FB10: one scrolling column, the sections one under another.
         ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
         egui::ScrollArea::vertical()
