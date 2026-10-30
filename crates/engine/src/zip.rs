@@ -13,11 +13,44 @@ pub enum ZipError {
     Cancelled,
 }
 
+/// Entries a zip without ZIP64 can hold: 65,535 or more is refused (0xFFFF is the EOCD's ZIP64 sentinel, review M4).
+pub const MAX_ENTRIES: usize = 0xFFFF;
+/// Bytes a zip without ZIP64 can hold: a size or offset of `u32::MAX` (4 GiB - 1) or more is refused.
+pub const MAX_BYTES: u64 = u32::MAX as u64;
+
+/// Note FC12 (CN45): what a zip of the planned outputs would hold, known before anything is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ZipEstimate {
+    pub entries: usize,
+    /// The outputs' uncompressed sizes summed: an upper bound on the zip's data (a stored zip is this size).
+    pub bytes: u64,
+}
+
+impl ZipEstimate {
+    /// Within the ZIP format's limits, so `write_zip` will not return `TooLarge` for it.
+    pub fn fits(&self) -> bool {
+        self.entries < MAX_ENTRIES && self.bytes < MAX_BYTES
+    }
+}
+
+/// The estimate for a zip of outputs of these uncompressed sizes (one per planned output).
+// shortcut: headers and the central directory are not counted, and Deflate's few bytes of growth on incompressible data
+// are not either; at the 4 GiB edge that can still let `write_zip` say `TooLarge`; count them if a mod lands there.
+pub fn estimate(sizes: impl IntoIterator<Item = u64>) -> ZipEstimate {
+    sizes
+        .into_iter()
+        .fold(ZipEstimate::default(), |e, b| ZipEstimate {
+            entries: e.entries + 1,
+            bytes: e.bytes.saturating_add(b),
+        })
+}
+
 /// The archive of exactly `files` (paths under `folder`, TA23), entries named `<folder name>/<rel>` with `/`.
 // shortcut: the whole zip is buffered in RAM, and `may_replace` then reads the old zip to compare, so peak RAM is about
-// twice the zip size (near 8 GiB at TA17's 4 GiB ceiling); upgrade to a temp file plus rename (same flush) and a
-// streaming compare if a real mod gets near it. A cancel is seen between entries (`ZipError::Cancelled`).
-// shortcut: no ZIP64 (TA17): 65,535 entries, or 4 GiB - 1 bytes, or more is `TooLarge`; upgrade if a real mod hits it.
+// twice the zip size (near 8 GiB at TA17's 4 GiB ceiling); write a streaming writer (a temp file plus rename, same
+// flush, and a streaming compare) when a user hits it. A cancel is seen between entries (`ZipError::Cancelled`).
+// shortcut: no ZIP64 (TA17): MAX_ENTRIES entries, or MAX_BYTES bytes, or more is `TooLarge`; the GUI refuses that up
+// front from `estimate` (Note FC12); upgrade if a real mod hits it.
 pub fn write_zip(
     folder: &Path,
     files: &[PathBuf],
@@ -41,7 +74,7 @@ pub fn write_zip(
         .collect();
     named.sort();
     // 0xFFFF entries would be the ZIP64 sentinel in the EOCD (review M4).
-    if named.len() >= 0xFFFF {
+    if named.len() >= MAX_ENTRIES {
         return Err(ZipError::TooLarge);
     }
     let fit = |n: usize| u32::try_from(n).ok().filter(|&n| n != u32::MAX);

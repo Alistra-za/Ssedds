@@ -111,6 +111,47 @@ fn plural(n: usize) -> &'static str {
 /// FC11 (Review Focus 4): a stale file whose stamp no longer matches its record, or that has none: no button.
 pub const STALE_NOT_OURS: &str = "edited since Tessalith wrote it: left alone";
 
+/// Note FC12 (CN45): the Blockers row of a zip over the ZIP format's limits, `None` when it fits.
+pub fn zip_block(e: &engine::zip::ZipEstimate) -> Option<String> {
+    (!e.fits()).then(|| {
+        format!(
+            "Zip too large for the ZIP format ({} files, {}); untick \"Also write a zip\" or split the export",
+            super::thousands(e.entries),
+            super::out_size::human(e.bytes)
+        )
+    })
+}
+
+impl AppModel {
+    /// Note FC12 (CN45): the zip of the export folder's planned outputs, when "Also write a zip" is on: the files an
+    /// export writes, each at its estimated DDS size.
+    // shortcut: only the PBR folder's outputs are counted (Vanilla and CM hold about as many) and an output whose
+    // source size the plan did not read counts 0 bytes; `write_zip` still refuses what slips past, as a note. Count
+    // the other folders' plans if a mod gets past this row and fails at the zip.
+    pub fn zip_estimate(&self) -> Option<engine::zip::ZipEstimate> {
+        if !(self.also_on() && self.also_config().zip) {
+            return None;
+        }
+        let session = self.session.as_ref();
+        let sizes = self.items.iter().filter_map(|i| {
+            let j = i.job.as_ref()?;
+            if matches!(
+                i.status,
+                ItemStatus::NeedsDecision | ItemStatus::PackedInto(_) | ItemStatus::Skipped(_)
+            ) {
+                return None;
+            }
+            let dims = j
+                .source
+                .and_then(|st| session.and_then(|s| s.cache().dims(&j.input, st)));
+            Some(dims.map_or(0, |d| {
+                super::out_size::estimate_job(d, &j.profile, j.cube.as_ref()).file_bytes()
+            }))
+        });
+        Some(engine::zip::estimate(sizes))
+    }
+}
+
 impl AppModel {
     /// FC11: a `Stale outputs` row: the path under the export folder, and why it is listed.
     pub fn stale_text(&self, s: &engine::manifest::StaleOutput) -> String {

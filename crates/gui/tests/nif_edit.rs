@@ -2155,7 +2155,12 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         "Undo NIF edit",
         "Redo NIF edit",
     ] {
-        let r = h.get_by_label(l).rect();
+        // Note FC12: the header's Undo/Redo name the NIF history too, so take the one in the panel.
+        let r = h
+            .query_all_by_label(l)
+            .map(|n| n.rect())
+            .find(|r| edit.contains(r.center()))
+            .unwrap_or_else(|| panic!("no {l} inside the panel {edit:?}"));
         assert!(
             edit.contains(r.center()),
             "{l} {r:?} outside the panel {edit:?}"
@@ -3694,8 +3699,18 @@ fn textures(h: &AppH) -> (bool, bool, Option<String>) {
     (m.can_undo(), m.can_redo(), m.undo_label().map(String::from))
 }
 
+/// The header's Undo or Redo: `name` itself, or `{name} NIF edit…` while the NIF history is the target (Note FC12).
 fn header_button<'a>(h: &'a AppH, name: &'a str) -> egui_kittest::Node<'a> {
-    h.get_by_role_and_label(AkRole::Button, name)
+    let header =
+        egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("header")).unwrap();
+    h.query_all_by_role(AkRole::Button)
+        .filter(|n| header.outer_rect.contains_rect(n.rect()))
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l == name || l.starts_with(&format!("{name} NIF edit")))
+        })
+        .unwrap_or_else(|| panic!("no header button {name}"))
 }
 
 fn press(h: &mut AppH, mods: egui::Modifiers, key: egui::Key) {
@@ -3790,7 +3805,8 @@ fn header_undo_enabled_state_and_hover_follow_the_nif_history() {
     );
     header_button(&h, "Undo").hover();
     h.run_steps(30);
-    h.get_by_label("Nothing to undo");
+    // Note FC12: the hover and the button name the NIF history.
+    h.get_by_label("Nothing to undo in the NIF edit history");
     tick(&mut h.state_mut().meshes, 40.5);
     h.state_mut().meshes.edit.as_mut().unwrap().flush();
     h.run_steps(4);
@@ -3798,12 +3814,12 @@ fn header_undo_enabled_state_and_hover_follow_the_nif_history() {
     assert!(header_button(&h, "Redo").accesskit_node().is_disabled());
     header_button(&h, "Undo").hover();
     h.run_steps(30);
-    h.get_by_label_contains("Undo the last NIF edit");
+    h.get_by_label_contains("(Ctrl+Z). Acts on the NIF edit history");
     header_button(&h, "Undo").click();
     h.run_steps(4);
     header_button(&h, "Redo").hover();
     h.run_steps(30);
-    h.get_by_label_contains("Redo the last NIF edit");
+    h.get_by_label_contains("Shift+Z). Acts on the NIF edit history");
 }
 
 /// Review: in the Textures view the header Undo and Ctrl+Z act on Textures although a NIF edit is open.

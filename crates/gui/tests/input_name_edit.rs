@@ -176,9 +176,18 @@ fn the_lock_defaults_to_the_folder_and_ctrl_arrows_move_it() {
     assert_eq!(free(&h), "rock01", "no lock right of the last separator");
 }
 
+/// Note FC12: the selector starts at the set's lowest unused match (2 here); the rename list is Match 1's.
+fn match1(h: &mut H) {
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 1 · diffuse").click();
+    h.run();
+}
+
 #[test]
 fn the_dropdown_lists_only_paths_under_the_lock() {
     let (_d, mut h) = harness();
+    match1(&mut h);
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
     h.get_by_label("Read this set's textures as");
@@ -186,61 +195,68 @@ fn the_dropdown_lists_only_paths_under_the_lock() {
     assert!(h.query_by_label("textures/other/thing").is_none());
 }
 
-/// Note DO: a pick from another slot switches the match to the slot the scan saw it in; unknown or in-slot keeps it.
+/// Note FC12 (supersedes DO5's auto-switch and DO6's unstored selector): the Match selector starts from the set's lowest
+/// unused match, a pick from "All slots" goes to the selector's match and never moves it, and the selector a user
+/// chooses is kept in `gui.toml` per project and set.
 #[test]
-fn a_pick_matches_in_the_slot_the_scan_saw_it_in() {
-    use sdc_gui::model::input_name::pick_slot;
-    assert_eq!(pick_slot(0b10, 1), 2, "a normal picked in slot 1");
-    assert_eq!(pick_slot(0b11, 1), 1, "used in slot 1 too");
-    assert_eq!(pick_slot(0b1, 2), 1, "a diffuse picked in slot 2");
-    assert_eq!(pick_slot(0, 3), 3, "unknown");
-    assert_eq!(
-        pick_slot(1 << 9, 4),
-        4,
-        "only in a slot PGPatcher has no match for"
-    );
-}
-
-/// Note DO: "All slots" lists every known texture; picking a normal sets `match2` (no rename) and the header's match
-/// selector follows to slot 2, whose list is the normals only.
-#[test]
-fn picking_a_normal_from_all_slots_sets_match2_and_switches_the_selector() {
+fn match_selector_starts_from_the_set_and_stays() {
     let (_d, mut h) = harness();
-    let mut known = h.state().0.known.as_ref().clone();
-    known
-        .textures
-        .insert("textures/landscape/rock02_n.dds".into(), 1 << 1);
-    h.state_mut().0.set_known(known);
-    h.run();
+    // match1 is the derived diffuse, so the lowest unused match is 2. A combo's accessible text is its value (10.8).
+    h.get_by_value("Match 2");
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
-    assert!(
-        h.query_by_label("textures/landscape/rock02_n").is_none(),
-        "slot 1 lists diffuses only"
-    );
     h.get_by_label(sdc_gui::ui::input_name::ALL_SLOTS).click();
     h.run();
-    h.get_by_label("textures/landscape/rock02_n").click();
+    // A diffuse (seen in slot 1 only) picked under Match 2: it is match2, the set is not renamed. (The list grew inside
+    // the open menu: its rows must still be inside the clip to take the click.)
+    h.get_by_label("textures/landscape/rock02").click();
     h.run();
     assert!(h.state_mut().0.wait_idle(Duration::from_secs(60)));
     h.run();
+    let rock = |m: &AppModel| {
+        json_entries(m)
+            .into_iter()
+            .find(|(v, _)| v.id == ROCK_SET)
+            .expect("the rock set")
+            .0
+    };
     let m = &h.state().0;
-    let v = json_entries(m)
-        .into_iter()
-        .find(|(v, _)| v.id == ROCK_SET)
-        .expect("the rock set")
-        .0;
     assert_eq!(
-        v.settings.get("match2").and_then(|x| x.as_str()),
-        Some("textures\\landscape\\rock02_n")
+        rock(m).settings.get("match2").and_then(|x| x.as_str()),
+        Some("textures\\landscape\\rock02")
     );
     assert_eq!(
         m.input_name_of(ROCK_SET).as_deref(),
         Some("textures/landscape/rock01"),
         "no rename"
     );
-    // A combo's accessible text is its value (egui-ui-rules 10.8).
     h.get_by_value("Match 2");
+    assert!(m.settings.match_slots.is_empty(), "nothing chosen yet");
+    // The user's choice is stored, and a new window starts from it.
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 4 · parallax").click();
+    h.run();
+    h.get_by_value("Match 4");
+    assert_eq!(
+        h.state()
+            .0
+            .settings
+            .match_slots
+            .values()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![4]
+    );
+    // A new session (egui's memory gone) starts from the stored choice ...
+    h.ctx.data_mut(|d| d.clear());
+    h.run();
+    h.get_by_value("Match 4");
+    // ... and with none stored, from the lowest unused match, now 3 (match2 is set).
+    h.state_mut().0.settings.match_slots.clear();
+    h.ctx.data_mut(|d| d.clear());
+    h.run();
+    h.get_by_value("Match 3");
 }
 
 #[test]
@@ -339,6 +355,7 @@ fn pbr_output_paths_are_never_offered() {
     focus(&mut h);
     key(&mut h, Key::ArrowLeft, ctrl());
     key(&mut h, Key::Escape, Modifiers::NONE);
+    match1(&mut h);
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
     h.get_by_label("textures/landscape/rock02");

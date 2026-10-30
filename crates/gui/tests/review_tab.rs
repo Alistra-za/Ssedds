@@ -671,3 +671,82 @@ fn review_shows_one_row_per_cause() {
         .err()
         .is_none_or(|e| !e.starts_with("Acknowledge")));
 }
+
+/// Note FC12 (supersedes DS26's "no warning"): a portrait photo read as a cube loses its top and bottom; Review says
+/// which part is used, as a Warning to acknowledge before the export.
+#[test]
+fn portrait_face_is_a_row() {
+    use engine::config::Subtype;
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let r = d.path().join("textures/sky");
+    std::fs::create_dir_all(&r).unwrap();
+    image::RgbImage::from_fn(64, 128, |x, y| image::Rgb([x as u8, y as u8, 40]))
+        .save(r.join("photo.png"))
+        .unwrap();
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.open_folder(d.path().join("textures"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    choose_export(&mut m, d.path().join("export"));
+    m.decide("sky/photo.png", Answer::Subtype(Subtype::Cubemap));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_field("sky/photo.png", "cubemap.layout", json!("photo"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    const ROW: &str = "Only the middle 64×64 of photo.png is used";
+    let asks: Vec<String> = pbr_export::export_asks(&m)
+        .into_iter()
+        .map(|a| a.text)
+        .collect();
+    assert!(asks.iter().any(|a| a == ROW), "{asks:?}");
+    m.open_review();
+    let mut h = harness(m);
+    h.run();
+    assert!(h
+        .state()
+        .review_gate()
+        .is_err_and(|e| e.starts_with("Acknowledge")));
+    h.get_by_role_and_label(Role::CheckBox, ROW).click();
+    h.run();
+    assert!(h
+        .state()
+        .review
+        .as_ref()
+        .unwrap()
+        .acknowledged
+        .contains(ROW));
+    // A landscape photo (wider than tall) is used whole: no row.
+    let w = image::RgbImage::from_fn(128, 64, |x, y| image::Rgb([x as u8, y as u8, 40]));
+    w.save(r.join("photo.png")).unwrap();
+    h.state_mut().replan();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    assert!(pbr_export::export_asks(h.state())
+        .iter()
+        .all(|a| !a.text.starts_with("Only the middle")));
+}
+
+/// Note FC12 (supersedes CN45's skip-with-note): a zip over the ZIP format's limits is a Blockers row before the
+/// export, from the engine's estimate of the planned outputs.
+#[test]
+fn zip_over_the_limit_is_a_blocker_row() {
+    use engine::zip::ZipEstimate;
+    use sdc_gui::model::review::zip_block;
+    assert_eq!(
+        zip_block(&ZipEstimate {
+            entries: 70_000,
+            bytes: 5 << 30
+        })
+        .as_deref(),
+        Some(
+            "Zip too large for the ZIP format (70,000 files, 5.0 GiB); untick \"Also write a zip\" or split \
+             the export"
+        )
+    );
+    assert_eq!(
+        zip_block(&ZipEstimate {
+            entries: 3,
+            bytes: 1 << 20
+        }),
+        None
+    );
+}

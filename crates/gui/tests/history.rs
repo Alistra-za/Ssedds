@@ -199,7 +199,7 @@ fn undo_of_a_sets_only_edit_leaves_sdc_toml_clean() {
 }
 
 #[test]
-fn a_plan_rejection_clears_the_history() {
+fn a_plan_rejection_keeps_the_history() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     let item = m
@@ -215,7 +215,8 @@ fn a_plan_rejection_clears_the_history() {
         m.project.as_ref().unwrap().read_only(),
         "the engine rejected it"
     );
-    assert!(!m.can_undo() && !m.can_redo());
+    // Note FC12 (supersedes BN1's clear): the rejected step stays, so Undo can take it back.
+    assert!(m.can_undo() && !m.can_redo());
 }
 
 fn export_and_wait(m: &mut sdc_gui::model::AppModel) {

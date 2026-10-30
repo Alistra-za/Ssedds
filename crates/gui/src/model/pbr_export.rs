@@ -407,6 +407,10 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
             }
         }
     }
+    // Note FC12 (supersedes CN45's skip-with-note): a zip the ZIP format cannot hold blocks before anything is written.
+    if let Some(text) = m.zip_estimate().as_ref().and_then(super::review::zip_block) {
+        out.push(general(text));
+    }
     out
 }
 
@@ -488,7 +492,26 @@ pub fn export_asks(m: &AppModel) -> Vec<ExportIssue> {
         .iter()
         .filter(|c| !matches!(c.why, engine::manifest::RecodeWhy::FirstExport { .. }))
         .map(|c| general(c.line()));
-    recode.chain(set_asks(m)).collect()
+    recode.chain(photo_crops(m)).chain(set_asks(m)).collect()
+}
+
+/// Note FC12 (supersedes DS26's "no warning"): a single photo taller than wide keeps only its middle `w` rows when it
+/// becomes a cube (`import_dir::photo_panorama`); each such texture is an ask, from the size the plan read.
+fn photo_crops(m: &AppModel) -> Vec<ExportIssue> {
+    let session = m.session.as_ref();
+    m.items
+        .iter()
+        .filter_map(|i| {
+            let j = i.job.as_ref()?;
+            if j.cube.as_ref()?.layout != engine::config::CubeLayout::Photo {
+                return None;
+            }
+            let st = j.source?;
+            let (w, h) = session?.cache().dims(&j.input, st)?;
+            let name = j.input.file_name()?.to_string_lossy();
+            (h > w).then(|| general(format!("Only the middle {w}×{w} of {name} is used")))
+        })
+        .collect()
 }
 
 /// The PBR sets' pitfalls. Cached like `export_blocks`, plus `evidence_rev` (the known texture paths and the mesh

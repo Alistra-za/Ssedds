@@ -278,6 +278,11 @@ impl ProjectDoc {
             .map(|(doc, _)| doc.to_string())
     }
 
+    /// `set_error` holds the document (Note FC12: undoing the rejected step puts it back first, with `unblame`).
+    pub fn blamed(&self) -> bool {
+        self.stash.is_some()
+    }
+
     /// Undo a `set_error` that blamed the file wrongly: its document and unsaved edits come back (or, with nothing
     /// stashed, the file is re-read).
     pub fn unblame(&mut self) {

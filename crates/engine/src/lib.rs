@@ -48,4 +48,4 @@ pub mod shader;
 pub mod suggest;
 pub(crate) mod sysmem;
 pub mod validate;
-pub(crate) mod zip;
+pub mod zip;

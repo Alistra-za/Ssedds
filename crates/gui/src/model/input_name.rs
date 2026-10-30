@@ -35,15 +35,11 @@ pub fn in_form_of(list: Vec<String>, current: &str) -> Vec<String> {
         .collect()
 }
 
-/// Note DO: the slot (1-based) a path picked in the header's slot `current` is matched in: `current` when the scan saw
-/// it there or never saw it in slots 1–8 (`bits`, 0-based), else the lowest slot it is used in.
-pub fn pick_slot(bits: u16, current: u8) -> u8 {
-    let bits = bits & 0xFF;
-    if bits == 0 || bits & (1 << (current - 1)) != 0 {
-        current
-    } else {
-        bits.trailing_zeros() as u8 + 1
-    }
+/// Note FC12 (DO6): the `gui.toml` key of set `set_id`'s Match selector in the project at `root`: the root with `/`
+/// and lower case (Windows paths ignore case), then the set id folded as set ids are (Note BF).
+pub fn match_key(root: &std::path::Path, set_id: &str) -> String {
+    let root = root.to_string_lossy().replace('\\', "/").to_lowercase();
+    format!("{root}|{}", fold_id(set_id))
 }
 
 /// An input name without the leading `textures/`.
@@ -53,6 +49,35 @@ pub fn bare_name(p: &str) -> bool {
 }
 
 impl AppModel {
+    /// Note FC12 (supersedes DO4's "Match 1" default and DO6): where set `v`'s Match selector starts: the match the user
+    /// chose for it (`gui.toml`), else the set's lowest unused match (1 when all eight are used).
+    pub fn match_slot_start(&self, v: &super::sets::SetView) -> u8 {
+        let stored = self
+            .root
+            .as_ref()
+            .and_then(|r| self.settings.match_slots.get(&match_key(r, &v.id)))
+            .copied()
+            .filter(|n| (1..=8).contains(n));
+        stored.unwrap_or_else(|| {
+            let derived = v.derived_match.as_deref().unwrap_or("");
+            let used = crate::pgp::prefix::active_matches(&v.settings, derived);
+            (1..=8u8)
+                .find(|n| used.iter().all(|(u, _)| u != n))
+                .unwrap_or(1)
+        })
+    }
+
+    /// Note FC12 (DO6): keep the Match selector the user chose for set `set_id` in `gui.toml`.
+    pub fn set_match_slot(&mut self, set_id: &str, n: u8) {
+        let Some(root) = self.root.as_ref() else {
+            return;
+        };
+        let key = match_key(root, set_id);
+        if self.settings.match_slots.insert(key, n) != Some(n) {
+            self.save_settings();
+        }
+    }
+
     /// Note AO: what the input name box offers (its ▾ rows and gray completion): the known diffuse paths, without
     /// those under `textures\pbr\`, which are PGPatcher's outputs, not input names (AO8).
     pub fn input_name_candidates(&self) -> Vec<String> {

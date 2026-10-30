@@ -4,7 +4,7 @@ use super::columns::RED;
 use super::json_editor::SLOT_NAMES;
 use super::path_picker;
 use crate::model::input_name::{
-    bare_name, completion, in_form_of, live_rows, lock_cut, pick_slot, separator_stops, tab_part,
+    bare_name, completion, in_form_of, live_rows, lock_cut, separator_stops, tab_part,
 };
 use crate::model::known_paths::strip_dds;
 use crate::model::sets::is_json_set;
@@ -455,15 +455,18 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             paint_lock(painter, egui::pos2(hx, lock_y), blue);
         }
         // Note DO: on a TruePBR JSON set, the slot the ▾ list picks for. Slot 1 names the set (the rename below);
-        // slots 2–8 set that slot's match. A pick the scan saw only in another slot moves the selector there.
+        // slots 2–8 set that slot's match. Note FC12: it starts from the user's choice or the set's lowest unused
+        // match, and only the user moves it (a pick from All slots goes to it).
         let json = matching && is_json_set(v, model.target);
         let slot_id = id.with("match-slot");
         let all_id = id.with("all-slots");
         let mut slot: u8 = if json {
-            ui.data(|d| d.get_temp(slot_id)).unwrap_or(1)
+            ui.data(|d| d.get_temp(slot_id))
+                .unwrap_or_else(|| model.match_slot_start(v))
         } else {
             1
         };
+        let chosen = slot;
         let mut all = json && ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
         let name = |n: u8| format!("Match {n} · {}", SLOT_NAMES[n as usize - 1]);
         if json {
@@ -487,7 +490,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             if json {
                 let r = ui
                     .checkbox(&mut all, ALL_SLOTS)
-                    .on_hover_text("List textures used in any slot. A pick from another slot switches the match to it.");
+                    .on_hover_text("List textures used in any slot. A pick goes to the match selected beside the box.");
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(all_id, all));
                 }
@@ -532,7 +535,6 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                     l
                 });
                 if let Some(p) = path_picker::list(ui, ("input-name-slot", &v.id, slot, all), &list, false) {
-                    slot = pick_slot(model.known_slot_bits(&p), slot);
                     let done = if slot == 1 {
                         let p = in_form_of(vec![p], &current).remove(0);
                         model.set_input_name(&v.id, &p)
@@ -557,6 +559,9 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             }
         });
         ui.data_mut(|d| d.insert_temp(slot_id, slot));
+        if slot != chosen {
+            model.set_match_slot(&v.id, slot);
+        }
         menu.response.on_hover_text(
             "Pick the game path this set's textures are read as. Each texture keeps its own suffix; files on \
              disk are not renamed (an [inputs] alias in sdc.toml).",

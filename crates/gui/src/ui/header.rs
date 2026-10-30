@@ -1,5 +1,6 @@
 //! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
 //! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
+use super::meshes::UndoTarget;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::{also, AppModel};
 use eframe::egui;
@@ -497,29 +498,81 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
+/// One header Undo or Redo button as drawn: its text, its accessible name (the text unshortened), its hover.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoButton {
+    pub text: String,
+    pub name: String,
+    pub hover: String,
+    pub enabled: bool,
+}
+
+/// The header's Undo (`undo`) or Redo button for the history it acts on (Note FC12, CI23 labelled): `Undo` for the
+/// Textures one, whose next step is `textures`, or `Undo NIF edit: {step}` while a NIF edit is the target (`nif`).
+/// The hover names the history; a long NIF step is shortened on the button only.
+pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>) -> UndoButton {
+    const MAX: usize = 40;
+    let verb = if undo { "Undo" } else { "Redo" };
+    let keys = super::actions::keys_text(if undo { "undo" } else { "redo" });
+    // (the button's full text, what the hover says it does, enabled, the history)
+    let (name, does, enabled, history) = match nif {
+        Some(t) => {
+            let (can, label) = if undo {
+                (t.can_undo, &t.undo_label)
+            } else {
+                (t.can_redo, &t.redo_label)
+            };
+            let name = match label.as_deref().filter(|_| can) {
+                Some(l) => format!("{verb} NIF edit: {l}"),
+                None => format!("{verb} NIF edit"),
+            };
+            (
+                name.clone(),
+                name,
+                can,
+                "the NIF edit history; the Textures history is untouched",
+            )
+        }
+        None => (
+            verb.to_string(),
+            textures.map_or_else(String::new, |s| format!("{verb}: {s}")),
+            textures.is_some(),
+            "the Textures history (sdc.toml and sdc-project.toml)",
+        ),
+    };
+    let hover = match (enabled, nif.is_some()) {
+        (false, true) => format!("Nothing to {} in the NIF edit history", verb.to_lowercase()),
+        (false, false) => format!("Nothing to {}", verb.to_lowercase()),
+        (true, _) => format!("{does}  ({keys}). Acts on {history}."),
+    };
+    let text = if name.chars().count() > MAX {
+        format!("{}…", name.chars().take(MAX - 1).collect::<String>())
+    } else {
+        name.clone()
+    };
+    UndoButton {
+        text,
+        name,
+        hover,
+        enabled,
+    }
+}
+
 /// The Undo and Redo buttons (item 2): disabled with no history, the step's label in the hover text.
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     // A20: the NIF history while a NIF edit is open in the Meshes view.
     let nif = super::meshes::undo_target(ui.ctx());
-    for (undo, name) in [(true, "Undo"), (false, "Redo")] {
-        let label = match nif {
-            Some(ref t) => {
-                (if undo { t.can_undo } else { t.can_redo }).then_some("the last NIF edit")
-            }
-            None if undo => model.undo_label(),
-            None => model.redo_label(),
+    for undo in [true, false] {
+        let textures = if undo {
+            model.undo_label()
+        } else {
+            model.redo_label()
         };
-        let sep = if nif.is_some() { " " } else { ": " };
-        let hover = match label {
-            Some(l) => format!(
-                "{name}{sep}{l}  ({})",
-                super::actions::keys_text(if undo { "undo" } else { "redo" })
-            ),
-            None => format!("Nothing to {}", name.to_lowercase()),
-        };
-        let r = ui.add_enabled(label.is_some(), egui::Button::new(name));
-        if r.on_hover_text(hover.clone())
-            .on_disabled_hover_text(hover)
+        let b = undo_button(nif.as_ref(), undo, textures);
+        let r = ui.add_enabled(b.enabled, egui::Button::new(&b.text));
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, b.enabled, &b.name));
+        if r.on_hover_text(b.hover.clone())
+            .on_disabled_hover_text(b.hover)
             .clicked()
             && !super::meshes::request_undo(ui.ctx(), undo)
         {

@@ -95,6 +95,9 @@ pub struct GuiSettings {
     pub layout: LayoutSettings,
     /// The artist checks' switches (DECISIONS Note CL), `[checks]` in the file.
     pub checks: ChecksSettings,
+    /// Note FC12 (DO4–DO6): the Match selector a user chose, by project root and set id (`model::input_name::match_key`).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub match_slots: std::collections::BTreeMap<String, u8>,
 }
 
 /// `[checks]`: one switch per artist check; an off check's results are hidden everywhere. All on but
@@ -168,6 +171,7 @@ impl Default for GuiSettings {
             render3d: Render3dSettings::default(),
             layout: LayoutSettings::default(),
             checks: ChecksSettings::default(),
+            match_slots: Default::default(),
         }
     }
 }

@@ -65,7 +65,7 @@ fn cancel_with_a_previous_folder_keeps_it() {
     assert!(m.can_cancel_open());
     assert_eq!(
         m.cancel_open_hover(),
-        "Stops opening and re-opens the previous folder (selection and undo history are reset)"
+        "Stops opening and goes back to the previous folder, with its selection and undo history"
     );
     let cancelled = m.generation();
     m.cancel_open();

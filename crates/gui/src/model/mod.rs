@@ -102,6 +102,9 @@ pub fn plan_bar_text(done: usize, total: usize) -> String {
 }
 
 /// `n` with a comma between each group of three digits.
+/// Note FC12: what the top undo step's label gets when the engine rejected `sdc.toml` after it (then the message, `)`).
+const REJECTED: &str = " (sdc.toml rejected it: ";
+
 fn thousands(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -609,9 +612,9 @@ pub struct AppModel {
     planning: Option<CancelToken>,
     /// Item 13: (done, total) of the plan in flight, from `PlanProgress`; `None` once it lands.
     pub plan_progress: Option<(usize, usize)>,
-    /// While a folder's first plan is in flight: the folder open before it (`None`: none) and Recent as it was.
-    /// Cancel goes back to both.
-    opening: Option<(Option<PathBuf>, Vec<PathBuf>)>,
+    /// While a folder's first plan is in flight: the folder open before it (`None`: none), Recent as it was, and that
+    /// folder's undo history and selection (Note FC12). Cancel goes back to all of them.
+    opening: Option<(Option<PathBuf>, Vec<PathBuf>, history::History, Selection)>,
     /// The last open was cancelled with no folder to go back to (the empty state says so).
     open_cancelled: bool,
     tx: Sender<WorkerMsg>,
@@ -920,7 +923,10 @@ impl AppModel {
         self.project = Some(project);
         self.sets_doc = Some(crate::sets_doc::SetsDoc::open(&root));
         self.drop_undo_note();
-        self.history.clear();
+        // Note FC12: the previous folder's history and selection are kept until this open completes (Cancel).
+        let kept = (std::mem::take(&mut self.history), self.selection.clone());
+        // `pushes` never goes back (FC3's rows compare it).
+        self.history.pushes = kept.0.pushes;
         self.auto_note = None;
         self.refresh_banner();
         let recent = self.settings.recent.clone();
@@ -929,7 +935,7 @@ impl AppModel {
         let previous = self.root.replace(root);
         // A second open while the first is still planning goes back to the folder before both.
         if !(self.opening.is_some() && self.planning.is_some()) {
-            self.opening = Some((previous, recent));
+            self.opening = Some((previous, recent, kept.0, kept.1));
         }
         self.items.clear();
         self.check_state.plans_applied += 1;
@@ -1257,7 +1263,7 @@ impl AppModel {
         }
         self.generation += 1;
         self.plan_progress = None;
-        let Some((previous, recent)) = self.opening.take() else {
+        let Some((previous, recent, mut history, selection)) = self.opening.take() else {
             return;
         };
         // AG93: Recent is as it was before the open, so a cancelled folder new to it is not listed.
@@ -1268,6 +1274,12 @@ impl AppModel {
                 self.open_folder(previous);
                 // Going back is not an open the user can cancel.
                 self.opening = None;
+                // Note FC12 (supersedes AG92's reset): the folder comes back with its undo history and selection. Its
+                // documents were clean when the open started (saved, or their edits dropped and the history cleared),
+                // so the re-read files are where the history left them.
+                history.pushes = history.pushes.max(self.history.pushes);
+                self.history = history;
+                self.selection = selection;
             }
             None => {
                 self.root = None;
@@ -1288,8 +1300,8 @@ impl AppModel {
     /// The hover of the header's Cancel while a folder opens.
     pub fn cancel_open_hover(&self) -> &'static str {
         match &self.opening {
-            Some((Some(_), _)) => {
-                "Stops opening and re-opens the previous folder (selection and undo history are reset)"
+            Some((Some(_), ..)) => {
+                "Stops opening and goes back to the previous folder, with its selection and undo history"
             }
             _ => "Stops opening; no folder stays open",
         }
@@ -1421,7 +1433,16 @@ impl AppModel {
             if let Some(p) = self.project.as_mut().filter(|p| !p.read_only()) {
                 p.set_error(&f.message);
                 self.drop_undo_note();
-                self.history.clear();
+                // Note FC12 (supersedes BN1's clear): the history stays. The edit that failed is the top step, named
+                // with the error, and Undo takes it back (`apply_snapshot` lifts the blame first).
+                if let Some(top) = self
+                    .history
+                    .undo
+                    .last_mut()
+                    .filter(|c| !c.label.contains(REJECTED))
+                {
+                    top.label = format!("{}{REJECTED}{})", top.label, f.message);
+                }
                 self.refresh_banner();
                 self.ignored_by_plan = true;
                 self.replan();
@@ -1433,7 +1454,12 @@ impl AppModel {
                 if let Some(p) = self.project.as_mut() {
                     p.unblame();
                     self.drop_undo_note();
-                    self.history.clear();
+                    // Note FC12: the history was kept; the top step was not the culprit after all.
+                    if let Some(top) = self.history.undo.last_mut() {
+                        if let Some(i) = top.label.find(REJECTED) {
+                            top.label.truncate(i);
+                        }
+                    }
                     self.refresh_banner();
                 }
             }
@@ -2696,6 +2722,8 @@ impl AppModel {
         self.bulk.report = None;
         // Task 9 (Z11): restoring a state as it was is no sub-type change to clean up after.
         self.reset_type_follow();
+        // Note FC8 ledger minor: a weighting re-write queued for the plan of the step undone no longer applies.
+        self.weighting_follow = None;
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
@@ -2777,6 +2805,15 @@ impl AppModel {
                 self.history.refuse_undo();
                 self.dialog = Some(Dialog::Error(why));
                 return;
+            }
+        }
+        // Note FC12: the step the plan rejected `sdc.toml` after: its document comes back (read-only no more), and
+        // the step's `before` is restored into it. A document rejected when it loaded has no such step.
+        if c.label.contains(REJECTED) {
+            if let Some(p) = self.project.as_mut().filter(|p| p.blamed()) {
+                p.unblame();
+                self.ignored_by_plan = false;
+                self.refresh_banner();
             }
         }
         self.apply_snapshot(&c.before);

@@ -37,9 +37,13 @@ pub fn list(
     if typed && !q.trim().is_empty() && ui.button(format!("Use “{}”", q.trim())).clicked() {
         picked = Some(q.trim().to_string());
     }
+    // Note FC12: a list that grows inside an open menu (All slots ticked over a short slot list) asks for its rows'
+    // height; otherwise it keeps the menu's last, smaller height and rows below it are clipped and take no click.
+    let row = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical()
         .id_salt(id.with("scroll"))
         .max_height(280.0)
+        .min_scrolled_height((hits.len() as f32 * row).min(280.0))
         .show(ui, |ui| {
             for p in hits {
                 if ui.selectable_label(false, p).clicked() {

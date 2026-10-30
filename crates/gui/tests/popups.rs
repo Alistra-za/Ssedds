@@ -31,6 +31,11 @@ fn harness() -> (tempfile::TempDir, H) {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
+    // Note FC12: the selector starts at the set's lowest unused match; the slot-1 list is the one under test.
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 1 · diffuse").click();
+    h.run();
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
     h.get_by_label(HEADING);
