@@ -4153,6 +4153,41 @@ fn kept_beside(a: &Path) -> Vec<std::path::PathBuf> {
     v
 }
 
+/// Note GD26: a move-aside name already taken (this second's and the next two) is skipped: the move takes a free
+/// later name, and the files already there are unchanged.
+#[test]
+fn a_move_aside_skips_names_already_taken() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    let a = autosave(&d);
+    let stem = a.file_stem().unwrap().to_string_lossy().into_owned();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let taken: Vec<_> = (now..now + 3)
+        .map(|s| a.with_file_name(format!("{stem}.{s}.toml")))
+        .collect();
+    for t in &taken {
+        std::fs::write(t, b"another instance's").unwrap();
+    }
+    m.set_nif_export_root(None);
+    gloss(&mut m, 13.5);
+    for t in &taken {
+        assert_eq!(
+            std::fs::read(t).unwrap(),
+            b"another instance's",
+            "{t:?} unchanged"
+        );
+    }
+    let new: Vec<_> = kept_aside(&d)
+        .into_iter()
+        .filter(|p| !taken.contains(p))
+        .collect();
+    assert_eq!(new.len(), 1, "{new:?}");
+    assert_eq!(std::fs::read(&new[0]).unwrap(), mine);
+}
+
 /// Note GD25: a newer autosave recovered over a folder document with other edits never overwrites it: the first save
 /// moves the folder's document aside, and Messages names the kept file.
 #[test]

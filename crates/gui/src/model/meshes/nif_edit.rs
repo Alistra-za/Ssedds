@@ -1097,11 +1097,22 @@ impl NifEdit {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        let Some(to) = (secs..)
-            .map(|s| path.with_file_name(format!("{stem}.{s}.toml")))
-            .find(|p| !p.exists())
-        else {
-            return false;
+        // Note GD26: the name is reserved with create_new (another instance's create of it fails), then renamed over
+        let mut s = secs;
+        let to = loop {
+            let to = path.with_file_name(format!("{stem}.{s}.toml"));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&to)
+            {
+                Ok(_) => break to,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => s += 1,
+                Err(e) => {
+                    self.error = Some(format!("{}: {e}", to.display()));
+                    return false;
+                }
+            }
         };
         match std::fs::rename(path, &to) {
             Ok(()) => {
@@ -1115,6 +1126,7 @@ impl NifEdit {
                 true
             }
             Err(e) => {
+                let _ = std::fs::remove_file(&to); // the empty reservation only
                 self.error = Some(format!("{}: {e}", path.display()));
                 false
             }
