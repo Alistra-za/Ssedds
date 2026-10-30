@@ -227,6 +227,28 @@ fn nif_filter_is_a_case_insensitive_substring_of_the_mesh_path() {
     assert!(!shape_matches(&e, "meshes\\clutter\\rock01.nif", &m.slots));
 }
 
+/// GE2: 2.x applies no `nif_filter` to facegen and BodySlide ShapeData meshes [Src 2.2.0 TP:354-358, 593-596;
+/// NU:866-880; measured T5a, T8]. Any case and `/` separators fold first.
+#[test]
+fn nif_filter_is_ignored_for_facegen_and_bodyslide_shapedata() {
+    let m = rock();
+    let e = prepare(
+        &json!({"match_diffuse": "rock01_d", "nif_filter": "clutter"}),
+        &Value::Null,
+    );
+    for nif in [
+        r"Meshes\Actors\Character\FaceGenData\FaceGeom\Skyrim.esm\00000801.nif",
+        "meshes/actors/character/facegendata/facegeom/x.esp/00000802.nif",
+        r"CalienteTools\BodySlide\ShapeData\Body\body.nif",
+    ] {
+        assert!(shape_matches(&e, nif, &m.slots), "{nif}");
+    }
+    assert!(
+        !shape_matches(&e, NIF, &m.slots),
+        "a normal mesh is filtered"
+    );
+}
+
 #[test]
 fn shape_matches_wants_the_prepared_entry() {
     // Unprepared, "ck01_d" has no leading "\" and hits "rock01_d" mid-component; prepared, it does not.

@@ -54,14 +54,24 @@ pub(crate) fn tex_name(e: &Map<String, Value>, slots: &[String; 9]) -> Option<St
     None
 }
 
+/// Mesh folders 2.x patches with no `nif_filter`: facegen and BodySlide ShapeData [Src 2.2.0 TP:354-358, 593-596;
+/// NU:866-880].
+const NO_FILTER: [&str; 2] = [
+    "meshes\\actors\\character\\facegendata\\facegeom\\",
+    "calientetools\\bodyslide\\shapedata\\",
+];
+
 /// Does the prepared entry (`prepare(entry, default)`) apply to this shape? `nif_path` is the mesh path
-/// relative to Data (`meshes\…`, any case), used for `nif_filter` (case-insensitive substring, TP:544-547).
-/// `slots` are the shape's texture-set paths (`MaterialState::slots`).
+/// relative to Data (`meshes\…`, any case), used for `nif_filter` (case-insensitive substring, TP:544-547),
+/// which facegen and BodySlide ShapeData meshes skip. `slots` are the shape's texture-set paths
+/// (`MaterialState::slots`).
 pub fn shape_matches(prepared: &Value, nif_path: &str, slots: &[TexPath]) -> bool {
     let Some(e) = prepared.as_object() else {
         return false;
     };
-    if str_of(e, "nif_filter").is_some_and(|f| !icontains(nif_path, f)) {
+    let folded = nif_path.replace('/', "\\").to_ascii_lowercase();
+    let filtered = !NO_FILTER.iter().any(|p| folded.starts_with(p));
+    if filtered && str_of(e, "nif_filter").is_some_and(|f| !icontains(nif_path, f)) {
         return false;
     }
     tex_name(e, &pg_slots(slots)).is_some()
