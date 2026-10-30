@@ -139,6 +139,8 @@ pub struct NifEdit {
     /// Note GD20: the failed root change behind `retarget_error`: (root, its edit document, that file's length and
     /// time). The same key is not tried again, so a bad folder is read once, not each frame.
     retarget_fail: Option<RetargetKey>,
+    /// Note GD23: `doc.pending()` (it serialises and hashes the ops) keyed on (rev, op count, export record's hash).
+    pending_cache: std::cell::RefCell<Option<PendingKey>>,
     /// Meshes UI T3: the last export wrote exactly these ops ("Export NIF again"); kept here so the panel never hashes
     /// the ops per frame.
     pub up_to_date: bool,
@@ -239,6 +241,9 @@ pub(super) type ForeignKey = (
     Option<(u64, Option<std::time::SystemTime>)>,
 );
 pub(super) type ForeignCache = Option<(ForeignKey, Result<Option<[u8; 32]>, String>)>;
+
+/// `NifEdit::pending_cache`: (rev, op count, the export record's ops hash) and the pending state for them.
+type PendingKey = (u64, usize, Option<String>, bool);
 
 /// `NifEdit::retarget_fail`'s key: the root, its edit document and the document's (length, modified time).
 type RetargetKey = (
@@ -671,6 +676,7 @@ impl NifEdit {
             cleanup_note: None,
             retarget_error: None,
             retarget_fail: None,
+            pending_cache: Default::default(),
             up_to_date: false,
             weight_sibling: None,
             session: next_key(),
@@ -732,7 +738,22 @@ impl NifEdit {
             || !self.doc.ops.is_empty()
             || self.history.can_undo()
             || self.history.can_redo()
-            || self.doc.pending()
+            || self.pending()
+    }
+
+    /// `doc.pending()`, computed once per change (Note GD23): every op change makes a new `rev`, and an export or a
+    /// folder change a new export record.
+    pub fn pending(&self) -> bool {
+        let key = (self.rev, self.doc.ops.len());
+        let mut c = self.pending_cache.borrow_mut();
+        if let Some((rev, n, h, p)) = &*c {
+            if (*rev, *n) == key && *h == self.doc.export.ops_hash {
+                return *p;
+            }
+        }
+        let p = self.doc.pending();
+        *c = Some((key.0, key.1, self.doc.export.ops_hash.clone(), p));
+        p
     }
 
     pub fn export_block(&self) -> Option<String> {
@@ -920,7 +941,7 @@ impl NifEdit {
             }
         }
         self.outcomes = a.outcomes;
-        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
+        self.up_to_date = !self.pending() && self.doc.export.sha256.is_some();
         match read_model(&self.patched) {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
@@ -1124,7 +1145,7 @@ impl NifEdit {
         self.drag = None;
         self.history.break_merge();
         self.unsaved = true;
-        self.up_to_date = !self.doc.pending() && self.doc.export.sha256.is_some();
+        self.up_to_date = !self.pending() && self.doc.export.sha256.is_some();
         self.export_note = None;
         self.refresh_blocked();
         Ok(lines)
@@ -2118,7 +2139,7 @@ impl MeshesModel {
     /// Note GD2: one row per NIF with pending edits (today the open edit only), for the Review. Reads the export
     /// path's state from the disk only when its length, time or the last export's hash changed.
     pub fn nif_review_rows(&self) -> Vec<NifReviewRow> {
-        let Some(e) = self.edit.as_ref().filter(|e| e.doc.pending()) else {
+        let Some(e) = self.edit.as_ref().filter(|e| e.pending()) else {
             return vec![];
         };
         let mut blocked = e.blocked.clone();

@@ -79,6 +79,7 @@ impl EditDoc {
         struct Ops<'a> {
             ops: &'a [DocOp],
         }
+        HASHES.with(|n| n.set(n.get() + 1));
         let t = toml::to_string_pretty(&Ops { ops: &self.ops }).expect("ops serialise");
         sha256_hex(t.as_bytes())
     }
@@ -140,6 +141,12 @@ pub fn save(path: &Path, doc: &EditDoc) -> Result<(), String> {
 
 thread_local! {
     static LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `EditDoc::ops_hash` this thread computed (Note GD23's test: idle frames hash nothing).
+pub fn ops_hash_count() -> usize {
+    HASHES.with(std::cell::Cell::get)
 }
 
 /// How many `load` calls this thread made (Note GD20's test: a failed folder change is not read each frame).

@@ -4321,6 +4321,29 @@ fn a_failed_folder_change_reads_the_document_once_until_it_changes() {
     assert!(review_row(&m).blocked.is_some());
 }
 
+/// Note GD23: after an export, idle frames hash nothing: the Review rows and the panel read the cached pending state.
+#[test]
+fn idle_frames_after_an_export_hash_nothing() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert!(matches!(m.export_edit(None), ExportOutcome::Written { .. }));
+    let root = m.nif_export_root.clone();
+    let mut h = view(m);
+    h.run_steps(2);
+    let _ = h.state().nif_review_rows();
+    let n = ops_hash_count();
+    for _ in 0..10 {
+        let _ = h.state().nif_review_rows();
+        h.state_mut().set_nif_export_root(root.clone());
+        h.run_steps(1);
+    }
+    assert_eq!(ops_hash_count() - n, 0, "no hash over ten idle frames");
+    gloss(h.state_mut(), 13.5);
+    assert_eq!(review_row(h.state()).blocked, None);
+    assert!(ops_hash_count() > n, "an edit is hashed again");
+}
+
 /// Note GD13: a session undone back to the source after an export is not idle: on a folder change it keeps its live
 /// document and its redo, and the folder's saved edit is replaced (said in Messages).
 #[test]
