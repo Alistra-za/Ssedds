@@ -67,6 +67,11 @@ fn rows(ui: &egui::Ui, model: &AppModel) -> (Rows, usize, usize) {
 /// the row now at that index, or the last one (Review Focus 5).
 const ROW_FOCUS: &str = "problems-row-focus";
 
+/// The Problems tab is not drawn: forget the focused row, so coming back never moves focus into the list.
+pub fn forget_focus(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<(egui::Id, usize)>(egui::Id::new(ROW_FOCUS)));
+}
+
 enum Act {
     Texture(String),
     Set(String),
@@ -99,9 +104,12 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                         off.is_none(),
                         egui::Button::new(format!("Accept all suggestions ({suggestions})")),
                     )
-                    .on_hover_text(
-                        "Set every texture that has a suggested type to it; the others stay listed",
-                    )
+                    .on_hover_text(if model.bottom.filter.is_some() {
+                        "Set every texture in the whole project that has a suggested type to it, not only the \
+                         listed ones; the others stay listed"
+                    } else {
+                        "Set every texture that has a suggested type to it; the others stay listed"
+                    })
                     .on_disabled_hover_text(off.as_deref().unwrap_or_default());
                 if b.clicked() {
                     act = Some(Act::AcceptAll);
@@ -181,13 +189,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     let stroke = ui.visuals().selection.stroke;
                     ui.painter()
                         .rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
-                    let key = first
-                        && ui.input(|k| {
-                            k.key_pressed(egui::Key::Enter) || k.key_pressed(egui::Key::Space)
+                    // Consumed only when the row acts, so the Grid's Enter (open the preview) never sees it too.
+                    let acting = matches!((first, &off, &p.at, p.suggested), (true, None, At::Texture(_), Some(_)));
+                    let pressed = acting
+                        && ui.input_mut(|k| {
+                            k.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                                || k.consume_key(egui::Modifiers::NONE, egui::Key::Space)
                         });
-                    if let (true, None, At::Texture(k), Some(st)) =
-                        (key, &off, &p.at, p.suggested)
-                    {
+                    if let (true, At::Texture(k), Some(st)) = (pressed, &p.at, p.suggested) {
                         act = Some(Act::Fix(RowPick::Decide(k.clone(), st)));
                         // The last row keeps focus: no wrap to the top.
                         if let Some(next) = list.get(i + 1) {

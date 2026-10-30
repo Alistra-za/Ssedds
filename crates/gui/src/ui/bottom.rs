@@ -47,6 +47,9 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
         drawer.stats.clear();
         drawer.epoch = model.drawer_epoch;
     }
+    if !model.bottom.open || model.bottom.tab != BottomTab::Problems {
+        problems::forget_focus(ui.ctx());
+    }
     if !model.bottom.open {
         // Its own id, so the strip's height never becomes the open panel's.
         egui::Panel::bottom("bottom-strip").show(ui, |ui| {

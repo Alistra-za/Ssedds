@@ -553,10 +553,13 @@ fn at_1280x800_a_long_problems_row_keeps_its_buttons_on_screen() {
     let mut h = harness_at(m, egui::vec2(1280.0, 800.0));
     idle(&mut h);
     let panel = outer(&h, "bottom");
-    // The list scrolls: a row cut by its bottom edge is clipped there (`show_rows` draws one more), so the bottom is
-    // not checked; the right edge (final review I2) and the top are.
+    // The list scrolls: a row cut by its bottom edge is clipped there (`show_rows` draws one more), so a button only
+    // has to start above the panel's bottom; the right edge (final review I2) and the top are checked whole.
     let inside = |r: egui::Rect| {
-        r.left() >= panel.left() && r.right() <= panel.right() && r.top() >= panel.top()
+        r.left() >= panel.left()
+            && r.right() <= panel.right()
+            && r.top() >= panel.top()
+            && r.top() < panel.bottom()
     };
     let mut seen = 0;
     for label in ["Go to set", "Set type…", "Decide…", "Acknowledge"] {

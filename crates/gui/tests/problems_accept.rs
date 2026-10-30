@@ -146,6 +146,8 @@ fn accept_all_at_the_top_shows_the_count() {
         .filter(|k| matches!(m.subtype_question(k), Some(Some(_))))
         .count();
     assert!(n >= 2, "{n}");
+    let toml = d.path().join("textures/sdc.toml");
+    let on_disk = std::fs::read(&toml).ok();
     let mut h = harness(m);
     h.run();
     let all = h
@@ -171,6 +173,66 @@ fn accept_all_at_the_top_shows_the_count() {
     assert!(h
         .query_by_label_contains("Accept all suggestions")
         .is_none());
+    assert!(m.is_dirty());
+    assert_eq!(std::fs::read(&toml).ok(), on_disk, "only Save writes");
+}
+
+/// Review C7 round 1: with a texture selected, Enter on a focused row accepts it and does not also open the
+/// preview (the Grid's Enter); the file waits for Save.
+#[test]
+fn enter_on_a_row_does_not_open_the_preview() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_tint(d.path());
+    m.select_item("landscape/rock01.png");
+    let toml = d.path().join("textures/sdc.toml");
+    let on_disk = std::fs::read(&toml).ok();
+    let mut h = harness(m);
+    h.run();
+    focus_row(&mut h, TINT);
+    h.key_press(egui::Key::Enter);
+    h.run();
+    idle(&mut h);
+    assert_eq!(subtype(h.state(), TINT), Some(json!("subsurface_tint")));
+    assert_eq!(h.state().expanded, None, "Enter opened the preview");
+    assert_eq!(std::fs::read(&toml).ok(), on_disk, "only Save writes");
+}
+
+/// Review C7 round 1: leaving the tab forgets the focused row, so a row answered meanwhile does not pull focus into
+/// the list on the way back.
+#[test]
+fn coming_back_to_problems_does_not_take_focus() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(with_tint(d.path()));
+    h.run();
+    focus_row(&mut h, TINT);
+    h.state_mut()
+        .toggle_tab(sdc_gui::model::bottom::BottomTab::Messages);
+    h.run();
+    h.state_mut()
+        .decide(TINT, Answer::Subtype(Subtype::SubsurfaceTint));
+    idle(&mut h);
+    h.state_mut().open_problems(Some(ProblemsFilter::Undecided));
+    h.run();
+    h.run();
+    assert_eq!(focused_row(&h), None);
+}
+
+/// Review C7 round 1: Tab reaches a Problems row, as Note FB9 says.
+#[test]
+fn tab_reaches_a_problems_row() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(with_tint(d.path()));
+    h.run();
+    let mut reached = false;
+    for _ in 0..200 {
+        h.key_press(egui::Key::Tab);
+        h.run();
+        if focused_row(&h).is_some() {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab never focused a row");
 }
 
 #[test]

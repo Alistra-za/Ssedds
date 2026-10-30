@@ -62,7 +62,8 @@ pub fn show(
             // Labels are the ids with spaces, so "subsurface_tint" finds "subsurface tint" too.
             let needle = q.trim().to_lowercase().replace('_', " ");
             let hit = |s: Subtype| subtype_label(s).contains(&needle);
-            if let Some(s) = suggested.filter(|s| hit(*s)) {
+            // A suggestion the target doesn't offer is not pinned: picking it would be refused.
+            if let Some(s) = suggested.filter(|s| hit(*s) && offered(target, *s)) {
                 let text = format!("{} (suggested)", subtype_label(s));
                 if ui.selectable_label(current == Some(s), text).clicked() {
                     picked = Some(s);

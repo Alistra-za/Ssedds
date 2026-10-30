@@ -2,7 +2,7 @@
 //! button, the suggestion pinned on top, a search box focused on open, the grouped list below; Esc closes it.
 mod support;
 use eframe::egui::{self, accesskit::Role};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use engine::config::{Subtype, Target};
 use sdc_gui::model::{AppModel, Selection};
@@ -115,6 +115,44 @@ fn type_picker_opens_at_its_anchor() {
     assert!(
         p.bottom() <= b.top() + 1.0 && b.top() - p.bottom() <= 40.0,
         "popup {p:?} over button {b:?}"
+    );
+}
+
+/// Review C7 round 1: the Sub-type button keeps the old combo's gating. A read-only sdc.toml disables it (the
+/// panel's `add_enabled_ui(!read_only)`); `busy` never disabled the combo (only sliders defer their commit), so it
+/// stays enabled while a plan runs, like the other combos in the panel.
+#[test]
+fn subtype_button_is_disabled_on_a_read_only_sdc_toml() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    std::fs::write(
+        root.join("sdc.toml"),
+        "[files.\"landscape/rock01.png\"]\nbogus_field = 1\n",
+    )
+    .unwrap();
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: Some(d.path().join("export")),
+        ..Default::default()
+    };
+    let mut m = AppModel::new(settings, None, session());
+    m.open_folder(root);
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(m.project.as_ref().unwrap().read_only());
+    m.select_item("landscape/rock01_normal.png");
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let b = h.get_by_role_and_label(Role::ComboBox, "Sub-type");
+    assert!(b.accesskit_node().is_disabled(), "Sub-type is enabled");
+    b.click();
+    h.run();
+    h.run();
+    assert!(
+        h.query_all_by_role(Role::TextInput)
+            .all(|n| !n.is_focused()),
+        "a disabled button opened the picker"
     );
 }
 
