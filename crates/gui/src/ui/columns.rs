@@ -364,21 +364,32 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
     let rows = visible.len().div_ceil(cols);
     // Item 5: Up and Down move by this row's width, and a texture the keys or the palette moved to scrolls into view.
     model.nav.cols = cols;
-    let reveal = model
-        .nav
-        .reveal_item
-        .take()
-        .and_then(|k| visible.iter().position(|&i| model.items[i].key == k))
-        .map(|n| n / cols);
     let row_step = tile_h + ui.spacing().item_spacing.y;
+
     // Note DY16: the helper group under the tiles: a header line, then fixed-height rows.
     let helper_h = helper_row_height(ui);
     let header_h = if helpers.is_empty() {
         0.0
     } else {
-        ui.text_style_height(&egui::TextStyle::Body) + 2.0 * ui.spacing().item_spacing.y
+        // The header is a Button: its height is the larger of the minimum and one line plus its padding.
+        let line =
+            ui.text_style_height(&egui::TextStyle::Body) + 2.0 * ui.spacing().button_padding.y;
+        line.max(ui.spacing().interact_size.y) + ui.spacing().item_spacing.y
     };
     let tiles_h = rows as f32 * row_step;
+    // Item 5 and Note FB12: a texture the keys or the palette moved to scrolls into view (a tile row, or a helper row,
+    // which the palette opened the group for).
+    let helper_top = tiles_h + header_h;
+    let reveal = model.nav.reveal_item.take().and_then(|k| {
+        let tile = visible.iter().position(|&i| model.items[i].key == k);
+        match tile {
+            Some(n) => Some(((n / cols) as f32 * row_step, tile_h)),
+            None => helpers
+                .iter()
+                .position(|&i| model.items[i].key == k)
+                .map(|n| (helper_top + n as f32 * helper_h, helper_h)),
+        }
+    });
     // Note FB12: the group is open unless the user collapsed it; collapsed, only the header line is laid out.
     let open = !model.filter.hide_helpers;
     let shown = if open { helpers.len() } else { 0 };
@@ -392,11 +403,9 @@ pub fn textures(ui: &mut egui::Ui, model: &mut AppModel, thumbs: &mut ThumbCache
             let origin = ui.max_rect().min;
             let width = ui.max_rect().width();
             // Only what intersects the viewport is laid out (rule 9.2); the reveal's rectangle is computed.
-            if let Some(r) = reveal {
-                let rect = egui::Rect::from_min_size(
-                    origin + egui::vec2(0.0, r as f32 * row_step),
-                    egui::vec2(width, tile_h),
-                );
+            if let Some((y, h)) = reveal {
+                let rect =
+                    egui::Rect::from_min_size(origin + egui::vec2(0.0, y), egui::vec2(width, h));
                 ui.scroll_to_rect(rect, None);
             }
             let first = (viewport.min.y / row_step).floor().max(0.0) as usize;

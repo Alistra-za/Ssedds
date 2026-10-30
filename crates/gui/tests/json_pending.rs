@@ -179,13 +179,47 @@ fn plain_labels_name_the_match_the_derived_path_and_the_lock() {
         "the set's own diffuse path says where it comes from"
     );
     assert_eq!(h.query_all_by_label("derived").count(), 0);
-    // A lock key reads as what it does; the raw key is on hover.
+    // Each plain label keeps its old term on hover (Review C15).
+    let pos = h
+        .query_all_by_role(Role::ComboBox)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("Match: exact, slot 1 (diffuse)"))
+        .unwrap()
+        .rect()
+        .center();
+    h.hover_at(pos);
+    h.run_steps(30);
+    assert!(
+        h.query_by_label_contains("Exact: a mesh's texture")
+            .is_some(),
+        "the match drop-down says Exact on hover"
+    );
+    let pos = h
+        .query_all_by_label("derived from the set")
+        .next()
+        .unwrap()
+        .rect()
+        .center();
+    h.hover_at(pos);
+    h.run_steps(30);
+    assert!(
+        h.query_by_label_contains("Derived: the diffuse's own path")
+            .is_some(),
+        "the old word on hover"
+    );
+    // A lock key reads as what it does; the schema label and raw key are on hover.
     let lock = "Keep the original texture (PGPatcher won't replace it): diffuse";
     add_key(&mut h, 0, false, lock);
-    assert!(
-        h.query_all_by_label_contains("Keep the original texture (PGPatcher won't replace it)")
-            .count()
-            >= 1
-    );
     assert_eq!(h.query_all_by_label("Lock diffuse").count(), 0);
+    let pos = h
+        .query_all_by_label_contains("Keep the original texture (PGPatcher won't replace it)")
+        .next()
+        .expect("the lock pill")
+        .rect()
+        .center();
+    h.hover_at(pos);
+    h.run_steps(30);
+    assert!(
+        h.query_by_label("Lock diffuse (lock_diffuse)").is_some(),
+        "the old term (Lock) is on hover"
+    );
 }

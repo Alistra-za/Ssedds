@@ -62,13 +62,13 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
                     let locked = locks.contains(&n);
                     let mut on = locked;
                     let r = ui.add_enabled(editable, egui::Checkbox::new(&mut on, "🔒"));
-                    // Review C15: named for what it does; the row's own "Slot n" label says which slot.
+                    // Review C15: named for what it does, and for which slot (eight boxes share the icon).
                     r.widget_info(|| {
                         egui::WidgetInfo::selected(
                             egui::WidgetType::Checkbox,
                             editable,
                             on,
-                            "Pin this slot (always use this file)",
+                            format!("Pin slot {n} (always use this file)"),
                         )
                     });
                     if r.on_hover_text(

@@ -1,5 +1,6 @@
 //! Keyboard navigation (item 5) and the command palette's search (item 19). The keys themselves are in
 //! `ui::actions`; this is what they do to the model.
+use super::items::ItemKind;
 use super::preview::SourceState;
 use super::view::Channel;
 use super::{AppModel, Selection, ViewKey};
@@ -165,6 +166,11 @@ impl AppModel {
         match pick {
             Pick::Action(_) => {}
             Pick::Texture(k) => {
+                // Note FB12: revealing a helper opens a collapsed Helpers group (before the click, whose range
+                // order only counts rows that are shown).
+                if self.item(k).is_some_and(|i| i.kind == ItemKind::Helper) {
+                    self.filter.hide_helpers = false;
+                }
                 self.click_item(k, false, false);
                 self.nav.cursor = Some(k.clone());
                 self.nav.reveal_item = Some(k.clone());
