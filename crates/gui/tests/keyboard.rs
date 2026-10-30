@@ -689,3 +689,18 @@ fn esc_still_closes() {
         "the selection stayed through every Esc"
     );
 }
+
+/// Note FB7 x FB11: with a docked Presets tab in front, the grid keys do not move the selection from under it.
+#[test]
+fn grid_keys_wait_while_a_docked_view_is_in_front() {
+    use sdc_gui::model::CentreTab;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = ten(d.path());
+    m.open_presets();
+    assert_eq!(m.centre_front(), CentreTab::Presets);
+    let mut h = keys_only(m);
+    press(&mut h, Modifiers::NONE, Key::ArrowRight);
+    assert_eq!(h.state().1, None, "no grid action ran");
+    assert!(h.state().0.selected_items().is_empty());
+    assert_eq!(h.state().0.centre_front(), CentreTab::Presets);
+}

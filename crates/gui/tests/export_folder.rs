@@ -249,3 +249,10 @@ fn an_empty_project_is_not_clean() {
     assert!(!m.export_is_clean());
     assert_eq!(m.header_export_text(), "Review 0 files");
 }
+
+/// Final review M5: with no folder open the button is plain "Export", not "Review 0 files".
+#[test]
+fn no_folder_open_reads_plain_export() {
+    let m = AppModel::new(GuiSettings::default(), None, session());
+    assert_eq!(m.header_export_text(), "Export");
+}

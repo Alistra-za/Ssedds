@@ -466,6 +466,27 @@ fn revealing_a_helper_opens_the_group() {
     assert_eq!(h.state().selected_items(), vec![key]);
 }
 
+/// Final review (FB12, M6): a Problems click on a helper in a collapsed group opens the group and reveals the row.
+#[test]
+fn a_problems_click_on_a_helper_opens_the_group() {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), &XSET3, "");
+    let key = helper_keys(&m)[1].clone();
+    m.items.iter_mut().find(|i| i.key == key).unwrap().warnings =
+        vec![Warning::new(Code::LossReencode, "re-encoded")];
+    m.invalidate_views();
+    m.filter.hide_helpers = true;
+    m.open_problems(None);
+    let mut h = app(m);
+    h.get_by_label(&key).click();
+    h.run();
+    h.run();
+    assert!(!h.state().filter.hide_helpers, "the group opened");
+    assert_eq!(h.state().selected_items(), vec![key.clone()]);
+    assert_eq!(rows(&h).len(), 3, "the rows are drawn");
+}
+
 /// Review pictures of the Textures column at 1100, 1280 and 1600 px (egui-ui-rules step 5). Needs a GPU and
 /// `SDC_SHOTS_DIR`: `cargo test -p sdc-gui --test helpers_list -- --ignored shots`.
 #[test]

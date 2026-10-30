@@ -581,6 +581,8 @@ pub fn bulk_fields(m: &AppModel, keys: &[String]) -> Vec<BulkField> {
     let locked = locked_items(m);
     // Note FB3: while a plan runs, the jobs are the ones from before the last edit; a field the document sets itself
     // is read from the document, so a partial write shows mixed at once.
+    // shortcut: a Reset during a plan still shows the old value (the document read has no "unset" to tell it from
+    // the jobs'), until the plan lands; upgrade if a Reset-then-read race is ever reported.
     let live = if m.planning.is_some() {
         m.project.as_ref()
     } else {

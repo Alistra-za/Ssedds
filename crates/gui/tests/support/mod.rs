@@ -195,8 +195,9 @@ pub fn header_export_label<S>(h: &egui_kittest::Harness<'_, S>) -> String {
         .filter(|n| header.outer_rect.contains_rect(n.rect()))
         .filter_map(|n| n.accesskit_node().label())
         .find(|l| {
-            (l.starts_with("Export ") || l.starts_with("Review "))
-                && (l.ends_with(" file") || l.ends_with(" files"))
+            *l == "Export"
+                || ((l.starts_with("Export ") || l.starts_with("Review "))
+                    && (l.ends_with(" file") || l.ends_with(" files")))
         })
         .expect("the header Export button")
 }

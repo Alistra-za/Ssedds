@@ -43,7 +43,7 @@ pub(crate) struct TomlFile {
     disk: Option<SourceStamp>,
     pub(crate) dirty: bool,
     /// The text last loaded or saved: `restore` compares with it, so an Undo back to it is clean (Note FB3).
-    saved_text: String,
+    pub(crate) saved_text: String,
     pub(crate) error: Option<String>,
     /// Changes with every edit, restore and reload, from one counter for every document (DECISIONS Note Y7).
     pub(crate) rev: u64,

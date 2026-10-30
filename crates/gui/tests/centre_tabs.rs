@@ -65,6 +65,26 @@ fn presets_opens_as_a_centre_tab() {
     assert_eq!(windows(&h), 0, "no floating Presets window");
 }
 
+/// Final review M4 (Note FB7): the Advanced drawer is hidden while a docked view is in front.
+#[test]
+fn the_advanced_drawer_is_hidden_while_a_docked_view_is_in_front() {
+    use egui::containers::panel::PanelState;
+    let drawn = |h: &H| {
+        ["advanced", "advanced-strip"]
+            .iter()
+            .any(|id| PanelState::load(&h.ctx, egui::Id::new(id)).is_some())
+    };
+    let d = tempfile::tempdir().unwrap();
+    let h = harness(pbr_opened(d.path()));
+    assert!(drawn(&h), "the drawer is there with the selection in front");
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    m.open_presets();
+    let h = harness(m);
+    assert_eq!(h.state().centre_front(), CentreTab::Presets);
+    assert!(!drawn(&h), "no drawer under a docked Presets tab");
+}
+
 #[test]
 fn json_editor_opens_as_a_centre_tab() {
     let d = tempfile::tempdir().unwrap();

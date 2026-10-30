@@ -521,3 +521,25 @@ fn a_shared_add_key_is_kept_when_a_dds_sibling_exists() {
     assert_eq!(e.add, ["a/foo"], "{e:?}");
     assert_eq!(e.remove, ["a/foo.png"], "{e:?}");
 }
+
+/// Final review M7: an undo or redo back to the saved text is clean even though the JSON hash is put back after the
+/// restore (which touches the document).
+#[test]
+fn restore_keeping_json_sha_back_to_the_saved_text_is_clean() {
+    let (_d, mut s) = doc(Some("[[sets]]\nid = \"a/one\"\n"));
+    s.set_shader("a/one", Some(engine::shader::Shader::Parallax));
+    let step = s.text();
+    s.save(false).unwrap();
+    s.set_last_json_sha256("aa");
+    s.save(false).unwrap();
+    assert!(!s.is_dirty());
+    s.set_shader("a/one", Some(engine::shader::Shader::Pbr));
+    assert!(s.is_dirty());
+    // The step before the export has no hash; the live one is kept, which gives the saved text again.
+    s.restore_keeping_json_sha(&step);
+    assert_eq!(s.last_json_sha256().as_deref(), Some("aa"));
+    assert!(!s.is_dirty(), "the text equals the saved text");
+    // Redo to the edited text is dirty again.
+    s.set_shader("a/one", Some(engine::shader::Shader::Pbr));
+    assert!(s.is_dirty());
+}

@@ -602,7 +602,12 @@ fn enabled(a: &Action, model: &AppModel, ctx: &egui::Context) -> bool {
 fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
     match area {
         Area::Global => true,
-        Area::Grid | Area::Sets => !meshes_view && model.expanded.is_none(),
+        // Note FB7: a docked Presets or JSON tab in front owns the keys; the Selection under it stays put.
+        Area::Grid | Area::Sets => {
+            !meshes_view
+                && model.expanded.is_none()
+                && model.centre_front() == crate::model::CentreTab::Selection
+        }
         Area::Preview => !meshes_view && model.expanded.is_some(),
         Area::Dialogs | Area::View3d | Area::JsonEditor | Area::Problems => false,
     }

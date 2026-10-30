@@ -320,6 +320,15 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let to_textures = |ui: &egui::Ui| super::header::set_meshes_view(ui.ctx(), false);
     match act {
         Some(Act::Texture(k)) => {
+            // Note FB12: a helper in a collapsed Helpers group opens it, as the palette does. Local to this click:
+            // `select_item` also runs for restores, which must not reopen a group the user collapsed.
+            if model
+                .item(&k)
+                .is_some_and(|i| i.kind == crate::model::items::ItemKind::Helper)
+            {
+                model.filter.hide_helpers = false;
+                model.nav.reveal_item = Some(k.clone());
+            }
             model.select_item(&k);
             to_textures(ui);
         }
