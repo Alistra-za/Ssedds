@@ -6751,6 +6751,31 @@ fn a_crashing_json_anywhere_makes_every_shape_red() {
     }
 }
 
+/// GE14: the set preview reads the same whole-run crash lines: `pg_crashes` starts the JSON read and, once it
+/// lands, returns one line per crashing file (an unrelated `[{"match_diffuse": 5}]` included).
+#[test]
+fn pg_crashes_are_the_meshes_views_crash_lines() {
+    let d = pg_files();
+    let mut m = pg_session_in(d.path());
+    m.pg_crashes();
+    wait_pg(&mut m);
+    assert!(m.pg_crashes().is_empty(), "no crashing file");
+    put(
+        d.path(),
+        "mods/PGP/PBRNifPatcher/z.json",
+        Some(br#"[{"match_diffuse": 5}]"#),
+    );
+    let mut m = pg_session_in(d.path());
+    m.pg_crashes();
+    wait_pg(&mut m);
+    assert_eq!(
+        m.pg_crashes(),
+        [
+            r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json)."
+        ]
+    );
+}
+
 /// PG_IGNORE (value true) on the shape or its shader: In game keeps the edited material and says why; value 0
 /// does not count.
 #[test]

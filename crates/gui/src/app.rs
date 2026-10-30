@@ -359,6 +359,11 @@ impl eframe::App for SdcApp {
             self.model
                 .scan_finished(self.meshes.scan_completed, self.meshes.store_untouched);
         }
+        // Note GE14: the set preview shows the Meshes view's whole-run crash lines (one JSON read for both).
+        if self.state.set3d.shown {
+            let crashes = self.meshes.pg_crashes();
+            self.state.set3d.set_crashes(crashes);
+        }
         self.state.set3d.poll(&self.model);
         // Both views offer the scan (the Textures view has its row under the header).
         self.meshes.activate();

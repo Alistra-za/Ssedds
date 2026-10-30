@@ -198,6 +198,14 @@ pub fn candidates(
     (out, tested)
 }
 
+/// One red line per file PGPatcher 2.3 crashes on (Note GE11): any of them stops the whole run.
+pub fn crash_lines(files: &[PgFile]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|f| Some(format!("In game: {} ({}).", f.crash.as_ref()?, f.file)))
+        .collect()
+}
+
 /// One shape through PGPatcher's files (01 §1.4-§1.5): the first file (in `files`' order, the `candidates`) that
 /// patches it wins; a file that would skip it (a missing texture) is rejected for this shape and the next may win; a
 /// JSON PGPatcher crashes on leaves the shape unpatched: any file with a wrong-typed match key (Note GE11), or a
@@ -210,10 +218,7 @@ pub fn simulate_shape(
     exists: &dyn Fn(&str) -> bool,
 ) -> (MaterialState, Vec<String>) {
     // GE11: one crashing file anywhere stops PGPatcher's whole run (T1a, T1b), whatever this shape matches.
-    let crashes: Vec<String> = files
-        .iter()
-        .filter_map(|f| Some(format!("In game: {} ({}).", f.crash.as_ref()?, f.file)))
-        .collect();
+    let crashes = crash_lines(files);
     if !crashes.is_empty() {
         return (source.clone(), crashes);
     }
@@ -292,6 +297,16 @@ impl MeshesModel {
         match self.pg.as_ref().map(|p| &p.state) {
             Some(PgState::Done(Err(e))) => Some(e),
             _ => None,
+        }
+    }
+
+    /// The whole-run crash lines of the JSON on hand (Note GE14: the set preview shows them too); starts the read
+    /// when none is on hand for this scan target and scan. Empty while it reads or when it failed.
+    pub fn pg_crashes(&mut self) -> Vec<String> {
+        self.ensure_pg();
+        match self.pg.as_ref().map(|p| &p.state) {
+            Some(PgState::Done(Ok(files))) => crash_lines(files),
+            _ => vec![],
         }
     }
 

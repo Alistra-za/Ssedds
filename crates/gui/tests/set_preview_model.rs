@@ -773,6 +773,31 @@ fn without_a_scan_db_the_set_shows_patched_on_the_sphere_and_json_edits_encode_n
     assert_eq!(shown_ids(&s), ids, "a JSON-only edit encodes nothing");
 }
 
+/// GE14: the Meshes view's whole-run crash lines (`MeshesModel::pg_crashes`) make the set preview red and unpatched,
+/// whatever the edited entry matches; clearing them brings the patch back.
+#[test]
+fn a_crashing_json_makes_the_set_preview_red_and_unpatched() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = pbr_opened_plain(dir.path());
+    let key = rock(&m).0.key;
+    let mut m = m;
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    run(&mut s, &m);
+    let line = r"In game: PGPatcher 2.3 crashes on this JSON: match_diffuse is not a string (PBRNifPatcher\z.json).";
+    s.set_crashes(vec![line.to_string()]);
+    run(&mut s, &m);
+    let Some(Content::Builtin { material, .. }) = s.v3.content().cloned() else {
+        panic!("{:?}", s.v3.content())
+    };
+    assert!(!material.is_pbr(), "no patched material");
+    assert_eq!(s.rows[0].outcome, Outcome::Crash(line.to_string()));
+    assert!(s.rows[0].text().contains(line));
+    s.set_crashes(vec![]);
+    run(&mut s, &m);
+    assert!(matches!(s.rows[0].outcome, Outcome::Patched { .. }));
+}
+
 fn lighting_shape(block: u32, slots: &[&str]) -> nif::scan::ShapeRow {
     use nif::props::{Lighting, LightingParams, LightingTrailer};
     use nif::shape_head::{ShapeHead, ShapeKind};

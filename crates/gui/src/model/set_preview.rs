@@ -1375,6 +1375,9 @@ pub enum Outcome {
     /// PGPatcher would skip the shape for this file (01 §1.4); the shape keeps its source material (red badge).
     Skip(String),
     NoMatch,
+    /// Note GE14: a loaded JSON PGPatcher 2.3 crashes on stops the whole run; the shape keeps its source material.
+    /// The crash lines, one per file, joined.
+    Crash(String),
     /// No simulation (D3, or a built-in shape no slot of which can match the entry).
     Plain,
 }
@@ -1396,6 +1399,7 @@ impl ShapeRow {
             Outcome::Patched { .. } => format!("{name}: patched as PGPatcher would"),
             Outcome::Skip(r) => format!("{name}: {}", skip_text(r)),
             Outcome::NoMatch => format!("{name}: not matched, original textures"),
+            Outcome::Crash(lines) => format!("{name}: not patched. {lines}"),
             Outcome::Plain => format!("{name}: plain textures, no PGPatcher simulation"),
         }
     }
@@ -1593,6 +1597,8 @@ pub struct SetPreview {
     vfs_cache: RefCell<HashMap<String, Option<FileSource>>>,
     tx: Sender<SpMsg>,
     rx: Receiver<SpMsg>,
+    /// The Meshes view's whole-run crash lines (Note GE14, `MeshesModel::pg_crashes`), set by the app.
+    crashes: Vec<String>,
 }
 
 impl Default for SetPreview {
@@ -1657,7 +1663,32 @@ impl SetPreview {
             vfs_cache: RefCell::new(HashMap::new()),
             tx,
             rx,
+            crashes: vec![],
         }
+    }
+
+    /// Note GE14: the whole-run crash lines; a change re-pushes the scene.
+    pub fn set_crashes(&mut self, crashes: Vec<String>) {
+        if crashes != self.crashes {
+            self.crashes = crashes;
+            self.want_scene = true;
+        }
+    }
+
+    /// Note GE14: with a crashing JSON loaded every simulated shape keeps its source material and shows the lines.
+    fn crashed(&self, rows: Vec<ShapeRow>, sources: &[MaterialState]) -> Vec<ShapeRow> {
+        if self.crashes.is_empty() {
+            return rows;
+        }
+        let lines = self.crashes.join(" ");
+        rows.into_iter()
+            .zip(sources)
+            .map(|(r, src)| ShapeRow {
+                outcome: Outcome::Crash(lines.clone()),
+                material: src.clone(),
+                ..r
+            })
+            .collect()
     }
 
     pub fn mode(&self) -> PreviewMode {
@@ -2068,13 +2099,14 @@ impl SetPreview {
         let name: std::sync::Arc<str> = "Built-in shape".into();
         if let Some(entry) = self.entry.clone() {
             if let Some((src, nif)) = builtin_source(&entry, &self.default) {
-                let mut rows = simulate_shapes(
+                let rows = simulate_shapes(
                     &entry,
                     &self.default,
                     &nif,
-                    &[(ShapeId(0), name, src)],
+                    &[(ShapeId(0), name, src.clone())],
                     &|p| self.exists(p),
                 );
+                let mut rows = self.crashed(rows, &[src]);
                 let mut row = rows.remove(0);
                 row.material = self.tiled(row.material);
                 return (row.material.clone(), row);
@@ -2107,9 +2139,11 @@ impl SetPreview {
             .iter()
             .map(|s| (s.id, s.name.clone(), s.material.clone()))
             .collect();
-        simulate_shapes(entry, &self.default, &nif.nif_path, &shapes, &|p| {
+        let rows = simulate_shapes(entry, &self.default, &nif.nif_path, &shapes, &|p| {
             self.exists(p)
-        })
+        });
+        let sources: Vec<MaterialState> = shapes.into_iter().map(|(_, _, m)| m).collect();
+        self.crashed(rows, &sources)
     }
 
     /// Builds the scene and hands it to the viewport: every shape simulated, its material written into the parsed
