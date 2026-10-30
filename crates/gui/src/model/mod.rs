@@ -101,10 +101,10 @@ pub fn plan_bar_text(done: usize, total: usize) -> String {
     )
 }
 
-/// `n` with a comma between each group of three digits.
 /// Note FC12: what the top undo step's label gets when the engine rejected `sdc.toml` after it (then the message, `)`).
 const REJECTED: &str = " (sdc.toml rejected it: ";
 
+/// `n` with a comma between each group of three digits.
 fn thousands(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -280,6 +280,8 @@ pub(crate) struct ViewKey {
     scan_db: Option<PathBuf>,
     /// Its stamp as of the last `poll` (an external CLI scan shows on the next frame).
     scan: cs_pbr::Stamp,
+    /// Note FC12: "Also write a zip" is in effect, so the zip-size row follows the tick on the next frame.
+    zip: bool,
 }
 
 /// A click or key's action that waits a frame for a text field to commit (Note FC8).
@@ -583,6 +585,8 @@ pub struct AppModel {
     also_reply: Option<Sender<Vec<PathBuf>>>,
     /// Final review I2: the files the JSON finishers wrote (or found current) in this export.
     also_json: Vec<PathBuf>,
+    /// Note FC12: the zip-size row's limits (entries, bytes): the ZIP format's, lowered only by tests.
+    zip_limits: (usize, u64),
     /// Final review I2: the token `export_ended` took, re-armed while the walk, zips and report run.
     also_cancel: Option<CancelToken>,
     /// Final review I2: `Some` while the walk, zips and report run: the export's failure, shown when they end.
@@ -771,6 +775,7 @@ impl AppModel {
             also_written: None,
             also_reply: None,
             also_json: Vec::new(),
+            zip_limits: (engine::zip::MAX_ENTRIES, engine::zip::MAX_BYTES),
             also_cancel: None,
             also_tail: None,
             ignored_by_plan: false,
@@ -2521,6 +2526,7 @@ impl AppModel {
             target: self.target,
             scan_db: self.scan_db.clone(),
             scan: self.scan_stamp,
+            zip: self.zip_on(),
         }
     }
 

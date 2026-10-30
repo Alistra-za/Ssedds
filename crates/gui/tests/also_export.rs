@@ -604,6 +604,54 @@ fn the_pbr_zip_holds_the_pgpatcher_json_from_the_first_run() {
     assert!(m.export.running.is_none());
 }
 
+/// Note FC12 (fix round 1): the zip estimate counts every file the PBR zip gets (outputs and JSON), and over the
+/// limits it is a Blockers row that holds Review's gate; unticking the zip, or Also, clears it on the next frame.
+#[test]
+fn a_zip_over_the_limit_blocks_and_its_estimate_counts_every_entry() {
+    const ROW: &str = "Zip too large for the ZIP format";
+    let rows = |m: &AppModel| {
+        sdc_gui::model::pbr_export::export_blocks(m)
+            .into_iter()
+            .filter(|b| b.text.starts_with(ROW))
+            .count()
+    };
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    m.set_also_settings(|c| c.zip = true);
+    idle(&mut m);
+    assert_eq!(m.zip_estimate(), None, "no Also tick: no zip");
+    tick(&mut m, AlsoTarget::Vanilla);
+    let e = m.zip_estimate().expect("zip on");
+    assert_eq!(rows(&m), 0);
+    export(&mut m);
+    let pbr = m.also_folders()[0].clone();
+    let name = pbr.file_name().unwrap().to_string_lossy().into_owned();
+    let zipped = zip_names(&m.also_location().join(format!("{name}.zip"))).len();
+    assert_eq!(
+        e.entries, zipped,
+        "the estimate counts the PBR zip's entries"
+    );
+    // At the limit (the real one is 65,535 files): a row, and the gate waits.
+    m.set_zip_limits(e.entries, u64::MAX);
+    // The tick reaches the cached row at once, before the new plan lands (`ViewKey::zip`).
+    m.set_also_settings(|c| c.zip = false);
+    assert_eq!(rows(&m), 0, "zip off: the row goes on the next frame");
+    idle(&mut m);
+    assert_eq!(rows(&m), 0, "zip off: no row");
+    m.open_review();
+    m.acknowledge_all_asks();
+    assert!(m.review_gate().is_ok(), "{:?}", m.review_gate());
+    m.set_also_settings(|c| c.zip = true);
+    assert_eq!(rows(&m), 1, "zip on: the row comes on the next frame");
+    idle(&mut m);
+    m.open_review();
+    m.acknowledge_all_asks();
+    assert!(m.review_gate().is_err(), "the zip row holds the gate");
+    m.set_also_tick(AlsoTarget::Vanilla, false);
+    idle(&mut m);
+    assert_eq!(rows(&m), 0, "Also off: no zip, no row");
+}
+
 /// Every `[export]` field set at once survives the write and the parse (prune, tables after values), as an unsaved
 /// edit; only the non-default fields are written.
 #[test]

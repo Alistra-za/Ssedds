@@ -498,7 +498,8 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// One header Undo or Redo button as drawn: its text, its accessible name (the text unshortened), its hover.
+/// One header Undo or Redo button as drawn: its text, its accessible name (the text unshortened; `Undo (NIF edit
+/// history)` while the NIF history is the target), its hover (which holds the whole step).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoButton {
     pub text: String,
@@ -515,7 +516,7 @@ pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>)
     let verb = if undo { "Undo" } else { "Redo" };
     let keys = super::actions::keys_text(if undo { "undo" } else { "redo" });
     // (the button's full text, what the hover says it does, enabled, the history)
-    let (name, does, enabled, history) = match nif {
+    let (full, does, enabled, history) = match nif {
         Some(t) => {
             let (can, label) = if undo {
                 (t.can_undo, &t.undo_label)
@@ -545,10 +546,16 @@ pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>)
         (false, false) => format!("Nothing to {}", verb.to_lowercase()),
         (true, _) => format!("{does}  ({keys}). Acts on {history}."),
     };
-    let text = if name.chars().count() > MAX {
-        format!("{}…", name.chars().take(MAX - 1).collect::<String>())
+    let text = if full.chars().count() > MAX {
+        format!("{}…", full.chars().take(MAX - 1).collect::<String>())
     } else {
-        name.clone()
+        full.clone()
+    };
+    // Fix round 1 (rule 8.4): the NIF panel's own buttons are `Undo NIF edit`, so the header's name says whose history
+    // it is; the step is in the hover.
+    let name = match nif {
+        Some(_) => format!("{verb} (NIF edit history)"),
+        None => full,
     };
     UndoButton {
         text,

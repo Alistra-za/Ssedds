@@ -259,6 +259,42 @@ fn match_selector_starts_from_the_set_and_stays() {
     h.get_by_value("Match 3");
 }
 
+/// Fix round 1 (6b): the selector is per project. Another folder's set with the same id starts from its own value
+/// (none stored here, so its lowest unused match), not from the first folder's choice in egui's memory.
+#[test]
+fn the_match_selector_is_per_project() {
+    let (_d, mut h) = harness();
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 4 · parallax").click();
+    h.run();
+    h.get_by_value("Match 4");
+    let d2 = tempfile::tempdir().unwrap();
+    let mut m2 = pbr_opened(d2.path());
+    m2.settings = h.state().0.settings.clone();
+    let key = json_entries(&m2)
+        .into_iter()
+        .find(|(v, _)| v.id == ROCK_SET)
+        .unwrap()
+        .0
+        .key;
+    m2.select_set(&key);
+    h.state_mut().0 = m2;
+    h.run();
+    h.get_by_value("Match 2");
+    assert_eq!(
+        h.state()
+            .0
+            .settings
+            .match_slots
+            .values()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![4],
+        "the first folder's choice is kept, for that folder"
+    );
+}
+
 #[test]
 fn tab_accepts_the_ghost_and_with_no_ghost_moves_focus() {
     let (_d, mut h) = harness();

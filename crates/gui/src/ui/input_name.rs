@@ -458,7 +458,8 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         // slots 2–8 set that slot's match. Note FC12: it starts from the user's choice or the set's lowest unused
         // match, and only the user moves it (a pick from All slots goes to it).
         let json = matching && is_json_set(v, model.target);
-        let slot_id = id.with("match-slot");
+        // Per project too: another folder's set with the same id starts from its own gui.toml value.
+        let slot_id = id.with(("match-slot", model.root.as_deref()));
         let all_id = id.with("all-slots");
         let mut slot: u8 = if json {
             ui.data(|d| d.get_temp(slot_id))

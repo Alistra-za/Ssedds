@@ -408,7 +408,7 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
         }
     }
     // Note FC12 (supersedes CN45's skip-with-note): a zip the ZIP format cannot hold blocks before anything is written.
-    if let Some(text) = m.zip_estimate().as_ref().and_then(super::review::zip_block) {
+    if let Some(text) = m.zip_row() {
         out.push(general(text));
     }
     out
@@ -508,7 +508,8 @@ fn photo_crops(m: &AppModel) -> Vec<ExportIssue> {
             }
             let st = j.source?;
             let (w, h) = session?.cache().dims(&j.input, st)?;
-            let name = j.input.file_name()?.to_string_lossy();
+            // The texture's path, not its file name: two same-named photos are two acknowledgements.
+            let name = &i.key;
             (h > w).then(|| general(format!("Only the middle {w}×{w} of {name} is used")))
         })
         .collect()

@@ -681,24 +681,35 @@ fn portrait_face_is_a_row() {
     let d = tempfile::tempdir().unwrap();
     let r = d.path().join("textures/sky");
     std::fs::create_dir_all(&r).unwrap();
-    image::RgbImage::from_fn(64, 128, |x, y| image::Rgb([x as u8, y as u8, 40]))
-        .save(r.join("photo.png"))
-        .unwrap();
+    let night = d.path().join("textures/night");
+    std::fs::create_dir_all(&night).unwrap();
+    for dir in [&r, &night] {
+        image::RgbImage::from_fn(64, 128, |x, y| image::Rgb([x as u8, y as u8, 40]))
+            .save(dir.join("photo.png"))
+            .unwrap();
+    }
     let mut m = AppModel::new(GuiSettings::default(), None, session());
     m.accept = engine::policy::AcceptSuggestions::None;
     m.open_folder(d.path().join("textures"));
     assert!(m.wait_idle(Duration::from_secs(60)));
     choose_export(&mut m, d.path().join("export"));
-    m.decide("sky/photo.png", Answer::Subtype(Subtype::Cubemap));
-    assert!(m.wait_idle(Duration::from_secs(60)));
-    m.set_field("sky/photo.png", "cubemap.layout", json!("photo"));
-    assert!(m.wait_idle(Duration::from_secs(60)));
-    const ROW: &str = "Only the middle 64×64 of photo.png is used";
+    for key in ["sky/photo.png", "night/photo.png"] {
+        m.decide(key, Answer::Subtype(Subtype::Cubemap));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        m.set_field(key, "cubemap.layout", json!("photo"));
+        assert!(m.wait_idle(Duration::from_secs(60)));
+    }
+    const ROW: &str = "Only the middle 64×64 of sky/photo.png is used";
+    const ROW2: &str = "Only the middle 64×64 of night/photo.png is used";
     let asks: Vec<String> = pbr_export::export_asks(&m)
         .into_iter()
         .map(|a| a.text)
         .collect();
-    assert!(asks.iter().any(|a| a == ROW), "{asks:?}");
+    // Fix round 1: one row per texture path, so each same-named photo needs its own tick.
+    assert!(
+        asks.iter().any(|a| a == ROW) && asks.iter().any(|a| a == ROW2),
+        "{asks:?}"
+    );
     m.open_review();
     let mut h = harness(m);
     h.run();
@@ -715,9 +726,16 @@ fn portrait_face_is_a_row() {
         .unwrap()
         .acknowledged
         .contains(ROW));
+    assert!(
+        h.state()
+            .review_gate()
+            .is_err_and(|e| e.starts_with("Acknowledge")),
+        "the other photo's row still waits"
+    );
     // A landscape photo (wider than tall) is used whole: no row.
     let w = image::RgbImage::from_fn(128, 64, |x, y| image::Rgb([x as u8, y as u8, 40]));
     w.save(r.join("photo.png")).unwrap();
+    w.save(night.join("photo.png")).unwrap();
     h.state_mut().replan();
     assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
     assert!(pbr_export::export_asks(h.state())
@@ -729,13 +747,17 @@ fn portrait_face_is_a_row() {
 /// export, from the engine's estimate of the planned outputs.
 #[test]
 fn zip_over_the_limit_is_a_blocker_row() {
-    use engine::zip::ZipEstimate;
+    use engine::zip::{ZipEstimate, MAX_BYTES, MAX_ENTRIES};
     use sdc_gui::model::review::zip_block;
+    let limits = (MAX_ENTRIES, MAX_BYTES);
     assert_eq!(
-        zip_block(&ZipEstimate {
-            entries: 70_000,
-            bytes: 5 << 30
-        })
+        zip_block(
+            &ZipEstimate {
+                entries: 70_000,
+                bytes: 5 << 30
+            },
+            limits
+        )
         .as_deref(),
         Some(
             "Zip too large for the ZIP format (70,000 files, 5.0 GiB); untick \"Also write a zip\" or split \
@@ -743,10 +765,19 @@ fn zip_over_the_limit_is_a_blocker_row() {
         )
     );
     assert_eq!(
-        zip_block(&ZipEstimate {
-            entries: 3,
-            bytes: 1 << 20
-        }),
+        zip_block(
+            &ZipEstimate {
+                entries: 3,
+                bytes: 1 << 20
+            },
+            limits
+        ),
         None
     );
+    let at = |entries, bytes| zip_block(&ZipEstimate { entries, bytes }, limits).is_some();
+    assert!(
+        at(MAX_ENTRIES, 0) && at(0, MAX_BYTES),
+        "at a limit is over it"
+    );
+    assert!(!at(MAX_ENTRIES - 1, MAX_BYTES - 1));
 }

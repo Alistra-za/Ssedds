@@ -41,6 +41,28 @@ fn cancel_keeps_the_previous_project() {
     assert_eq!(m.target, Target::Cs);
 }
 
+/// Fix round 1 (6a): "Don't save" drops the edits and their steps before the open starts, so Cancel brings back no
+/// step whose state is gone.
+#[test]
+fn cancel_after_dont_save_brings_back_no_dropped_step() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let first = m.root.clone().unwrap();
+    m.set_target(Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(m.can_undo());
+    let od = tempfile::tempdir().unwrap();
+    m.resolve_open_unsaved(mod_folder(od.path()), false);
+    m.cancel_open();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.root.as_ref(), Some(&first));
+    assert!(
+        !m.can_undo() && !m.can_redo(),
+        "the dropped edit's step is gone"
+    );
+    assert_eq!(m.target, Target::Cs, "the edit was dropped");
+}
+
 #[test]
 fn a_completed_open_replaces_the_history() {
     let d = tempfile::tempdir().unwrap();
@@ -101,6 +123,8 @@ fn undo_label_names_the_nif_history() {
     };
     let b = undo_button(Some(&nif), true, Some("Mode"));
     assert_eq!(b.text, "Undo NIF edit: Set shader type");
+    // Fix round 1 (rule 8.4): the NIF panel's buttons are `Undo NIF edit`; the header's name differs.
+    assert_eq!(b.name, "Undo (NIF edit history)");
     assert!(b.enabled);
     assert!(b.hover.contains("NIF edit history"), "{}", b.hover);
     let r = undo_button(Some(&nif), false, Some("Mode"));
@@ -115,7 +139,7 @@ fn undo_label_names_the_nif_history() {
     let r = undo_button(None, false, None);
     assert_eq!((r.text.as_str(), r.enabled), ("Redo", false));
     assert_eq!(r.hover, "Nothing to redo");
-    // A long NIF step is shortened on the button; the full text stays in the name and the hover.
+    // A long NIF step is shortened on the button; the full text stays in the hover.
     let long = UndoTarget {
         undo_label: Some("Set the emissive colour of every shape in the mesh".into()),
         ..nif
@@ -126,9 +150,7 @@ fn undo_label_names_the_nif_history() {
         "{}",
         b.text
     );
-    assert_eq!(
-        b.name,
-        "Undo NIF edit: Set the emissive colour of every shape in the mesh"
-    );
-    assert!(b.hover.contains("every shape in the mesh"));
+    assert!(b
+        .hover
+        .starts_with("Undo NIF edit: Set the emissive colour of every shape in the mesh"));
 }

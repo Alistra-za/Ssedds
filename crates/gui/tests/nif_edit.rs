@@ -2155,17 +2155,16 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         "Undo NIF edit",
         "Redo NIF edit",
     ] {
-        // Note FC12: the header's Undo/Redo name the NIF history too, so take the one in the panel.
-        let r = h
-            .query_all_by_label(l)
-            .map(|n| n.rect())
-            .find(|r| edit.contains(r.center()))
-            .unwrap_or_else(|| panic!("no {l} inside the panel {edit:?}"));
+        // `get_by_label` panics on two matches: the header's Undo/Redo must not share the panel's names (rule 8.4).
+        let r = h.get_by_label(l).rect();
         assert!(
             edit.contains(r.center()),
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
+    // Note FC12 (fix round 1): the header names whose history it acts on.
+    h.get_by_label("Undo (NIF edit history)");
+    h.get_by_label("Redo (NIF edit history)");
     // Meshes UI T3: Export NIF sits in a footer under the tabs, inside the panel, with its blocked reason.
     let footer = panel("meshes-edit-export");
     let export = h.get(export_nif()).rect();
@@ -3699,16 +3698,18 @@ fn textures(h: &AppH) -> (bool, bool, Option<String>) {
     (m.can_undo(), m.can_redo(), m.undo_label().map(String::from))
 }
 
-/// The header's Undo or Redo: `name` itself, or `{name} NIF edit…` while the NIF history is the target (Note FC12).
+/// The header's Undo or Redo: `name` itself, or `{name} (NIF edit history)` while the NIF history is the target
+/// (Note FC12).
 fn header_button<'a>(h: &'a AppH, name: &'a str) -> egui_kittest::Node<'a> {
     let header =
         egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("header")).unwrap();
+    let nif = format!("{name} (NIF edit history)");
     h.query_all_by_role(AkRole::Button)
         .filter(|n| header.outer_rect.contains_rect(n.rect()))
         .find(|n| {
             n.accesskit_node()
                 .label()
-                .is_some_and(|l| l == name || l.starts_with(&format!("{name} NIF edit")))
+                .is_some_and(|l| l == name || l == nif)
         })
         .unwrap_or_else(|| panic!("no header button {name}"))
 }

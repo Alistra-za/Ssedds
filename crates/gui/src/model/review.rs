@@ -111,9 +111,10 @@ fn plural(n: usize) -> &'static str {
 /// FC11 (Review Focus 4): a stale file whose stamp no longer matches its record, or that has none: no button.
 pub const STALE_NOT_OURS: &str = "edited since Tessalith wrote it: left alone";
 
-/// Note FC12 (CN45): the Blockers row of a zip over the ZIP format's limits, `None` when it fits.
-pub fn zip_block(e: &engine::zip::ZipEstimate) -> Option<String> {
-    (!e.fits()).then(|| {
+/// Note FC12 (CN45): the Blockers row of a zip at or over `limits` (entries, bytes; the ZIP format's are
+/// `engine::zip::MAX_ENTRIES` and `MAX_BYTES`), `None` when it fits.
+pub fn zip_block(e: &engine::zip::ZipEstimate, limits: (usize, u64)) -> Option<String> {
+    (e.entries >= limits.0 || e.bytes >= limits.1).then(|| {
         format!(
             "Zip too large for the ZIP format ({} files, {}); untick \"Also write a zip\" or split the export",
             super::thousands(e.entries),
@@ -123,16 +124,45 @@ pub fn zip_block(e: &engine::zip::ZipEstimate) -> Option<String> {
 }
 
 impl AppModel {
-    /// Note FC12 (CN45): the zip of the export folder's planned outputs, when "Also write a zip" is on: the files an
-    /// export writes, each at its estimated DDS size.
-    // shortcut: only the PBR folder's outputs are counted (Vanilla and CM hold about as many) and an output whose
-    // source size the plan did not read counts 0 bytes; `write_zip` still refuses what slips past, as a note. Count
-    // the other folders' plans if a mod gets past this row and fails at the zip.
+    /// Note FC12: "Also write a zip" is in effect (it applies only with an Also tick on).
+    pub(crate) fn zip_on(&self) -> bool {
+        self.also_on() && self.also_config().zip
+    }
+
+    /// Note FC12: the zip-size row's limits (entries, bytes); a test lowers them to reach the row cheaply.
+    #[doc(hidden)]
+    pub fn set_zip_limits(&mut self, entries: usize, bytes: u64) {
+        self.zip_limits = (entries, bytes);
+    }
+
+    /// Note FC12: the zip-size Blockers row, when the PBR folder's zip would not fit.
+    pub(crate) fn zip_row(&self) -> Option<String> {
+        zip_block(&self.zip_estimate()?, self.zip_limits)
+    }
+
+    /// Note FC12 (CN45): the PBR folder's zip, when "Also write a zip" is on: every file `finish_also` puts in it
+    /// (each planned output, which it zips by job key, plus the PGPatcher, CS PBR and complex-material JSON the export
+    /// writes into the folder; `_sdc` is never zipped), outputs at their estimated DDS size and JSON at its text size.
+    // shortcut: only the PBR folder's zip is counted (the Vanilla and CM zips hold at most about as many files, all
+    // derived from the PBR sets) and an output whose source size the plan did not read counts 0 bytes; `write_zip`
+    // still refuses what slips past, as a note. Count the other folders' plans if a mod gets past this row and fails
+    // at the zip.
     pub fn zip_estimate(&self) -> Option<engine::zip::ZipEstimate> {
-        if !(self.also_on() && self.also_config().zip) {
+        if !self.zip_on() {
             return None;
         }
         let session = self.session.as_ref();
+        // The PGPatcher JSON's text is built at the export's end, so it counts 0 bytes (a few KiB).
+        let pgp = super::pbr_export::prepare(self).map(|_| 0);
+        let cs = super::cs_pbr_export::prepare(self)
+            .into_iter()
+            .flat_map(|p| p.files);
+        let cm = super::cm_json::prepare(self)
+            .into_iter()
+            .flat_map(|p| p.files);
+        let json = pgp
+            .into_iter()
+            .chain(cs.chain(cm).map(|(_, text)| text.len() as u64));
         let sizes = self.items.iter().filter_map(|i| {
             let j = i.job.as_ref()?;
             if matches!(
@@ -148,7 +178,7 @@ impl AppModel {
                 super::out_size::estimate_job(d, &j.profile, j.cube.as_ref()).file_bytes()
             }))
         });
-        Some(engine::zip::estimate(sizes))
+        Some(engine::zip::estimate(sizes.chain(json)))
     }
 }
 
