@@ -566,6 +566,9 @@ pub fn draw(
         for (pos, &index) in visible.iter().enumerate() {
             let v = &views[index];
             // R4: a card outside the clip rect allocates its last height instead of being laid out.
+            // shortcut: a skipped card has no AccessKit node and no Tab stop, so screen readers and Tab reach only the
+            // cards on screen (CF7; Ctrl+K Go to set reaches all); give off-screen rows a node when egui offers a way
+            // to (Note FC8).
             // shortcut: heights of off-screen cards go stale when the column width changes (the scroll bar length is off until they are drawn); measure on resize if it shows.
             // shortcut: after a jump, cards above the view are estimates, so scrolling up shifts the visible cards as each is measured; anchor the top visible card (add the height deltas above it to the scroll offset) if users notice.
             let h = st.card_h.get(&v.id).copied().unwrap_or(est);
@@ -664,16 +667,19 @@ pub fn draw(
     }
     for a in acts {
         match a {
-            Act::Select(k) => model.select_set(&k),
-            Act::SelectItem(k) => model.select_item(&k),
-            Act::Click(k, ctrl, shift) => model.click_set(&k, ctrl, shift),
+            // Note FC8 (BN3): a new selection waits a frame for a focused field to commit.
+            Act::Select(k) => super::after_commit(&ctx, model, move |m| m.select_set(&k)),
+            Act::SelectItem(k) => super::after_commit(&ctx, model, move |m| m.select_item(&k)),
+            Act::Click(k, ctrl, shift) => {
+                super::after_commit(&ctx, model, move |m| m.click_set(&k, ctrl, shift))
+            }
             Act::RightClick(k) => model.right_click_set(&k),
             Act::Bulk(a) => model.menu_picked(a),
             Act::Problems(k) => {
                 model.open_problems(Some(crate::model::bottom::ProblemsFilter::Set(k)))
             }
             Act::Slot(a) => super::slot_commands::run(model, cmds, a),
-            Act::Expand(k) => model.expand(&k),
+            Act::Expand(k) => super::after_commit(&ctx, model, move |m| m.expand(&k)),
             Act::Drop(item, set) => match model.drop_on_set(&item, &set) {
                 DropOutcome::Joined => {}
                 DropOutcome::AskChoice { from } => {

@@ -180,6 +180,9 @@ fn rows_table(ui: &mut egui::Ui, plan: &RenamePlan, d: &mut RenameDialog) {
         // 8 px of margin: a row exactly as wide as its column would flip the scroll bar on and off (ui-rules 3.7).
         let total = ui.available_width() - ui.spacing().scroll.allocated_width() - 8.0;
         let cols = Cols::new(total, gap);
+        // shortcut: no New column (CG2): in this fixed-size dialog it repeated Output and was clipped too narrow to
+        // read, so one row is renamed by unticking the others; bring per-row typing back once the dialog is
+        // resizable (Note FC8).
         let head = |s: &'static str| {
             move |ui: &mut egui::Ui| {
                 ui.label(egui::RichText::new(s).strong());

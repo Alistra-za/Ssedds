@@ -754,7 +754,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                 .inactive
                                 .weak_bg_fill
                                 .lerp_to_gamma(v.selection.bg_fill, t);
-                            if ui.add(button.fill(fill)).clicked() {
+                            let r = ui.add(button.fill(fill));
+                            // Note FC8: a focused field commits on the press; the release exports.
+                            super::blur_on_press(ui, r.rect);
+                            if r.clicked() {
                                 act = Some(Act::Export);
                             }
                         }
@@ -980,12 +983,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::Others) => model.open_problems(None),
         Some(Act::Json(overwrite)) => model.answer_review_json(overwrite),
         Some(Act::Nif(path, overwrite, sha)) => model.answer_review_nif(&path, overwrite, sha),
-        // Export saves first: wait for a focused field to commit, as the header Export does (Note BS14).
-        Some(Act::Export) => {
-            if !super::header::field_focused(ui, model, "Export") {
-                model.export_from_review();
-            }
-        }
+        // Export saves first: a focused field commits before it runs (Note FC8, supersedes CA14's refusal).
+        Some(Act::Export) => super::after_commit(ui.ctx(), model, AppModel::export_from_review),
         Some(Act::Close) => model.dismiss_review(),
         None => {}
     }

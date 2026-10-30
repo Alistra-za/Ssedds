@@ -135,19 +135,18 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     };
     push_right(ui, button_width(ui, &text) + others);
     export_to_menu(ui, model, text, full);
-    if ui
-        .add_enabled(
-            model.is_dirty(),
-            egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
-        )
-        .clicked()
-    {
-        // AG23, trace-debug #54: as Ctrl+S, wait for a focused field to commit.
-        if !field_focused(ui, model, "Save") {
+    // Note FC8: a focused text field may hold the only unsaved edit, so Save is live while one has the focus.
+    let r = ui.add_enabled(
+        model.is_dirty() || ui.ctx().egui_wants_keyboard_input(),
+        egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
+    );
+    // Note FC8 (supersedes BS7's refusal): the field commits first, then this click saves.
+    super::commit_click(ui, &r, model, |m| {
+        if m.is_dirty() {
             // A failed save raises its own dialog.
-            let _ = model.save();
+            let _ = m.save();
         }
-    }
+    });
     export_button(ui, model, egui::vec2(EXPORT_WIDTH, h));
 }
 
@@ -195,21 +194,6 @@ fn push_right(ui: &mut egui::Ui, w: f32) {
     }
 }
 
-/// True when a text field has the keyboard focus: `what` (Save, Export) then does nothing and says why, so the
-/// field commits its typed value on the focus loss first (AG23, trace-debug #54).
-pub(super) fn field_focused(ui: &egui::Ui, model: &mut AppModel, what: &str) -> bool {
-    if !ui.ctx().egui_wants_keyboard_input() {
-        return false;
-    }
-    model.status_line = format!("{what}: leave the text field first");
-    // The commit's plan replaces the status line at once; the log keeps it.
-    model.messages.log(
-        crate::model::messages::Severity::Info,
-        model.status_line.clone(),
-    );
-    true
-}
-
 /// Export, `size` big. While an export runs its lower half is the progress bar (done/total; the file on hover).
 /// Note FB1: it reads `Review {n} files` in the plain button colour until Review would write without skipping
 /// anything, then `Export {n} files`, accent-filled. A click opens Review either way (CA1); a clean project exports.
@@ -249,7 +233,6 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         );
     }
     ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
-        // Export saves first: like Save, wait for a focused field to commit (Note BS14).
         // A12: the hover counts the files and the problems. FB1: and, while it reads Review, what is still open.
         // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
@@ -270,9 +253,8 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
             .add_enabled(can_export, export)
             .on_hover_ui(hover)
             .on_disabled_hover_ui(hover);
-        if r.clicked() && !field_focused(ui, model, "Export") {
-            model.export_clicked();
-        }
+        // Export saves first: a focused field commits before it runs (Note FC8, supersedes BS14's refusal).
+        super::commit_click(ui, &r, model, AppModel::export_clicked);
         if running {
             let (done, total) = model.export.progress();
             let frac = if total == 0 {

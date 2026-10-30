@@ -209,7 +209,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 - **Pixel readout:** point at the picture to see the source and encoded value of the texel under the cursor (0 to 255 and floats), the difference per channel, and for a normal map both normals and the angle between them.
 - **Lens** (L) magnifies 8x under the cursor. **Tile 3x3** (T) repeats the picture to check seams. HDR formats get an **Exposure** slider. The heatmap has a colour legend and a full-scale slider.
 - **Pin and compare** (P): *Pin this result* keeps the finished encode with its settings. Change a setting or the encoder, encode again, and *Compare: Source | Pinned* shows the pin beside the new result, with PSNR for both, the readout difference and a pinned-vs-current heatmap. There is one pin; closing the preview, changing texture or opening a folder drops it.
-- The picture is never narrower than 480 points. When the texture's settings do not fit beside it (the default 1400×900 window, or Advanced open), they collapse to a narrow **Settings** strip: click it to open them. They then stay open until the preview closes.
+- In a window 1280 points wide or wider the texture's settings start open beside the picture and stay open when Advanced opens. In a narrower window the picture is never narrower than 480 points: when the settings do not fit beside it, they start as a narrow **Settings** strip; click it to open them. They then stay open until the preview closes.
 - A DDS file previews as stored (no source side). BC2 and signed BC6H cannot be previewed.
 - Without a usable GPU the preview is off, and everything else still works.
 
@@ -495,4 +495,4 @@ See also [Troubleshooting](Troubleshooting.md).
 | In 3D: Home, V, Ctrl+Shift+C | Recentre, next debug view, copy image. |
 | F8 / Shift+F8 | Next / previous error in the JSON editor. |
 
-Shortcuts leave a text field alone; Esc leaves the field.
+Shortcuts leave a text field alone, except Ctrl+K (the palette) and Ctrl+S, which keeps what you typed and saves; Esc leaves the field. Clicking Save or Export while typing also keeps what you typed, in one click.

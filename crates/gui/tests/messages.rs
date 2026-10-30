@@ -258,6 +258,49 @@ fn toasts_draw_at_the_bottom_right_and_are_gone_after_their_time() {
     assert!(h.query_by_label("Saved").is_none());
 }
 
+/// Note FC8 (supersedes CA10's anchor): while the bottom panel is open, the toasts sit above it, so they never cover
+/// its buttons (Review's Export); with it collapsed they keep the window's bottom-right corner.
+#[test]
+fn toasts_sit_above_an_open_bottom_panel() {
+    use egui::containers::panel::PanelState;
+    let mut m = AppModel::new(
+        sdc_gui::settings::GuiSettings::default(),
+        None,
+        support::session(),
+    );
+    m.messages.notify(Severity::Info, "Saved");
+    m.toggle_tab(sdc_gui::model::bottom::BottomTab::Messages);
+    assert!(m.bottom.open);
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1200.0, 800.0))
+        .build_ui_state(
+            |ui, m: &mut AppModel| {
+                sdc_gui::ui::draw(ui, m);
+                sdc_gui::ui::messages::draw(ui.ctx(), m);
+            },
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    // `step`, not `run`: a toast keeps asking for frames while it shows.
+    for _ in 0..6 {
+        h.step();
+    }
+    let panel = PanelState::load(&h.ctx, egui::Id::new("bottom"))
+        .expect("the panel is open")
+        .outer_rect;
+    // The log row in the Messages tab says "Saved" too, at the left; the toast is the rightmost.
+    let toast = h
+        .query_all_by_label("Saved")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.max.x.total_cmp(&b.max.x))
+        .unwrap();
+    assert!(
+        toast.max.y <= panel.min.y,
+        "toast {toast:?} over the panel {panel:?}"
+    );
+    assert!(toast.max.x > 1000.0, "still on the right: {toast:?}");
+}
+
 #[test]
 fn saved_undo_and_export_results_raise_toasts() {
     let d = tempfile::tempdir().unwrap();

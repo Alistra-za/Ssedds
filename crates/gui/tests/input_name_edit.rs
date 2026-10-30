@@ -605,20 +605,10 @@ fn the_lock_icon_drags_to_a_separator() {
     assert_eq!(free(&h), "textures/landscape/rock01");
 }
 
-/// Trace-debug #54: Save clicked while the input name box has focus saves nothing and says why (as Ctrl+S, AG23);
-/// the name commits on the focus loss.
-#[test]
-fn header_save_click_with_focused_field_does_not_save_stale_value() {
-    let (_d, mut h) = harness();
-    // Another unsaved edit, so Save is enabled.
-    h.state_mut()
-        .0
-        .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
-    h.run();
-    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
-    focus(&mut h);
-    clear_and_type(&mut h, "rock02");
-    let p = h.query_all_by_label("Save").next().unwrap().rect().center();
+/// Presses and releases the primary button at `p`: in separate frames, as a mouse click is, or in one frame, as a
+/// touchpad tap or a slow frame gives. One `step` between them: the plan the press's commit starts keeps `run` stepping
+/// past egui's 0.8 s click limit.
+fn press_release(h: &mut H, p: egui::Pos2, one_frame: bool) {
     h.input_mut().events.push(egui::Event::PointerMoved(p));
     h.run();
     for pressed in [true, false] {
@@ -628,35 +618,56 @@ fn header_save_click_with_focused_field_does_not_save_stale_value() {
             pressed,
             modifiers: Modifiers::NONE,
         });
-        h.run();
+        if !pressed {
+            h.run();
+        } else if !one_frame {
+            h.step();
+        }
     }
-    settle(&mut h);
-    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
-    assert!(!on_disk.contains("specular_level"), "nothing was saved");
-    assert!(
-        h.state()
+}
+
+/// Note FC8 (supersedes BS7's refusal): Save clicked while the input name box has focus commits the name and saves,
+/// in one click, whether the press and the release land in separate frames or in one.
+#[test]
+fn save_click_commits_the_field_and_saves() {
+    for one_frame in [false, true] {
+        let (_d, mut h) = harness();
+        // Another unsaved edit, so Save is enabled.
+        h.state_mut()
+            .0
+            .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
+        h.run();
+        let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
+        focus(&mut h);
+        clear_and_type(&mut h, "rock02");
+        let p = h.query_all_by_label("Save").next().unwrap().rect().center();
+        press_release(&mut h, p, one_frame);
+        settle(&mut h);
+        let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(on_disk.contains("specular_level"), "{one_frame}: saved");
+        assert!(
+            on_disk.contains("landscape/rock02"),
+            "{one_frame}: {on_disk}"
+        );
+        assert!(!h.state().0.is_dirty(), "{one_frame}: nothing left unsaved");
+        assert!(!h
+            .state()
             .0
             .messages
             .entries()
-            .any(|e| e.text == "Save: leave the text field first"),
-        "the log says why"
-    );
-    assert_eq!(
-        h.state().0.input_name_of("landscape/rock02").as_deref(),
-        Some("textures/landscape/rock02")
-    );
+            .any(|e| e.text.contains("leave the text field first")));
+    }
 }
 
-/// Export clicked while the input name box has focus saves nothing and says why, as the header Save does (#54,
-/// Note BS14): Export saves first, and the focused value commits only on the focus loss.
+/// Note FC8 (supersedes BS14's refusal): the header Export clicked while the input name box has focus commits the
+/// name and runs, in one click: here it opens Review, whose rows already see the committed name.
 #[test]
-fn header_export_click_with_focused_field_does_not_save_stale_value() {
+fn export_click_commits_the_field_and_runs() {
     let (_d, mut h) = harness();
     h.state_mut()
         .0
         .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
     h.run();
-    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
     focus(&mut h);
     clear_and_type(&mut h, "rock02");
     let p = h
@@ -665,74 +676,73 @@ fn header_export_click_with_focused_field_does_not_save_stale_value() {
         .unwrap()
         .rect()
         .center();
-    h.input_mut().events.push(egui::Event::PointerMoved(p));
-    h.run();
-    for pressed in [true, false] {
-        h.input_mut().events.push(egui::Event::PointerButton {
-            pos: p,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        });
-        h.run();
-    }
+    press_release(&mut h, p, false);
     settle(&mut h);
-    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
-    assert!(!on_disk.contains("specular_level"), "nothing was saved");
-    assert!(h.state().0.export.running.is_none(), "no export started");
+    let m = &h.state().0;
     assert!(
-        h.state()
-            .0
-            .messages
-            .entries()
-            .any(|e| e.text == "Export: leave the text field first"),
-        "the log says why"
+        m.review.is_some() || m.export.running.is_some() || m.export.summary.is_some(),
+        "the click ran"
     );
     assert_eq!(
-        h.state().0.input_name_of("landscape/rock02").as_deref(),
+        m.input_name_of("landscape/rock02").as_deref(),
         Some("textures/landscape/rock02")
     );
 }
 
-/// The Review counterpart (layout v2 Task 1.4 fix 1): Review's Export clicked while the input name box has focus
-/// saves nothing and says why, as the header Export does (#54, Note BS14).
+/// Note FC8 (supersedes CA14's refusal): Review's Export clicked while the input name box has focus commits the
+/// name, saves it and exports, in one click.
 #[test]
-fn review_export_click_with_focused_field_does_not_save_stale_value() {
+fn review_export_click_commits_the_field_and_runs() {
+    for one_frame in [false, true] {
+        let (_d, mut h) = harness();
+        h.state_mut()
+            .0
+            .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
+        h.state_mut().0.open_review();
+        h.run();
+        let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
+        let text = h.state().0.review_button_text();
+        assert!(h.state().0.review_gate().is_ok());
+        focus(&mut h);
+        clear_and_type(&mut h, "rock02");
+        let p = h.get_by_label(&text).rect().center();
+        press_release(&mut h, p, one_frame);
+        settle(&mut h);
+        settle(&mut h);
+        let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
+        assert!(
+            on_disk.contains("landscape/rock02"),
+            "{one_frame}: {on_disk}"
+        );
+        let m = &h.state().0;
+        assert!(
+            m.export.running.is_some() || m.export.summary.is_some(),
+            "{one_frame}: the export ran"
+        );
+    }
+}
+
+/// Note FC8 (BN3's deferral): a press and release in one frame on another set (a touchpad tap) still commits the
+/// typed name first; the new selection follows a frame later.
+#[test]
+fn tap_in_the_same_frame_keeps_the_typed_name() {
     let (_d, mut h) = harness();
-    h.state_mut()
-        .0
-        .set_json_value(ROCK_SET, "specular_level", Some(serde_json::json!(0.3)));
-    h.state_mut().0.open_review();
-    h.run();
-    let file = h.state().0.sets_doc.as_ref().unwrap().path().to_path_buf();
-    let text = h.state().0.review_button_text();
-    assert!(h.state().0.review_gate().is_ok());
+    let steps = h.state().0.history.undo.len();
+    let rock = h.state().0.selection.clone();
     focus(&mut h);
     clear_and_type(&mut h, "rock02");
-    let p = h.get_by_label(&text).rect().center();
-    h.input_mut().events.push(egui::Event::PointerMoved(p));
-    h.run();
-    for pressed in [true, false] {
-        h.input_mut().events.push(egui::Event::PointerButton {
-            pos: p,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: Modifiers::NONE,
-        });
-        h.run();
-    }
+    let p = h.get_by_label("landscape/leaf").rect().center();
+    press_release(&mut h, p, true);
     settle(&mut h);
-    let on_disk = std::fs::read_to_string(&file).unwrap_or_default();
-    assert!(!on_disk.contains("specular_level"), "nothing was saved");
-    assert!(h.state().0.export.running.is_none(), "no export started");
-    assert!(h.state().0.export.summary.is_none(), "no export ran");
+    let now = &h.state().0.selection;
     assert!(
-        h.state()
-            .0
-            .messages
-            .entries()
-            .any(|e| e.text == "Export: leave the text field first"),
-        "the log says why"
+        matches!(now, sdc_gui::model::Selection::Set(_)) && *now != rock,
+        "the tap selected leaf: {now:?}"
+    );
+    assert_eq!(h.state().0.history.undo.len(), steps + 1, "one undo step");
+    assert_eq!(
+        h.state().0.input_name_of("landscape/rock02").as_deref(),
+        Some("textures/landscape/rock02")
     );
 }
 

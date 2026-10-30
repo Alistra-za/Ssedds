@@ -275,6 +275,9 @@ pub(crate) struct ViewKey {
     scan: cs_pbr::Stamp,
 }
 
+/// A click or key's action that waits a frame for a text field to commit (Note FC8).
+pub type AfterCommit = Box<dyn FnOnce(&mut AppModel)>;
+
 pub struct AppModel {
     /// The file pickers (Task 6); one dialog at a time, shared with the sub-models.
     pub picker: picker::Picker,
@@ -505,6 +508,12 @@ pub struct AppModel {
     pub gen: Option<from_normal::GenDialog>,
     /// The first file the last Generate wrote: selected by the plan that lists it.
     pub gen_select: Option<String>,
+    /// Note FC8: clicks and keys that waited one frame for a focused text field to commit (`ui::after_commit`); run
+    /// first thing next frame, by `ui::actions::keys`.
+    pub after_commit: Vec<AfterCommit>,
+    /// Note FC8 (CP10): a BC7 weighting pick whose own value may have hidden an inherited one: (item key, pick, the
+    /// pick's history merge key). The settled plan checks it and completes the pick in the same step.
+    weighting_follow: Option<(String, String, String)>,
     /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
     pub(crate) gen_ids: u64,
     /// Generate dialogs opened so far; the preview zoom is reset when this changes.
@@ -762,6 +771,8 @@ impl AppModel {
             gen_look: Default::default(),
             gen: None,
             gen_select: None,
+            after_commit: Vec::new(),
+            weighting_follow: None,
             gen_ids: 0,
             gen_opens: 0,
             report_saving: false,
@@ -856,6 +867,8 @@ impl AppModel {
         // A Generate of the previous folder: cancelled; one that writes still lands, and records nothing here (I1).
         self.gen_cancel();
         self.gen_select = None;
+        self.weighting_follow = None;
+        self.after_commit.clear();
         self.drop_provenance_note();
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
         // were answered to get here).
@@ -2343,6 +2356,9 @@ impl AppModel {
         if self.settle_types() {
             return;
         }
+        if self.follow_weighting() {
+            return;
+        }
         // Note FC1: the settled plan's own decisions go into the project; its re-plan finds nothing new to record. A
         // queued export waits for that plan (the flags below are taken then).
         if self.record_auto_decisions() {
@@ -2589,6 +2605,55 @@ impl AppModel {
         if replan {
             self.replan_after_edit();
         }
+    }
+
+    /// The BC7 weighting row's two fields for pick `w` over `profile` (`fields::weighting_writes`), as one step.
+    fn write_weighting(
+        &mut self,
+        item_key: &str,
+        w: &str,
+        profile: &engine::config::Profile,
+        merge: String,
+    ) {
+        let (k, w, profile) = (item_key.to_string(), w.to_string(), profile.clone());
+        self.edit_docs("Change BC7 weighting", Some(merge), true, move |p, _| {
+            let (own_p, own_w) = (
+                p.file_value(&k, "encoder.perceptual"),
+                p.file_value(&k, fields::WEIGHTING),
+            );
+            let writes = fields::weighting_writes(&w, &profile, own_p.as_ref(), own_w.as_ref());
+            for (f, v) in [
+                ("encoder.perceptual", writes.0),
+                (fields::WEIGHTING, writes.1),
+            ] {
+                match v {
+                    Some(v) => p.set_file_value(&k, f, &v),
+                    None => p.clear_file_value(&k, f),
+                }
+            }
+        });
+    }
+
+    /// Note FC8 (CP10): once the plan after a weighting pick settles, the profile shows what the cleared own value
+    /// hid; when the row is still not the pick, the pick is written again over it, joined to the pick's step. True
+    /// when that wrote (a re-plan follows).
+    fn follow_weighting(&mut self) -> bool {
+        let Some((k, w, merge)) = self.weighting_follow.take() else {
+            return false;
+        };
+        let Some(profile) = self
+            .item(&k)
+            .and_then(|i| i.job.as_ref())
+            .map(|j| j.profile.clone())
+        else {
+            return false;
+        };
+        if fields::weighting_value(&profile) == json!(w) {
+            return false;
+        }
+        let pushes = self.history.pushes;
+        self.write_weighting(&k, &w, &profile, merge);
+        self.history.pushes != pushes
     }
 
     /// An `sdc.toml` edit (a read-only `sdc.toml` ignores it), re-planned. The sets document is not touched, so
@@ -2887,24 +2952,21 @@ impl AppModel {
             else {
                 return;
             };
-            let k = item_key.to_string();
-            let w = w.to_string();
-            return self.edit("Change BC7 weighting", move |p| {
-                let (own_p, own_w) = (
-                    p.file_value(&k, "encoder.perceptual"),
-                    p.file_value(&k, fields::WEIGHTING),
-                );
-                let writes = fields::weighting_writes(&w, &profile, own_p.as_ref(), own_w.as_ref());
-                for (f, v) in [
-                    ("encoder.perceptual", writes.0),
-                    (fields::WEIGHTING, writes.1),
-                ] {
-                    match v {
-                        Some(v) => p.set_file_value(&k, f, &v),
-                        None => p.clear_file_value(&k, f),
-                    }
-                }
+            if self.project.as_ref().is_none_or(ProjectDoc::read_only) {
+                return;
+            }
+            // Note FC8 (supersedes CP10's second pick): an own `perceptual = true` or own weighting may hide an
+            // inherited value the profile cannot show; the settled plan completes the pick (`follow_weighting`).
+            let hides = self.project.as_ref().is_some_and(|p| {
+                p.file_value(item_key, "encoder.perceptual") == Some(json!(true))
+                    || p.file_value(item_key, fields::WEIGHTING)
+                        .is_some_and(|v| v != json!("linear"))
             });
+            // Unique per pick, so two picks stay two steps; the follow-up joins this one.
+            let merge = format!("bc7-weighting#{}", self.history.pushes);
+            self.write_weighting(item_key, w, &profile, merge.clone());
+            self.weighting_follow = hides.then(|| (item_key.to_string(), w.to_string(), merge));
+            return;
         }
         // Note CL (M9): an unticked half size removes the key; a written `false` would stay as a provenance entry.
         if field == "drop_top_mip" && value == json!(false) {

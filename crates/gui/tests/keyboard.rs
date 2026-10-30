@@ -109,7 +109,7 @@ fn every_shortcut_runs_its_action() {
 }
 
 #[test]
-fn no_shortcut_fires_from_a_text_field_except_ctrl_k() {
+fn no_shortcut_fires_from_a_text_field_except_ctrl_k_and_ctrl_s() {
     let mut m = AppModel::placeholder(GuiSettings::default());
     m.select_item("a");
     let mut h = Harness::builder()
@@ -141,7 +141,12 @@ fn no_shortcut_fires_from_a_text_field_except_ctrl_k() {
             }
             h.key_press_modifiers(s.mods, s.key);
             h.run();
-            let want = (a.id == actions::PALETTE).then_some(actions::PALETTE);
+            // Note FC8: Ctrl+S commits the field and saves (`ctrl_s_in_a_field_saves`).
+            let want = match a.id {
+                actions::PALETTE => Some(actions::PALETTE),
+                "save" => Some("save"),
+                _ => None,
+            };
             assert_eq!(h.state().1, want, "{} from a text field", s.text());
             tried += 1;
             palette += usize::from(h.state().1 == Some(actions::PALETTE));
@@ -515,8 +520,9 @@ fn up_and_down_wait_for_a_drawn_grid() {
     assert_eq!(h.state().nav.cols, 0, "a hidden column has no rows");
 }
 
+/// Note FC8 (supersedes AG23/AG32's refusal): Ctrl+S in a text field ends the edit, so the field commits, and saves.
 #[test]
-fn ctrl_s_in_a_text_field_says_so_in_the_status_line() {
+fn ctrl_s_in_a_field_saves() {
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
     m.set_field(
@@ -542,17 +548,14 @@ fn ctrl_s_in_a_text_field_says_so_in_the_status_line() {
     h.run();
     h.key_press_modifiers(Modifiers::COMMAND, Key::S);
     h.run();
-    assert_eq!(
-        h.state().0.status_line,
-        "Ctrl+S: leave the text field first"
-    );
-    assert!(h
+    h.run();
+    assert!(!h.state().0.is_dirty(), "saved");
+    assert!(!h
         .state()
         .0
         .messages
         .entries()
-        .any(|e| e.text == "Ctrl+S: leave the text field first"));
-    assert!(h.state().0.is_dirty(), "and nothing was saved");
+        .any(|e| e.text.contains("leave the text field first")));
 }
 
 /// Alpha of a modal backdrop: the last full-width black rect (egui multiplies an Area fade into its shapes). None until something is painted; a new Area first pass is an invisible sizing pass.

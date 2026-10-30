@@ -199,6 +199,40 @@ fn an_inherited_weighting_is_overridden_per_file() {
     assert!(!ignored(m, ROCK));
 }
 
+/// Note FC8 (supersedes CP10's second pick): an own value over a different inherited one hid the inherited value, so
+/// Linear cleared the own value and the inherited one showed. One Linear pick now overrides it, in one undo step.
+#[test]
+fn linear_once() {
+    // (inherited layer, the own value written first)
+    for (toml, first) in [
+        ("[defaults]\nencoder.bc7_weights = \"alpha8\"\n", "alpha16"),
+        ("[defaults]\nencoder.perceptual = true\n", "perceptual"),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let mut m = ready_with(d.path(), toml);
+        m.set_field(ROCK, WEIGHTING, json!(first));
+        idle(&mut m);
+        assert_eq!(row_value(&m, ROCK), json!(first), "{toml}");
+        assert!(own(&m, ROCK) != (None, None), "{toml}: an own value");
+        m.select_item(ROCK);
+        let steps = m.history.undo.len();
+        let mut h = harness(m);
+        h.run();
+        pick(&mut h, "Linear");
+        idle(h.state_mut());
+        h.run();
+        let m = h.state();
+        assert_eq!(row_value(m, ROCK), json!("linear"), "{toml}");
+        assert_eq!(encode_params(m, ROCK), (false, None), "{toml}");
+        assert_eq!(
+            own(m, ROCK),
+            (Some(json!(false)), Some(json!("linear"))),
+            "{toml}"
+        );
+        assert_eq!(m.history.undo.len(), steps + 1, "{toml}: one step");
+    }
+}
+
 /// The row's reset clears both fields; a texture's own `perceptual = true` marks the row edited.
 #[test]
 fn the_reset_clears_both_fields() {

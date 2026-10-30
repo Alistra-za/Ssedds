@@ -63,8 +63,11 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
         // shortcut: the anchored Area places itself from last frame's size, so a new toast's first visible frame
         // draws the stack one toast low; `request_discard` would fix it but can handle a click twice. Upgrade if
         // egui sizes anchored Areas in the same pass.
+        // Note FC8 (supersedes CA10's anchor): over an open bottom panel they sit above it, off Review's Export.
+        let lift =
+            super::bottom::open_top(ctx).map_or(0.0, |top| ctx.content_rect().bottom() - top);
         egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0 - lift))
             .order(egui::Order::Foreground)
             // Clicks pass through, unless a toast has a button (Note FB5).
             .interactable(toasts.iter().any(|t| t.action.is_some()))

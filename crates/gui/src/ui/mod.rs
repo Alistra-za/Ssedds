@@ -195,7 +195,7 @@ pub fn draw_with_scan(
     if model.root.is_some() {
         let (thumbs, drops, cmds) = (&mut state.thumbs, &mut state.drops, &mut state.slot_cmds);
         // Each column stops at its minimum and leaves the columns after it theirs and the centre its floor.
-        let mut floor = centre_floor(model);
+        let mut floor = centre_floor(ui.ctx(), model);
         // Note FB2: the 2D set editor's one column needs its slot rows' width, so the columns yield it.
         if !three_d && set_editor_shown(model, false) {
             floor = floor.max(set_editor::ROWS_MIN);
@@ -255,11 +255,57 @@ pub fn draw_with_scan(
     model.reveal_centre = false;
 }
 
+/// Note FC8: runs `f` now, or, while a text field had the focus at this frame's start, ends the edit (the field
+/// commits on its focus loss when it draws this frame) and runs `f` first thing next frame. One click or key, never a
+/// second: the deferral is one frame, for a press and release that landed in one frame (a touchpad tap, a slow frame,
+/// Ctrl+S), so the field's commit lands before the save, the export or the new selection (supersedes CA14/BS7/BS14's
+/// refusal; BN3's deferral).
+pub(crate) fn after_commit(
+    ctx: &egui::Context,
+    model: &mut AppModel,
+    f: impl FnOnce(&mut AppModel) + 'static,
+) {
+    if !ctx.egui_wants_keyboard_input() && !actions::focused_at_start(ctx) {
+        return f(model);
+    }
+    ctx.memory_mut(|m| m.stop_text_input());
+    model.after_commit.push(Box::new(f));
+    ctx.request_repaint();
+}
+
+/// Note FC8: a button that saves (Save, Export, Review's Export) blurs a focused text field on the press, so the
+/// field commits on that frame and the release runs `f` (`after_commit` covers a press and release in one frame).
+pub(crate) fn commit_click(
+    ui: &egui::Ui,
+    r: &egui::Response,
+    model: &mut AppModel,
+    f: impl FnOnce(&mut AppModel) + 'static,
+) {
+    blur_on_press(ui, r.rect);
+    if r.clicked() {
+        after_commit(ui.ctx(), model, f);
+    }
+}
+
+/// Ends text input when the primary press lands in `rect`, so a commit-on-focus-loss field drawn later this frame
+/// commits before the release acts.
+pub(crate) fn blur_on_press(ui: &egui::Ui, rect: egui::Rect) {
+    if ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(rect) {
+        ui.memory_mut(|m| m.stop_text_input());
+    }
+}
+
 /// The narrowest the centre gets: `CENTRE_MIN`, and while a texture is expanded enough for `PREVIEW_MIN` beside the
-/// collapsed settings strip (K8). The 16 is `Frame::central_panel`'s 8 px margin a side.
-pub(crate) fn centre_floor(model: &AppModel) -> f32 {
+/// collapsed settings strip (K8), or beside the open settings in a window where they start open (Note FC8). The 16 is
+/// `Frame::central_panel`'s 8 px margin a side.
+pub(crate) fn centre_floor(ctx: &egui::Context, model: &AppModel) -> f32 {
     if model.expanded.is_some() {
-        set_preview::CENTRE_MIN.max(preview::PREVIEW_MIN + columns::STRIP_WIDTH + 16.0)
+        let settings = if ctx.content_rect().width() >= preview::WIDE_WINDOW {
+            preview::SETTINGS_WIDTH
+        } else {
+            columns::STRIP_WIDTH
+        };
+        set_preview::CENTRE_MIN.max(preview::PREVIEW_MIN + settings + 16.0)
     } else {
         set_preview::CENTRE_MIN
     }
@@ -472,12 +518,9 @@ fn column_panel(
             // Text that would not fit truncates: otherwise it holds the column wider than the drag left it.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
             // Trace-debug #11: blur text fields on the press, while the old set is still drawn, so its
-            // commit-on-focus-loss runs before the release changes the selection (AO1).
-            // shortcut: a press and release in one frame still loses the edit; defer the selection a frame if seen.
-            if ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(ui.max_rect())
-            {
-                ui.memory_mut(|m| m.stop_text_input());
-            }
+            // commit-on-focus-loss runs before the release changes the selection (AO1). A press and release in one
+            // frame defer the selection a frame instead (`after_commit`, Note FC8 for BN3).
+            blur_on_press(ui, ui.max_rect());
             content(ui, model)
         });
     }

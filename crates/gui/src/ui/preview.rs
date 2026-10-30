@@ -16,9 +16,11 @@ use engine::config::Format;
 use engine::cube::layout::HCROSS;
 use std::sync::Arc;
 
-const SETTINGS_WIDTH: f32 = 280.0;
+pub(crate) const SETTINGS_WIDTH: f32 = 280.0;
 /// The narrowest the viewports get (A10): below it the settings collapse to a strip.
 pub const PREVIEW_MIN: f32 = 480.0;
+/// From this window width the settings start open (Note FC8).
+pub const WIDE_WINDOW: f32 = 1280.0;
 /// Why Heatmap and Tile 3×3 are off for a cube (the cross is 4×3 faces, with no source image of that shape).
 const NOT_FOR_CUBES: &str = "Not for cubes";
 const GAP: f32 = 6.0;
@@ -52,8 +54,11 @@ pub struct PreviewUi {
     fitted_for: Option<String>,
     /// The pixel readout of the texel under the cursor, shown in the notes strip (laid out before the viewports).
     readout: Option<Vec<String>>,
-    /// The settings were opened from their strip: they stay open until the preview closes (A10).
+    /// The settings were opened from their strip, or the preview started in a wide window: they stay open until the
+    /// preview closes (A10, Note FC8).
     settings_open: bool,
+    /// The first frame of this preview has drawn (it decides the settings' start).
+    started: bool,
     /// The overlay on the GPU and the image it was uploaded from (uploaded again only when that `Arc` changes).
     overlay_tex: Option<(Arc<egui::ColorImage>, egui::TextureHandle)>,
 }
@@ -156,13 +161,20 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut PreviewUi, gpu:
     if info.known() {
         model.view.clamp_mip(info.first, info.end);
     }
-    // A10: the viewports keep PREVIEW_MIN; the settings collapse to a strip rather than squeeze them.
+    // Note FC8 (supersedes CE16's collapsed default): a window WIDE_WINDOW or wider starts with the settings open,
+    // and they stay open when Advanced opens.
+    if !std::mem::replace(&mut state.started, true) {
+        state.settings_open = ui.ctx().content_rect().width() >= WIDE_WINDOW;
+    }
+    // A10: below that the viewports keep PREVIEW_MIN; the settings collapse to a strip rather than squeeze them.
     if state.settings_open || ui.available_width() - SETTINGS_WIDTH >= PREVIEW_MIN {
         egui::Panel::right("preview-settings")
             .exact_size(SETTINGS_WIDTH)
             .show(ui, |ui| {
                 // I2: both axes, so settings wider than the panel scroll inside it instead of moving its left edge
                 // under the toolbar (egui cuts an over-wide right panel from the left). Thin bars show without hover.
+                // shortcut: an over-wide combo (Normals) makes the panel scroll sideways (CE20); give each combo an
+                // exact-width slot (ui-rules 3.5) when the settings panel's rows are next reworked (Note FC8).
                 ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
                 egui::ScrollArea::both()
                     .auto_shrink([false, false])

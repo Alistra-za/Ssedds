@@ -613,6 +613,16 @@ fn live(area: Area, model: &AppModel, meshes_view: bool) -> bool {
     }
 }
 
+fn focus_id() -> egui::Id {
+    egui::Id::new("sdc-keys-focus")
+}
+
+/// Whether a widget had the keyboard focus when this frame's `keys` ran (its start).
+pub(crate) fn focused_at_start(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(focus_id()))
+        .unwrap_or(false)
+}
+
 /// Run action `id` (the palette's pick).
 pub fn run(id: &str, model: &mut AppModel, ctx: &egui::Context) {
     if let Some(f) = action(id).and_then(|a| a.run) {
@@ -623,12 +633,16 @@ pub fn run(id: &str, model: &mut AppModel, ctx: &egui::Context) {
 /// The keys of this frame. Called first thing in the frame, before any widget has seen the input: Ctrl+K must not
 /// reach a focused text field (egui's Ctrl+K deletes to the end of the line), and a key that runs an action is
 /// consumed so no widget acts on it too. Nothing fires while a dialog, a modal, a popup or a sets-column box
-/// (`set_modal`) is open, and only Ctrl+K while a widget has the keyboard focus (Task 2's guard). Returns the id of
-/// the action that ran.
+/// (`set_modal`) is open, and only Ctrl+K and Ctrl+S while a widget has the keyboard focus (Task 2's guard; Ctrl+S
+/// commits the field first, Note FC8). Returns the id of the action that ran.
 pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Option<&'static str> {
+    // Note FC8: what waited last frame for a text field to commit; the field drew since, so it has.
+    for f in std::mem::take(&mut model.after_commit) {
+        f(model);
+    }
     // egui drops the focus on Esc before any widget runs, so a field focused at the last frame's start still owns
     // this frame's Esc (it only leaves the field).
-    let seen = egui::Id::new("sdc-keys-focus");
+    let seen = focus_id();
     let focused = ctx.egui_wants_keyboard_input();
     let before = ctx.data(|d| d.get_temp::<bool>(seen)).unwrap_or(false);
     ctx.data_mut(|d| d.insert_temp(seen, focused));
@@ -641,28 +655,21 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     if blocked {
         return None;
     }
-    // AG23: Ctrl+S waits for the field; say so instead of doing nothing.
-    if text && model.is_dirty() {
+    // Note FC8 (supersedes AG23 and AG32's refusal): Ctrl+S in a text field ends the edit, which commits on its focus
+    // loss this frame, and saves next frame if that left anything unsaved.
+    if focused {
         let save = action("save").map_or(&[][..], |a| a.keys);
-        let pressed = ctx.input(|i| {
-            save.iter()
-                .any(|s| i.key_pressed(s.key) && i.modifiers.matches_logically(s.mods))
-        });
-        if pressed {
-            model.status_line = "Ctrl+S: leave the text field first".into();
-            // Once per press: a held key repeats, and the log should not fill with the same line.
-            let fresh = ctx.input(|i| {
-                i.events.iter().any(|e| {
-                    matches!(e, egui::Event::Key { repeat: false, pressed: true, key, .. }
-                        if save.iter().any(|s| s.key == *key))
-                })
+        if save
+            .iter()
+            .any(|s| ctx.input_mut(|i| i.consume_key(s.mods, s.key)))
+        {
+            super::after_commit(ctx, model, |m| {
+                if m.is_dirty() {
+                    // A failed save raises its own dialog.
+                    let _ = m.save();
+                }
             });
-            if fresh {
-                model.messages.log(
-                    crate::model::messages::Severity::Info,
-                    model.status_line.clone(),
-                );
-            }
+            return Some("save");
         }
     }
     let meshes = super::header::meshes_view_active(ctx);

@@ -634,8 +634,8 @@ fn the_settings_strip_is_compact() {
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
     let mut h = harness(model);
     h.run();
-    // At 1280×800 the settings start behind their strip (A10, A12).
-    press(&mut h, "Settings");
+    // At 1280×800 the settings start open (Note FC8, supersedes CE16's strip there).
+    assert!(h.query_by_label("Settings").is_none());
     for group in ["Alpha", "Mipmaps", "Compression"] {
         assert!(h.query_all_by_label_contains(group).count() > 0, "{group}");
     }
@@ -702,12 +702,27 @@ fn reads_before(a: eframe::egui::Rect, b: eframe::egui::Rect) -> bool {
 }
 
 fn expanded_at_1280(advanced: bool) -> (Harness<'static, AppModel>, tempfile::TempDir) {
+    expanded_at(1280.0, advanced)
+}
+
+/// Note FC8: below 1280 px the preview's settings start as the strip.
+fn expanded_at_1200(advanced: bool) -> (Harness<'static, AppModel>, tempfile::TempDir) {
+    expanded_at(1200.0, advanced)
+}
+
+fn expanded_at(width: f32, advanced: bool) -> (Harness<'static, AppModel>, tempfile::TempDir) {
     let d = tempfile::tempdir().unwrap();
     let mut model = opened(d.path());
     model.settings.advanced_open = advanced;
     model.expand("landscape/rock01_rmaos");
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
-    let mut h = harness(model);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(width, 800.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
     (h, d)
 }
@@ -845,11 +860,12 @@ fn the_toolbar_pin_holds_with_the_uv_toggle() {
     }
 }
 
-/// K8, K10 (shots 15/16/17): with Advanced open at 1280×800 the viewport keeps PREVIEW_MIN and the settings collapse.
+/// K8, K10 (shots 15/16/17): with Advanced open at 1200×800 the viewport keeps PREVIEW_MIN and the settings collapse
+/// (Note FC8: from 1280 they start open).
 #[test]
-fn at_1280x800_with_advanced_open_the_preview_keeps_its_width_and_the_toolbar_fits() {
+fn at_1200x800_with_advanced_open_the_preview_keeps_its_width_and_the_toolbar_fits() {
     use eframe::egui::containers::panel::PanelState;
-    let (mut h, _d) = expanded_at_1280(true);
+    let (mut h, _d) = expanded_at_1200(true);
     assert!(PanelState::load(&h.ctx, eframe::egui::Id::new("advanced")).is_some());
     // The wrapped rows settle: centring them in last frame's height grew the toolbar every frame.
     let settled = toolbar_rect(&h);
@@ -871,7 +887,7 @@ fn at_1280x800_with_advanced_open_the_preview_keeps_its_width_and_the_toolbar_fi
 #[test]
 fn the_collapsed_settings_strip_opens_the_settings() {
     use eframe::egui::containers::panel::PanelState;
-    let (mut h, _d) = expanded_at_1280(true);
+    let (mut h, _d) = expanded_at_1200(true);
     assert!(PanelState::load(&h.ctx, eframe::egui::Id::new("preview-settings-strip")).is_some());
     assert!(h.query_by_label_contains("Compression").is_none());
     h.get_by_label("Settings").hover();
@@ -887,6 +903,43 @@ fn the_collapsed_settings_strip_opens_the_settings() {
     h.state_mut().expand("landscape/rock01_rmaos");
     h.run();
     h.get_by_label("Settings");
+}
+
+/// Note FC8 (supersedes CE16's collapsed default): from 1280 px wide the preview's settings start open, and opening
+/// Advanced does not collapse them; below 1280 they start as the strip.
+#[test]
+fn preview_settings_open_at_1280() {
+    // The strip's button is drawn only while the settings are collapsed (their PanelState outlives one frame).
+    use sdc_gui::ui::State;
+    type H = Harness<'static, (AppModel, State)>;
+    let open = |h: &H| {
+        h.query_by_label("Settings").is_none()
+            && h.query_all_by_label_contains("Compression").count() > 0
+    };
+    for (width, want) in [(1280.0, true), (1600.0, true), (1200.0, false)] {
+        let d = tempfile::tempdir().unwrap();
+        let mut model = opened(d.path());
+        // Below 1280 Advanced is open from the start: the settings would fit beside the picture without it.
+        model.settings.advanced_open = !want;
+        model.expand("landscape/rock01_rmaos");
+        assert!(model.wait_idle(std::time::Duration::from_secs(60)));
+        // Its own drawing state: `ui::draw`'s thread-local one would carry the last preview's settings over.
+        let mut h: H = Harness::builder()
+            .with_size(eframe::egui::vec2(width, 800.0))
+            .build_ui_state(
+                |ui, (m, s): &mut (AppModel, State)| sdc_gui::ui::draw_with(ui, m, s),
+                (model, State::default()),
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+        h.run();
+        assert_eq!(open(&h), want, "{width}");
+        if want {
+            h.state_mut().0.settings.advanced_open = true;
+            h.run();
+            h.run();
+            assert!(open(&h), "{width}: Advanced opened");
+        }
+    }
 }
 
 /// I2 (shots 15, 28): settings wider than the panel moved its left edge in, so the toolbar and viewports drew over its

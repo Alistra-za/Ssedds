@@ -64,7 +64,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
     } else {
         ("bottom", 240.0)
     };
-    egui::Panel::bottom(id)
+    let panel = egui::Panel::bottom(id)
         .resizable(true)
         .default_size(height)
         .show(ui, |ui| {
@@ -89,4 +89,18 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
                 BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
             }
         });
+    let (pass, top) = (ui.ctx().cumulative_pass_nr(), panel.response.rect.top());
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(open_top_id(), (pass, top)));
+}
+
+fn open_top_id() -> egui::Id {
+    egui::Id::new("bottom-open-top")
+}
+
+/// Note FC8: the top of the open bottom panel, when it was drawn this pass (the toasts sit above it).
+pub fn open_top(ctx: &egui::Context) -> Option<f32> {
+    ctx.data(|d| d.get_temp::<(u64, f32)>(open_top_id()))
+        .filter(|(pass, _)| *pass == ctx.cumulative_pass_nr())
+        .map(|(_, top)| top)
 }

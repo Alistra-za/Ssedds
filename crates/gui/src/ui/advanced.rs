@@ -63,7 +63,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) 
     }
     let mut close = false;
     // Drawn before the columns: it leaves them their minimums and the centre its floor (K8, rule §2.3).
-    let max = ui.available_width() - TEXTURES_MIN - SETS_MIN - super::centre_floor(model);
+    let max = ui.available_width() - TEXTURES_MIN - SETS_MIN - super::centre_floor(ui.ctx(), model);
     let panel = egui::Panel::right("advanced")
         .default_size(380.0)
         .size_range(ADV_MIN..=max.max(ADV_MIN));

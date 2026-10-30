@@ -239,10 +239,13 @@ fn tile(
     if let Some(a) = picked {
         model.menu_picked(a);
     } else if resp.double_clicked() {
-        model.expand(&key);
+        super::after_commit(ui.ctx(), model, move |m| m.expand(&key));
     } else if resp.clicked() {
-        let m = ui.input(|i| i.modifiers);
-        model.click_item(&key, m.command, m.shift);
+        // Note FC8 (BN3): a new selection waits a frame for a focused field to commit.
+        let mods = ui.input(|i| i.modifiers);
+        super::after_commit(ui.ctx(), model, move |m| {
+            m.click_item(&key, mods.command, mods.shift)
+        });
     }
 }
 
@@ -577,8 +580,10 @@ fn helper_row(
             );
     });
     if resp.clicked() {
-        let m = ui.input(|i| i.modifiers);
-        model.click_item(&key, m.command, m.shift);
+        let mods = ui.input(|i| i.modifiers);
+        super::after_commit(ui.ctx(), model, move |m| {
+            m.click_item(&key, mods.command, mods.shift)
+        });
     }
 }
 
