@@ -9473,6 +9473,47 @@ fn a_trailer_op_keeps_its_type_name_after_a_type_change() {
     assert!(h.query(row("S: Skin tint R")).is_none());
 }
 
+/// Note GD22: after a source update a type change can conflict and leave the type as it is; a later trailer op is
+/// named by the type really in effect, not by the failed change's.
+#[test]
+fn a_trailer_op_after_a_conflicting_type_change_is_named_by_the_real_type() {
+    let mut t = direct(scenes::lsp_shape(1, &[1.0]));
+    let sh = select(&mut t, "S");
+    let at =
+        nif::edit::anchor_role(&t.edit.as_ref().unwrap().model, Some(sh), Role::Shader).unwrap();
+    t.edit_push(
+        vec![Op::SetField {
+            at: at.clone(),
+            field: Field::ShaderType,
+            value: Value::U32(5),
+            base: Value::U32(1),
+        }],
+        None,
+    );
+    t.edit_push(
+        vec![Op::SetField {
+            at,
+            field: Field::Trailer(0),
+            value: Value::F32(0.5f32.to_bits()),
+            base: Value::F32(0f32.to_bits()),
+        }],
+        None,
+    );
+    assert_eq!(t.edit.as_ref().unwrap().op_label_at(1), "S: Skin tint R");
+    // the source is now Hair tint: the change from Env map (base 1) conflicts and the type stays 6
+    t.edit_with(|e| {
+        e.reload_source(scenes::lsp_shape(6, &[0.1, 0.2, 0.3]))
+            .unwrap()
+    });
+    let e = t.edit.as_ref().unwrap();
+    assert!(
+        matches!(e.outcomes[0], nif::edit::Outcome::Conflict(_)),
+        "{:?}",
+        e.outcomes
+    );
+    assert_eq!(e.op_label_at(1), "S: Hair tint R");
+}
+
 /// Note GD15: two texture sets with an empty RMAOS are two worklist rows; only repeats of one target merge.
 #[test]
 fn two_sets_with_empty_rmaos_are_two_rows() {

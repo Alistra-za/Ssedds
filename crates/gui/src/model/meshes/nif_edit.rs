@@ -390,15 +390,20 @@ pub fn op_label(op: &Op, m: &NifModel) -> String {
 }
 
 /// Note GD16: for each trailer op, the shader type of its block when it applies: the last type change before it on
-/// that block, else the type the first later change started from, else the block's type now.
-fn trailer_types(ops: &[Op], m: &NifModel) -> Vec<Option<u32>> {
-    let type_change = |block: u32, o: &Op| match o {
-        Op::SetField {
-            at,
-            field: Field::ShaderType,
-            value: Value::U32(v),
-            base: Value::U32(b),
-        } if at.block == block => Some((*v, *b)),
+/// that block, else the type the first later change started from, else the block's type now. Note GD22: only changes
+/// that applied count (one applies only from its `base`), so a change that conflicted names nothing.
+fn trailer_types(ops: &[Op], outcomes: &[Outcome], m: &NifModel) -> Vec<Option<u32>> {
+    let type_change = |block: u32, (o, out): (&Op, &Outcome)| match (o, out) {
+        (_, Outcome::Conflict(_) | Outcome::Refused(_)) => None,
+        (
+            Op::SetField {
+                at,
+                field: Field::ShaderType,
+                value: Value::U32(v),
+                base: Value::U32(b),
+            },
+            _,
+        ) if at.block == block => Some((*v, *b)),
         _ => None,
     };
     ops.iter()
@@ -415,11 +420,13 @@ fn trailer_types(ops: &[Op], m: &NifModel) -> Vec<Option<u32>> {
             let b = at.block;
             ops[..i]
                 .iter()
+                .zip(outcomes)
                 .rev()
                 .find_map(|o| type_change(b, o).map(|(v, _)| v))
                 .or_else(|| {
-                    ops[i + 1..]
-                        .iter()
+                    ops.iter()
+                        .zip(outcomes)
+                        .skip(i + 1)
                         .find_map(|o| type_change(b, o).map(|(_, base)| base))
                 })
                 .or_else(|| m.lighting.get(&b).map(|l| l.lighting.shader_type))
@@ -918,7 +925,7 @@ impl NifEdit {
             Ok(m) => self.model = m,
             Err(e) => self.error = Some(e.to_string()),
         }
-        self.trailer_types = trailer_types(&self.doc.ops(), &self.model);
+        self.trailer_types = trailer_types(&self.doc.ops(), &self.outcomes, &self.model);
         self.cards = shape_cards(&self.patched); // once per change, never per frame (rule 9.1)
         self.card_ctrls = card_ctrls(&self.model);
         self.warnings = validate(&self.model, None);
