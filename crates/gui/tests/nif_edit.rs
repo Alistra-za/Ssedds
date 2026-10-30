@@ -6776,6 +6776,47 @@ fn shader_pg_ignore(v: u8) -> Vec<u8> {
     n.bytes()
 }
 
+/// One BSTriShape (0) carrying NiStringExtraData PG_STOCK (3), its BSLSP (1) and texture set (2) naming
+/// `textures\white.dds`.
+fn shape_pg_stock() -> Vec<u8> {
+    let mut n = builder::Nif::new(100);
+    let (s, pg, val) = (n.string("S"), n.string("PG_STOCK"), n.string("{}"));
+    let tri = one_tri(s, 1);
+    // name | extra count 1, the extra | the rest
+    let mut body = tri[..4].to_vec();
+    body.extend(W::default().u32(1).i32(3).0);
+    body.extend(&tri[8..]);
+    n.block("BSTriShape", body);
+    n.block("BSLightingShaderProperty", scenes::lsp(0, 2));
+    n.block(
+        "BSShaderTextureSet",
+        scenes::texset(&["textures\\white.dds"]),
+    );
+    n.block("NiStringExtraData", W::default().i32(pg).i32(val).0);
+    n.bytes()
+}
+
+/// GE6 (R3): a shape with a PG_STOCK block gets the amber revert line; the simulation still runs on it as loaded.
+#[test]
+fn pg_stock_shape_gets_the_revert_line() {
+    let d = pg_files();
+    put(d.path(), "mods/A/meshes/x.nif", Some(&shape_pg_stock()));
+    let mut m = pg_session_in(d.path());
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    in_game(&mut m);
+    let n = notes(&m, shape);
+    assert_eq!(
+        n,
+        [
+            PG_STOCK_REVERT,
+            r"In game: PGPatcher applies PBRNIFPatcher\x.json.",
+            "Not previewed: smooth_angle."
+        ]
+    );
+    assert!(is_warning(PG_STOCK_REVERT), "the revert line is amber");
+    assert_eq!(shown(&m, shape).slots[0].raw, r"textures\pbr\white.dds");
+}
+
 /// PG_IGNORE on the shader counts as on the shape (fix F6); value 0 does not.
 #[test]
 fn pg_ignore_on_the_shader_is_not_simulated() {

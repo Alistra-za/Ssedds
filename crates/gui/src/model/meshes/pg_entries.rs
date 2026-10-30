@@ -18,6 +18,10 @@ pub const IN_GAME_SCOPE: &str = pgpsim::SIMULATED_AS;
 pub const NO_INSTANCE: &str = "In game needs an MO2 instance: no PGPatcher JSON was read.";
 pub const PG_IGNORED: &str = "In game: PGPatcher skips this shape (PG_IGNORE).";
 pub const NO_MATCH: &str = "In game: no PGPatcher JSON matches this shape.";
+/// GE6 (R3): PGPatcher 2.x's StockMarker reverts such a shape before matching [Src 2.2.0 SM:84-142]; not simulated.
+pub const PG_STOCK_REVERT: &str =
+    "In game: PGPatcher first reverts this shape to the stock state recorded in its \
+                                   PG_STOCK block; the preview shows it as loaded.";
 /// B-P41: a red In game line, and a Warning in the edit view, when the simulation makes a non-PBR shape with an
 /// LSCF var-8 controller PBR (B9: var 8 on PBR crashed the game). Export stays open: PGPatcher's output depends on
 /// the JSON at play time.
@@ -116,6 +120,23 @@ pub fn pg_entries(inst: &Instance) -> Result<Vec<PgFile>, String> {
 /// PGPatcher's PG_IGNORE (01 §1.2 item 3): an `NiBooleanExtraData` "PG_IGNORE" with a true value on the shape or
 /// on its lighting shader.
 pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
+    any_extra(m, s, |x| {
+        &*x.kind == "NiBooleanExtraData"
+            && x.name.as_deref() == Some(b"PG_IGNORE")
+            && matches!(x.value, Some(ExtraValue::Bool(v)) if v != 0)
+    })
+}
+
+/// PGPatcher 2.x's stock marker (Note GE6): an `NiStringExtraData` "PG_STOCK" on the shape (or its shader, the same
+/// walk as `pg_ignore`).
+pub fn pg_stock(m: &NifModel, s: &ShapeModel) -> bool {
+    any_extra(m, s, |x| {
+        &*x.kind == "NiStringExtraData" && x.name.as_deref() == Some(b"PG_STOCK")
+    })
+}
+
+/// Does any extra data of the shape or of its lighting shader pass `f`?
+fn any_extra(m: &NifModel, s: &ShapeModel, f: impl Fn(&nif::extra::Extra) -> bool) -> bool {
     let shader = s
         .shader
         .and_then(|b| m.lighting.get(&b))
@@ -123,16 +144,12 @@ pub fn pg_ignore(m: &NifModel, s: &ShapeModel) -> bool {
     std::iter::once(&s.net)
         .chain(shader)
         .flat_map(|net| m.extras_of(net))
-        .any(|x| {
-            &*x.kind == "NiBooleanExtraData"
-                && x.name.as_deref() == Some(b"PG_IGNORE")
-                && matches!(x.value, Some(ExtraValue::Bool(v)) if v != 0)
-        })
+        .any(f)
 }
 
-/// Lines drawn amber (fix F4): a file PGPatcher rejects for the shape, and PG_IGNORE.
+/// Lines drawn amber (fix F4): a file PGPatcher rejects for the shape, PG_IGNORE and PG_STOCK.
 pub fn is_warning(note: &str) -> bool {
-    note == PG_IGNORED || note.contains(NOT_APPLIED)
+    note == PG_IGNORED || note == PG_STOCK_REVERT || note.contains(NOT_APPLIED)
 }
 
 /// Lines drawn red (Note GE5): a file PGPatcher 2.3 crashes on.

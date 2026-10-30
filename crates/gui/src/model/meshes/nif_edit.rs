@@ -2,7 +2,10 @@
 //! undo stack, the patched bytes and their model, and the live `Parsed` preview in the Meshes 3D panel. No egui types.
 use super::edit_doc::{self, DocOp, EditDoc, ExportRec, NifHistory, OpStatus, SourceId};
 use super::export::{placement, read_back, DocBadge, ExportOutcome, GuardChoice, Placement};
-use super::pg_entries::{candidates, pg_ignore, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED};
+use super::pg_entries::{
+    candidates, pg_ignore, pg_stock, simulate_shape, PgFile, PGP_ENV_SCALE, PG_IGNORED,
+    PG_STOCK_REVERT,
+};
 use super::worklist::{NifProblem, NifTab};
 use super::{db_err, texture_sources, MeshesModel, ScanTarget};
 use crate::model::viewport3d::{read_file, Clock, Content, FileSource};
@@ -1456,6 +1459,10 @@ impl NifEdit {
             };
             if env && m.slsf2 & SLSF2_TRUE_PBR != 0 {
                 notes.push(PGP_ENV_SCALE.to_string());
+            }
+            // GE6 (R3): badge only, outside the cache like the env check; the revert is not simulated.
+            if shape.is_some_and(|sm| pg_stock(&self.model, sm)) {
+                notes.insert(0, PG_STOCK_REVERT.to_string());
             }
             rows.push((s.id, m, notes));
         }
