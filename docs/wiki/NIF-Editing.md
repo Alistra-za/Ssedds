@@ -41,7 +41,7 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 
 - **Pending edits (N)** lists each edit in words. **Revert** removes one. A red row did not apply and says why.
 - **Undo** and **Redo** (header, panel, **Ctrl+Z** / **Ctrl+Y**) act on the NIF edit while it is open.
-- Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart. If you change the export folder while editing, the open edit moves with you to the new folder; the edits saved in the old one stay there.
+- Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart. If you change the export folder while editing, the open edit moves with you to the new folder; the edits saved in the old one stay there. If the new folder already has saved edits for that NIF, the first save there moves them aside to `<name>.<seconds>.toml` beside them, and Messages names the kept file.
 - If a mod update changes the source NIF, your edits are applied again by name. Any that clash offer **Take source** or **Keep mine**.
 
 ## Export NIF
