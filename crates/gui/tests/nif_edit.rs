@@ -6741,7 +6741,7 @@ fn a_crashing_json_anywhere_makes_every_shape_red() {
         let line = format!(
             r"In game: PGPatcher 2.3 crashes on this JSON: {key} is not a string (PBRNifPatcher\z.json)."
         );
-        assert_eq!(notes(&m, shape), [line.clone()], "{file}");
+        assert_eq!(notes(&m, shape), std::slice::from_ref(&line), "{file}");
         assert!(is_error(&line));
         assert_eq!(
             shown(&m, shape).slots[0].raw,
