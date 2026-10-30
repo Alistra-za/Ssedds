@@ -4100,6 +4100,42 @@ fn older_autosave_open_on_newer_folder(d: &tempfile::TempDir, m: &mut MeshesMode
     mine
 }
 
+/// Note GD24: an autosave and a folder document with the same modified time: the folder's opens, the autosave stays
+/// (named in Messages) and a save in the folder leaves it.
+#[test]
+fn equal_times_keep_the_folder_document_and_the_autosave() {
+    let (d, mut m) = export_session();
+    let mine = older_autosave_open_on_newer_folder(&d, &mut m);
+    m.close_edit();
+    let out = d.path().join(r"mods\MyOut");
+    let t = std::fs::metadata(nif_doc(&out))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(autosave(&d))
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+    m.messages.clear();
+    m.open_edit();
+    assert_eq!(op_values(&m)[0].1, 7.5, "the folder's document opens");
+    assert_eq!(
+        m.messages,
+        vec![format!(
+            "Older edits of meshes/x.nif stay autosaved in {}.",
+            autosave(&d).display()
+        )]
+    );
+    gloss(&mut m, 13.5);
+    assert_eq!(
+        std::fs::read(autosave(&d)).unwrap(),
+        mine,
+        "the autosave stays as it was"
+    );
+}
+
 /// The files beside the autosave that a save moved aside (`<stem>.<seconds>.toml`).
 fn kept_aside(d: &tempfile::TempDir) -> Vec<std::path::PathBuf> {
     let a = autosave(d);
