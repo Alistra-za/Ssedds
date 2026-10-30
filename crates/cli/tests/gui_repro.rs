@@ -70,6 +70,9 @@ fn a_gui_export_and_sdc_convert_agree() {
     let mut m = AppModel::new(settings, None, session);
     m.open_folder(root.clone());
     assert!(m.wait_idle(Duration::from_secs(60)));
+    // Note FB1: a project's export folder is its own pick; gui.toml's app-wide folder is not inherited.
+    m.set_export_folder(d.path().join("gui-out"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
     m.decide("landscape/rock01.png", Answer::Subtype(Subtype::Diffuse));
     m.decide("landscape/odd.png", Answer::Subtype(Subtype::Diffuse));
     m.decide("landscape/odd.png", Answer::Acknowledge(Code::DimNpot));
