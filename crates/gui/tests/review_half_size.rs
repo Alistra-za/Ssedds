@@ -2,7 +2,7 @@
 //! supersedes the end-of-export box of CL24/CL27/CL43), and the remembered half size (`drop_top_mip`, Note CL).
 mod support;
 use eframe::egui::{self, Key};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use egui_kittest::Harness;
 use engine::codes::Code;
 use image::{ImageBuffer, Rgb, RgbImage};
@@ -145,10 +145,7 @@ fn half_size_rows_come_from_the_last_export() {
     assert!(!m.export_is_clean());
     m.export_clicked();
     let r = m.review.as_ref().expect("Review opens on the question");
-    assert!(
-        r.half_size.values().all(Option::is_none),
-        "unanswered by default"
-    );
+    assert!(r.half_size.is_empty(), "unanswered by default");
     assert_eq!(
         m.review_gate(),
         Err("Answer half or full size for 2 textures".to_string())
@@ -161,11 +158,9 @@ fn half_size_rows_come_from_the_last_export() {
     let mut h = harness(m);
     h.run_steps(4);
     h.get_by_label("2 textures added nothing at full size last export");
-    assert_eq!(h.query_all_by_label("Full size \u{25BE}").count(), 1);
-    assert_eq!(
-        h.query_all_by_label("Half or full size? \u{25BE}").count(),
-        1
-    );
+    // Finding r1 #6: each row's menu is named by its texture and its answer.
+    h.get_by_label("up.png: Full size");
+    h.get_by_label("up2.png: Half or full size?");
 }
 
 /// No window after the export, over the whole run, and no second pass: the export runs once.
@@ -285,6 +280,134 @@ fn an_unflagged_texture_gets_no_drop_top_mip() {
     assert!(m.export.summary.is_some(), "the export ran");
     assert_eq!(drop_top_mip(&m, "up.png"), None);
     assert!(!toml(&m).contains("drop_top_mip"));
+}
+
+/// Finding r1 #1: the answers are written after the sources are checked. A texture changed on disk since the last
+/// export drops out of the question, and nothing is written for it.
+#[test]
+fn a_source_changed_since_the_export_gets_no_drop_top_mip() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    let finished = logged(&m, "Export finished");
+    m.export_clicked();
+    m.answer_half_size("up.png", HalfAnswer::Half);
+    m.answer_half_size("up2.png", HalfAnswer::Full);
+    // A different picture of another size: a new stamp.
+    noise(1000, 9)
+        .save(m.root.clone().unwrap().join("up.png"))
+        .unwrap();
+    m.export_from_review();
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(
+        logged(&m, "Export finished"),
+        finished + 1,
+        "the export ran"
+    );
+    assert_eq!(drop_top_mip(&m, "up.png"), None);
+    assert!(!toml(&m).contains("drop_top_mip"));
+}
+
+fn set_read_only(p: &Path, on: bool) {
+    let mut perm = std::fs::metadata(p).unwrap().permissions();
+    perm.set_readonly(on);
+    std::fs::set_permissions(p, perm).unwrap();
+}
+
+/// Finding r1 #2: with `sdc.toml` marked read-only, Half is disabled with the reason, Full is answerable, and the
+/// export runs at full size.
+#[test]
+fn a_read_only_sdc_toml_keeps_full_answerable_and_exports_full_size() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    let path = m.root.clone().unwrap().join("sdc.toml");
+    let before = toml(&m);
+    set_read_only(&path, true);
+    m.export_clicked();
+    let why = m.review.as_ref().unwrap().half_unwritable.clone();
+    assert!(
+        why.as_deref()
+            .is_some_and(|w| w.contains("read-only") && w.contains("half-size")),
+        "{why:?}"
+    );
+    m.answer_half_size("up.png", HalfAnswer::Half);
+    assert!(
+        m.review.as_ref().unwrap().half_size.is_empty(),
+        "Half is refused"
+    );
+    let mut h = harness(m);
+    h.run_steps(4);
+    h.get_by_label("up.png: Half or full size?").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Half size").accesskit_node().is_disabled());
+    h.get_by_label("Full size").click();
+    h.run_steps(2);
+    let mut m = h.into_state();
+    m.answer_half_size("up2.png", HalfAnswer::Full);
+    assert_eq!(m.unanswered_half_size(), 0);
+    m.export_from_review();
+    let idle = m.wait_idle(WAIT);
+    set_read_only(&path, false);
+    assert!(idle);
+    assert!(m.export.summary.is_some(), "the export ran");
+    assert_eq!(dims(&m, "up.png"), (1024, 1024));
+    assert_eq!(toml(&m), before);
+}
+
+/// Finding r1 #3: Review's Export wrote the half size, then the export it waits for was refused (here: a question
+/// opened while the plan ran) or Review was closed: the step is taken back, so nothing stays written.
+#[test]
+fn a_refused_or_closed_export_after_the_half_size_write_undoes_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    let before = toml(&m);
+    for close in [false, true] {
+        m.export_clicked();
+        m.answer_half_size("up.png", HalfAnswer::Half);
+        m.answer_half_size("up2.png", HalfAnswer::Full);
+        m.export_from_review();
+        assert_eq!(
+            drop_top_mip(&m, "up.png"),
+            Some(serde_json::json!(true)),
+            "written on the settled plan"
+        );
+        assert!(m.export_queued(), "the export waits for the plan");
+        if close {
+            m.dismiss_review();
+        } else {
+            m.dialog = Some(Dialog::Error("another question".into()));
+        }
+        assert!(m.wait_idle(WAIT));
+        m.dialog = None;
+        assert!(m.export.running.is_none());
+        assert_eq!(drop_top_mip(&m, "up.png"), None, "close {close}");
+        assert_ne!(m.undo_label(), Some("Half size"), "close {close}");
+        m.dismiss_review();
+        assert_eq!(toml(&m), before, "close {close}");
+    }
+}
+
+/// Finding r1 #5: "Cancel and close" during an export stops it at the next file and then closes.
+#[test]
+fn cancel_and_close_stops_the_export_at_the_next_file() {
+    use sdc_gui::model::AfterExport;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    m.export_clicked();
+    assert!(m.export.running.is_some());
+    assert!(!m.request_close(), "the close waits for an answer");
+    assert_eq!(m.dialog, Some(Dialog::ExportRunning(AfterExport::Close)));
+    m.resolve_export_running(AfterExport::Close, true);
+    assert!(m.wait_idle(WAIT));
+    let written = ["noise.png", "up.png", "up2.png"]
+        .iter()
+        .filter(|i| m.export_root().join(job(&m, i)).exists())
+        .count();
+    assert!(written < 3, "the stop reached the files not yet started");
+    assert!(!m.export.summary.as_ref().unwrap().cancelled.is_empty());
+    assert!(m.take_close_ready(), "the window closes after the stop");
 }
 
 /// Stop during an export cancels at the next file (CO50's Generate cancel), and nothing waits after it.

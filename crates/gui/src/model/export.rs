@@ -78,6 +78,8 @@ pub struct ExportModel {
     pub(crate) index: HashMap<String, usize>,
     /// Rows were removed since `index` was built: rebuild it at the next lookup (audit item 6).
     pub(crate) index_stale: bool,
+    /// Note FC2: job key to the source stamp the export ran on; a half-size row whose source changed since drops out.
+    pub(crate) sources: HashMap<String, Option<engine::policy::SourceStamp>>,
 }
 
 /// The source of `ExportModel::revision`: unique across models, so a cache never mistakes one for another.

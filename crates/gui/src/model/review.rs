@@ -23,6 +23,12 @@ pub struct Review {
     pub toml_unwritable: Option<String>,
     /// Note FC2: the half-size answers by texture key, for this export only; a row with no entry is unanswered.
     pub half_size: BTreeMap<String, Option<HalfAnswer>>,
+    /// Note FC2: why a Half answer cannot be saved (`sdc.toml` read-only); taken when Review opens and again on its
+    /// Export. `None`: Half is answerable.
+    pub half_unwritable: Option<String>,
+    /// Note FC2: the *Half size* step Review's Export wrote, as (undo depth, `history.pushes`) after it, until the
+    /// export starts; a refused export or Close undoes it.
+    pub half_step: Option<(usize, u64)>,
 }
 
 /// Note FC2: write a texture at half size (`drop_top_mip = true`) or as it is.
@@ -100,7 +106,24 @@ impl AppModel {
         self.review
             .get_or_insert_with(Review::default)
             .toml_unwritable = unwritable;
+        self.refresh_half_unwritable();
         self.show_tab(BottomTab::Review);
+    }
+
+    /// Note FC2 (finding r1 #2): whether a Half answer can be saved, taken when Review opens and on its Export (one
+    /// stat, never per frame). Unsaveable, a Half answer already given is dropped, so the row asks again.
+    pub(super) fn refresh_half_unwritable(&mut self) {
+        let why = if self.half_size_rows().is_empty() {
+            None
+        } else {
+            self.sdc_toml_writable().err()
+        };
+        if let Some(r) = self.review.as_mut() {
+            if why.is_some() {
+                r.half_size.retain(|_, a| *a != Some(HalfAnswer::Half));
+            }
+            r.half_unwritable = why;
+        }
     }
 
     /// C4: the JSON files the export would write and their state on disk. Cached (K3) per view key for 1 s, since
@@ -181,6 +204,24 @@ impl AppModel {
         self.continue_after_plan = None;
         if self.bottom.tab == BottomTab::Review {
             self.collapse_bottom();
+        }
+    }
+
+    /// Review's Close (and Esc): a half size its Export wrote for an export that has not started is taken back
+    /// (finding r1 #3), then Review closes.
+    pub fn dismiss_review(&mut self) {
+        self.undo_half_step();
+        self.close_review();
+    }
+
+    /// Note FC2 (finding r1 #3): undo the *Half size* step Review's Export wrote, when the export it was for did not
+    /// start and the step is still the top one (nothing undone or edited since).
+    pub(super) fn undo_half_step(&mut self) {
+        let Some((depth, pushes)) = self.review.as_mut().and_then(|r| r.half_step.take()) else {
+            return;
+        };
+        if self.history.undo.len() == depth && self.history.pushes == pushes {
+            self.undo();
         }
     }
 
@@ -353,10 +394,13 @@ impl AppModel {
                 self.items.iter().map(|i| (i.job_key.as_str(), i)).collect();
             for (job, detail) in flagged {
                 let Some(i) = by_job.get(job) else { continue };
-                if i.job
-                    .as_ref()
-                    .is_some_and(|j| engine::checks::low_detail_profile_eligible(&j.profile))
-                {
+                // Finding r1 #1: a source changed since that export was not measured; its row drops out.
+                let same_source = |j: &engine::policy::ResolvedJob| {
+                    !i.changed_on_disk && self.export.sources.get(job) == Some(&j.source)
+                };
+                if i.job.as_ref().is_some_and(|j| {
+                    same_source(j) && engine::checks::low_detail_profile_eligible(&j.profile)
+                }) {
                     rows.push(HalfSizeRow {
                         key: i.key.clone(),
                         name: i.name.clone(),
@@ -387,19 +431,27 @@ impl AppModel {
             .count()
     }
 
-    /// Note FC2: answer one half-size row. No-op while Review is closed.
+    /// Note FC2: answer one half-size row. No-op while Review is closed; Half is refused while it cannot be saved
+    /// (`half_unwritable`), Full never is.
     pub fn answer_half_size(&mut self, key: &str, answer: HalfAnswer) {
         if let Some(r) = self.review.as_mut() {
+            if answer == HalfAnswer::Half && r.half_unwritable.is_some() {
+                return;
+            }
             r.half_size.insert(key.to_string(), Some(answer));
         }
     }
 
     /// Note FC2: Review's Export writes each `Half` answer whose row is still asked as `drop_top_mip = true`, one
-    /// undo step; the export then waits for the plan that edit starts. A `Full` answer writes nothing.
-    fn write_half_answers(&mut self) {
+    /// undo step, on the settled plan with the sources checked (`Continue::Review`). A `Full` answer writes nothing.
+    /// True when it wrote.
+    pub(super) fn write_half_answers(&mut self) -> bool {
         let Some(r) = self.review.as_ref() else {
-            return;
+            return false;
         };
+        if r.half_unwritable.is_some() || !self.toml_writable() {
+            return false;
+        }
         let keys: Vec<String> = self
             .half_size_rows()
             .iter()
@@ -407,13 +459,22 @@ impl AppModel {
             .map(|row| row.key.clone())
             .collect();
         if keys.is_empty() {
-            return;
+            return false;
         }
+        let pushes = self.history.pushes;
         self.edit("Half size", move |p| {
             for k in &keys {
                 p.set_file_value(k, "drop_top_mip", &serde_json::json!(true));
             }
         });
+        if self.history.pushes == pushes {
+            return false;
+        }
+        let step = (self.history.undo.len(), self.history.pushes);
+        if let Some(r) = self.review.as_mut() {
+            r.half_step = Some(step);
+        }
+        true
     }
 
     /// Note FB1: Review would write without skipping anything: a finished plan with files to write, the gate open and
@@ -464,10 +525,6 @@ impl AppModel {
             return;
         }
         self.status_note = None;
-        // Only a click the gate lets through writes the answers; a refused one leaves the document as it was.
-        if self.review_gate().is_ok() {
-            self.write_half_answers();
-        }
         self.continue_review();
     }
 

@@ -293,12 +293,13 @@ fn json_line_text(l: &JsonLine) -> String {
 
 /// Note FC2: the half-size question, one row per texture the last export flagged: `rock_d.png · Half size ▾`, the
 /// menu `Half size` / `Full size`. "Half size" is the one name; the code and "mip 0" are hover text (CL15). Nothing
-/// is written until Review's Export.
+/// is written until Review's Export. An answer writes nothing, so the menu is always on; only Half is off while
+/// `sdc.toml` cannot be saved (`half_off`, its reason on hover).
 fn half_size_group(
     ui: &mut egui::Ui,
     answers: &std::collections::BTreeMap<String, Option<HalfAnswer>>,
     rows: &[HalfSizeRow],
-    off: Option<&str>,
+    half_off: Option<&str>,
     act: &mut Option<Act>,
 ) {
     if rows.is_empty() {
@@ -317,10 +318,10 @@ fn half_size_group(
          when you export; Full size writes the texture as it is.",
     );
     for r in rows {
-        let text = match answers.get(&r.key).copied().flatten() {
-            None => "Half or full size? \u{25BE}",
-            Some(HalfAnswer::Half) => "Half size \u{25BE}",
-            Some(HalfAnswer::Full) => "Full size \u{25BE}",
+        let answer = match answers.get(&r.key).copied().flatten() {
+            None => "Half or full size?",
+            Some(HalfAnswer::Half) => "Half size",
+            Some(HalfAnswer::Full) => "Full size",
         };
         // ui-rules 3.3: the menu lays out first, the name takes what is left.
         let (select, pick) = egui::Sides::new().shrink_left().truncate().show(
@@ -328,24 +329,30 @@ fn half_size_group(
             |ui| ui.link(&r.name).on_hover_text(&r.detail).clicked(),
             |ui| {
                 let mut pick = None;
-                ui.add_enabled_ui(off.is_none(), |ui| {
-                    ui.menu_button(text, |ui| {
-                        for (a, label, hover) in [
-                            (
-                                HalfAnswer::Half,
-                                "Half size",
-                                "Drop mip 0: half the width and height",
-                            ),
-                            (HalfAnswer::Full, "Full size", "Write it as it is"),
-                        ] {
-                            if ui.button(label).on_hover_text(hover).clicked() {
-                                pick = Some(a);
-                                ui.close();
-                            }
+                let menu = ui.menu_button(format!("{answer} \u{25BE}"), |ui| {
+                    for (a, label, hover, on) in [
+                        (
+                            HalfAnswer::Half,
+                            "Half size",
+                            "Drop mip 0: half the width and height",
+                            half_off.is_none(),
+                        ),
+                        (HalfAnswer::Full, "Full size", "Write it as it is", true),
+                    ] {
+                        let b = ui
+                            .add_enabled(on, egui::Button::new(label))
+                            .on_hover_text(hover)
+                            .on_disabled_hover_text(half_off.unwrap_or_default());
+                        if b.clicked() {
+                            pick = Some(a);
+                            ui.close();
                         }
-                    })
-                    .response
-                    .on_disabled_hover_text(off.unwrap_or_default());
+                    }
+                });
+                // ui-rules 8.4: one name per row, the texture and its answer.
+                let name = format!("{}: {answer}", r.key);
+                menu.response.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                 });
                 pick
             },
@@ -783,7 +790,13 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             if accept.clicked() {
                 act = Some(Act::AcceptAll);
             }
-            half_size_group(ui, &review.half_size, &half_rows, off.as_deref(), &mut act);
+            half_size_group(
+                ui,
+                &review.half_size,
+                &half_rows,
+                review.half_unwritable.as_deref(),
+                &mut act,
+            );
         }
         2 => {
             if asks.is_empty() {
@@ -873,7 +886,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 model.export_from_review();
             }
         }
-        Some(Act::Close) => model.close_review(),
+        Some(Act::Close) => model.dismiss_review(),
         None => {}
     }
 }

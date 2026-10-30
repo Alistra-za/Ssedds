@@ -1521,7 +1521,8 @@ impl AppModel {
     }
 
     /// Whether `sdc.toml` can be saved: `Err(reason)` with no project, a load error, or the read-only flag. A missing
-    /// file is fine: the save creates it. Stats the file: call it once.
+    /// file is fine: the save creates it. Stats the file: call it once. The reason is the hover of Review's disabled
+    /// Half (Note FC2); the Also rows show their own text.
     pub fn sdc_toml_writable(&self) -> Result<(), String> {
         let Some(p) = self.project.as_ref() else {
             return Err("No project is open.".into());
@@ -1531,7 +1532,7 @@ impl AppModel {
         }
         match std::fs::metadata(p.path()) {
             Ok(m) if m.permissions().readonly() => Err(format!(
-                "{} is marked read-only, so it cannot be saved.",
+                "{} is marked read-only, so the half-size choice cannot be saved.",
                 p.path().display()
             )),
             _ => Ok(()),
@@ -1799,18 +1800,27 @@ impl AppModel {
                 // checks on), and an edit after the click can add a pitfall, so the guards and the gate run again
                 // on the settled plan (audit 08f-2, Review Focus 1).
                 if self.export_stopped() {
+                    self.undo_half_step();
                     return;
                 }
                 // P9: `sdc.toml`'s writability again, once per Export click.
                 let unwritable = self.also_toml_unwritable();
+                self.refresh_half_unwritable();
                 if let Some(r) = self.review.as_mut() {
                     r.toml_unwritable = unwritable;
                 }
                 match self.review_gate() {
                     Ok(_) => {
+                        // Note FC2: the half-size answers are written here, on the settled plan with the sources
+                        // checked; the export then waits for the plan that edit starts and comes back here.
+                        if self.write_half_answers() {
+                            self.continue_review();
+                            return;
+                        }
                         self.start_export_pass();
                     }
                     Err(why) => {
+                        self.undo_half_step();
                         self.status_line = format!("Export not started: {why}");
                         self.messages
                             .log(messages::Severity::Info, self.status_line.clone());
@@ -1892,7 +1902,7 @@ impl AppModel {
     }
 
     /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker. One pass:
-    /// the half-size answers were written before it (Note FC2).
+    /// the half-size answers were written before it, on the settled plan (Note FC2).
     fn start_export_pass(&mut self) {
         if self.export.running.is_some() || self.save().is_err() {
             return;
@@ -1925,8 +1935,15 @@ impl AppModel {
         // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
         self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
         self.review_json_cache.take();
+        // Note FC2: the stamps this export runs on, so a half-size row drops out once its source changes.
+        let sources = self
+            .items
+            .iter()
+            .filter_map(|i| Some((i.job_key.clone(), i.job.as_ref()?.source)))
+            .collect();
         self.export = export::ExportModel {
             pace: Some(export::Pace::new(Instant::now())),
+            sources,
             ..Default::default()
         };
         self.show_tab(bottom::BottomTab::Files);
@@ -2369,6 +2386,8 @@ impl AppModel {
         let note = "Export not started: answer the open dialog, then click Export again";
         self.status_line = note.into();
         self.messages.notify(messages::Severity::Warning, note);
+        // Note FC2: a half size written for this export goes with it.
+        self.undo_half_step();
     }
 
     pub fn wait_idle(&mut self, timeout: Duration) -> bool {

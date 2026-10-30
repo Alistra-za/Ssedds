@@ -686,7 +686,7 @@ fn report(label: &str, plan: &[(String, Change)]) -> String {
 }
 
 impl AppModel {
-    fn toml_writable(&self) -> bool {
+    pub(super) fn toml_writable(&self) -> bool {
         self.project.as_ref().is_some_and(|p| !p.read_only())
     }
 
