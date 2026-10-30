@@ -47,6 +47,8 @@ pub struct Entry {
 pub enum ToastAction {
     /// Takes back the crash-edit restore and deletes the `.recovery` files (`AppModel::undo_crash_restore`).
     UndoCrashRestore,
+    /// Note FC5: takes back a Delete set step while it is still the top one: (undo depth, `history.pushes`) after it.
+    UndoDeleteSet(usize, u64),
 }
 
 #[derive(Debug, Clone)]

@@ -1615,6 +1615,33 @@ impl AppModel {
         true
     }
 
+    /// Note FC5 (supersedes AG13's confirm): the set menu's Delete set: no question, one undo step and a toast
+    /// `Deleted set {id} ({n} members)` with Undo.
+    pub fn delete_set_with_toast(&mut self, id: &str, members: usize) {
+        if !self.delete_set(id) {
+            return;
+        }
+        let step = (self.history.undo.len(), self.history.pushes);
+        let s = if members == 1 { "" } else { "s" };
+        self.messages.notify_with(
+            super::messages::Severity::Info,
+            format!("Deleted set {id} ({members} member{s})"),
+            Some(super::messages::ToastAction::UndoDeleteSet(step.0, step.1)),
+        );
+    }
+
+    /// The Delete set toast's Undo: undoes the step only while it is still the top one (nothing done since).
+    pub fn undo_delete_set(&mut self, depth: usize, pushes: u64) {
+        if self.history.undo.len() == depth && self.history.pushes == pushes {
+            self.undo();
+        } else {
+            self.messages.notify(
+                super::messages::Severity::Info,
+                "Not undone: other changes came after the delete; use Undo in the header",
+            );
+        }
+    }
+
     /// Take `item` out of set `id` (it becomes a set of its own, or returns to the automatic grouping when it was
     /// moved in). Refused for a packed map (it follows its raw maps) and for the only member of a set that it is in
     /// by automatic grouping (it already is a set of its own; the engine would rename it `<stem>~2`).

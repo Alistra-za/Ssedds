@@ -267,6 +267,7 @@ enum Act {
     AckAll,
     Others,
     Json(bool),
+    Nif(String, bool, [u8; 32]),
     Export,
     Close,
 }
@@ -289,6 +290,47 @@ fn json_line_text(l: &JsonLine) -> String {
         (DiskState::Edited, _) => format!("{path}: edited outside Tessalith — kept, with a note"),
         (DiskState::Unreadable, _) => format!("{path}: cannot be read; kept"),
     }
+}
+
+/// Note FC5: one overwrite question in Blockers: the sentence (red until answered), then Review's two radios, neither
+/// preselected. Returns Some(overwrite) on a click.
+fn overwrite_row(ui: &mut egui::Ui, text: &str, answer: Option<bool>) -> Option<bool> {
+    let mut pick = None;
+    ui.horizontal_wrapped(|ui| {
+        match answer {
+            None => ui.colored_label(RED, text),
+            Some(_) => ui.label(text),
+        };
+        if ui
+            .radio(answer == Some(false), "Keep the edited file")
+            .clicked()
+        {
+            pick = Some(false);
+        }
+        if ui.radio(answer == Some(true), "Overwrite it").clicked() {
+            pick = Some(true);
+        }
+    });
+    pick
+}
+
+/// Note FC5: one NIF edit under `NIF edits (n)`: `path · mod · n unused blocks removed`, or a Warning
+/// `NIF edit skipped: {reason}` for a blocked one (it never blocks the texture export).
+fn nif_row_text(
+    r: &crate::model::meshes::NifReviewRow,
+    folder: Option<&std::path::Path>,
+) -> String {
+    let mut t = r.path.clone();
+    if !r.mod_name.is_empty() {
+        t.push_str(&format!(" · {}", r.mod_name));
+    }
+    if let Some(n) = r.compaction.filter(|n| *n > 0) {
+        t.push_str(&format!(" · {n} unused block{} removed", plural(n)));
+    }
+    if let Some(f) = folder {
+        t.push_str(&format!(" · written to {}", f.display()));
+    }
+    t
 }
 
 /// Note FC2: the half-size question, one row per texture the last export flagged: `rock_d.png · Half size ▾`, the
@@ -639,8 +681,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
     let gate = m.review_gate();
-    let folder_chosen = m.export_folder_chosen().is_some();
+    let nif_folder = m.export_folder_chosen();
+    let folder_chosen = nif_folder.is_some();
     let json = m.review_json();
+    let nif_rows = m.nif_review_rows();
     // Note CN85: a fourth column in the cs mode or while a tick is on; the Also reason only with a tick, as the gate.
     let also_on = m.also_on() || m.target == Target::Cs;
     let also_err = if m.also_on() {
@@ -658,27 +702,29 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 let files = m.export_files();
                 ui.label(format!("{files} DDS file{}", plural(files)));
             });
-            let answer = review.json_answer.as_ref().map(|a| a.overwrite);
             egui::ScrollArea::vertical()
                 .id_salt("review-json")
                 .max_height(96.0)
                 .show(ui, |ui| {
-                    for l in &json {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(json_line_text(l));
-                            // C4: only the PGPatcher JSON can be answered here; none is picked until clicked.
-                            if l.kind == JsonKind::PgPatcher && l.state == DiskState::Edited {
-                                if ui
-                                    .radio(answer == Some(false), "Keep the edited file")
-                                    .clicked()
-                                {
-                                    act = Some(Act::Json(false));
-                                }
-                                if ui.radio(answer == Some(true), "Overwrite it").clicked() {
-                                    act = Some(Act::Json(true));
-                                }
+                    // Note FC5: the NIF edits, before the files; a blocked one is a warning, skipped.
+                    if !nif_rows.is_empty() {
+                        ui.strong(format!("NIF edits ({})", nif_rows.len()));
+                        for r in nif_rows {
+                            let (t, color) = match &r.blocked {
+                                Some(why) => (format!("NIF edit skipped: {why}"), Some(AMBER)),
+                                None => (nif_row_text(r, nif_folder.as_deref()), None),
+                            };
+                            let mut text = egui::RichText::new(&t);
+                            if let Some(c) = color {
+                                text = text.color(c);
                             }
-                        });
+                            ui.add(egui::Label::new(text).truncate())
+                                .on_hover_text(format!("{}: {t}", r.path));
+                        }
+                    }
+                    // Note FC5: the Keep/Overwrite question moved to Blockers.
+                    for l in &json {
+                        ui.label(json_line_text(l));
                     }
                 });
             ui.horizontal(|ui| {
@@ -719,8 +765,16 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 });
             });
         });
-    // Note FB4: the missing export folder counts, because the gate enforces it.
-    let blockers = blocks.len() + usize::from(!folder_chosen);
+    // Note FB4: the missing export folder counts, because the gate enforces it; Note FC5: so does an unanswered
+    // overwrite question.
+    let blockers = blocks.len() + usize::from(!folder_chosen) + m.unanswered_overwrites().len();
+    let json_answer = review.json_answer.as_ref();
+    let questions = json
+        .iter()
+        .any(|l| l.kind == JsonKind::PgPatcher && l.state == DiskState::Edited)
+        || nif_rows
+            .iter()
+            .any(|r| r.blocked.is_none() && r.foreign.is_some());
     let n_cols = if also_on { 4 } else { 3 };
     let heading = |i: usize| match i {
         0 => ("Blockers", format!("Blockers ({blockers})")),
@@ -735,7 +789,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     // One body per column, drawn side by side or stacked (Note FB10).
     let mut body = |ui: &mut egui::Ui, i: usize| match i {
         0 => {
-            if blockers == 0 {
+            if blockers == 0 && !questions {
                 ui.weak("None");
             }
             // Note FB1: the export folder is a blocker until one is chosen for this project.
@@ -766,6 +820,30 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                         act = Some(Act::GoTo(b.set_key.clone()));
                     }
                 });
+            }
+            // Note FC5 (C4): Export waits for an answer to each overwrite question; none is picked until clicked.
+            for l in json
+                .iter()
+                .filter(|l| l.kind == JsonKind::PgPatcher && l.state == DiskState::Edited)
+            {
+                let answer = json_answer
+                    .filter(|a| a.path == l.path)
+                    .map(|a| a.overwrite);
+                let name = l.path.file_name().unwrap_or_default().to_string_lossy();
+                let text = format!("{name} was edited outside Tessalith");
+                if let Some(o) = overwrite_row(ui, &text, answer) {
+                    act = Some(Act::Json(o));
+                }
+            }
+            for r in nif_rows.iter().filter(|r| r.blocked.is_none()) {
+                let Some(sha) = r.foreign else { continue };
+                let answer = r
+                    .answer
+                    .map(|c| c == crate::model::meshes::export::GuardChoice::Overwrite);
+                let text = format!("{} was not written by Tessalith", r.path);
+                if let Some(o) = overwrite_row(ui, &text, answer) {
+                    act = Some(Act::Nif(r.path.clone(), o, sha));
+                }
             }
         }
         1 => {
@@ -880,6 +958,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::AckAll) => model.acknowledge_all_asks(),
         Some(Act::Others) => model.open_problems(None),
         Some(Act::Json(overwrite)) => model.answer_review_json(overwrite),
+        Some(Act::Nif(path, overwrite, sha)) => model.answer_review_nif(&path, overwrite, sha),
         // Export saves first: wait for a focused field to commit, as the header Export does (Note BS14).
         Some(Act::Export) => {
             if !super::header::field_focused(ui, model, "Export") {

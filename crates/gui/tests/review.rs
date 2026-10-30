@@ -511,31 +511,27 @@ fn a_pre_answer_keep_keeps_the_file_with_a_note() {
     );
 }
 
-/// C4 safety net: the answer was for the file as it was; a later edit asks again.
+/// C4 safety net: the answer was for the file as it was; a later edit is kept with a note (Note FC5: nothing asks
+/// after the export).
 #[test]
-fn the_overwrite_dialog_still_fires_when_the_json_changed_after_review() {
+fn a_json_changed_after_the_answer_is_kept_with_a_note() {
     let d = tempfile::tempdir().unwrap();
     let (mut m, p) = reviewing_an_edited_json(d.path());
     m.answer_review_json(true);
     std::fs::write(&p, "{ \"edited\": 2 }\n").unwrap();
     exported_from_review(&mut m);
-    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&p)
         .unwrap()
         .contains("\"edited\": 2"));
-}
-
-#[test]
-fn without_an_answer_the_question_comes_after_the_export_as_today() {
-    let d = tempfile::tempdir().unwrap();
-    let (mut m, p) = clean_pbr_with_edited_json(d.path());
-    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
-    idle(&mut m);
-    m.export_clicked();
-    assert!(m.review.is_some());
-    exported_from_review(&mut m);
-    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
-    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+    assert!(
+        m.export
+            .notes
+            .iter()
+            .any(|n| n.starts_with("PGPatcher JSON not written")),
+        "{:?}",
+        m.export.notes
+    );
 }
 
 /// Review Focus 2.
@@ -552,19 +548,43 @@ fn a_pre_answer_does_not_survive_a_reload() {
     idle(&mut m);
     export_through(&mut m);
     idle(&mut m);
-    assert!(m.export.summary.is_some());
-    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    // Note FC5: the reloaded Review has no answer, so its Export waits for one.
+    assert!(
+        m.status_line
+            .starts_with("Export not started: Answer Keep or Overwrite"),
+        "{}",
+        m.status_line
+    );
+    assert!(m.review_gate().is_err());
     assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
 }
 
-/// R6, A1 (shot 41).
+/// R6, A1 (shot 41); Note FC5 (supersedes CA7's optional answer): Export waits for Keep or Overwrite.
 #[test]
-fn an_edited_pgpatcher_json_opens_review_with_the_choice() {
+fn export_waits_for_the_json_answer() {
     let d = tempfile::tempdir().unwrap();
-    let (mut m, _) = clean_pbr_with_edited_json(d.path());
+    let (mut m, p) = clean_pbr_with_edited_json(d.path());
     m.export_clicked();
     assert!(m.review.is_some() && m.export.running.is_none());
-    assert!(m.review_gate().is_ok(), "the choice never disables Export");
+    let name = p.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(
+        m.review_gate(),
+        Err(format!("Answer Keep or Overwrite for {name}"))
+    );
+    assert!(!m.export_is_clean());
+    m.export_from_review();
+    idle(&mut m);
+    assert!(
+        m.status_line
+            .starts_with("Export not started: Answer Keep or Overwrite"),
+        "nothing written before the answer: {}",
+        m.status_line
+    );
+    m.answer_review_json(false);
+    assert!(m.review_gate().is_ok());
+    exported_from_review(&mut m);
+    assert_eq!(m.dialog, None);
+    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
 }
 
 /// C2 with a PBR set: Tessalith's own JSON reads as Ours, so the second export starts without Review or a question.

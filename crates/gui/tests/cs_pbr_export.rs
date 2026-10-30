@@ -348,7 +348,8 @@ fn a_hand_edited_old_case_file_survives_the_rename() {
     );
 }
 
-/// Final review I3: a failed project save after the export never replaces the PGPatcher overwrite question.
+/// Final review I3: a failed project save after the export never replaces an open question (the overwrite question
+/// it was written for is gone, Note FC5; any open dialog stands in).
 #[test]
 fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
     let d = tempfile::tempdir().unwrap();
@@ -360,7 +361,7 @@ fn a_save_error_leaves_an_open_question_and_goes_to_the_notes() {
     let toml = m.sets_doc.as_ref().unwrap().path().to_path_buf();
     let text = std::fs::read_to_string(&toml).unwrap();
     std::fs::write(&toml, format!("{text}\n# edited elsewhere\n")).unwrap();
-    let question = Dialog::OverwriteJson(d.path().join("x.json"));
+    let question = Dialog::ExternalChange(sdc_gui::model::DocKind::SdcToml);
     m.dialog = Some(question.clone());
     let p = prepare(&m);
     m.finish_cs_pbr(p);

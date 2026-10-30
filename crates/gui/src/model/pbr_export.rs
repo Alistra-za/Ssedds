@@ -760,7 +760,7 @@ pub fn finish(
     }
 }
 
-/// Write `text` over an existing (hand-edited) JSON: the answer "Overwrite" to `Dialog::OverwriteJson`.
+/// Write `text` over an existing (hand-edited) JSON: Review's answer "Overwrite it" (Note FC5).
 pub fn overwrite(path: &std::path::Path, text: &str, notes: &mut Vec<String>) -> Option<String> {
     match engine::dds::write_atomic(path, text.as_bytes()) {
         Ok(()) => {

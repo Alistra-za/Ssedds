@@ -199,6 +199,9 @@ impl AppModel {
     /// Close Review and its ticks; the panel collapses when it showed Review (R7: the tab is listed only while open).
     pub fn close_review(&mut self) {
         self.review = None;
+        // Note FC5 (GD29): the NIF answers go with Review; each foreign row asks again.
+        self.nif_clear_answers_request = true;
+        self.nif_answer_request = None;
         self.review_json_cache.take();
         // Its queued export goes with it (Task 1.4's Close).
         self.continue_after_plan = None;
@@ -350,7 +353,83 @@ impl AppModel {
                 plural(n)
             ));
         }
+        // Note FC5: then every overwrite question (supersedes CA7's "no choice made: asked after the export").
+        if let Some(name) = self.unanswered_overwrites().first() {
+            return Err(format!("Answer Keep or Overwrite for {name}"));
+        }
         Ok((self.export_files(), self.undecided()))
+    }
+
+    /// Note FC5: the file names of the overwrite questions Review has no answer for: an edited PGPatcher JSON, then
+    /// each NIF whose export path holds a file Tessalith did not write (a blocked NIF row is skipped, never asked).
+    pub fn unanswered_overwrites(&self) -> Vec<String> {
+        let answered = self.review.as_ref().and_then(|r| r.json_answer.as_ref());
+        let name = |p: &Path| {
+            p.file_name().map_or_else(
+                || p.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            )
+        };
+        let json = self.review_json().into_iter().filter(|l| {
+            l.kind == JsonKind::PgPatcher
+                && l.state == DiskState::Edited
+                && !answered.is_some_and(|a| a.path == l.path)
+        });
+        let nifs = self
+            .nif_rows
+            .iter()
+            .filter(|r| r.blocked.is_none() && r.foreign.is_some() && r.answer.is_none());
+        json.map(|l| name(&l.path))
+            .chain(nifs.map(|r| name(Path::new(&r.path))))
+            .collect()
+    }
+
+    /// Note FC5: the NIF edits Review lists, handed over by `app.rs` each frame.
+    pub fn set_nif_review_rows(&mut self, rows: Vec<super::meshes::NifReviewRow>) {
+        self.nif_rows = rows;
+    }
+
+    pub fn nif_review_rows(&self) -> &[super::meshes::NifReviewRow] {
+        &self.nif_rows
+    }
+
+    /// Note FC5: Review's Keep (false) or Overwrite (true) for the NIF at `path`, for the file with hash `sha256`;
+    /// `app.rs` passes it to `MeshesModel::set_nif_answer`. No-op while Review is closed.
+    pub fn answer_review_nif(&mut self, path: &str, overwrite: bool, sha256: [u8; 32]) {
+        use super::meshes::export::GuardChoice;
+        if self.review.is_none() {
+            return;
+        }
+        let choice = if overwrite {
+            GuardChoice::Overwrite
+        } else {
+            GuardChoice::KeepTheirs
+        };
+        self.nif_answer_request = Some((path.to_string(), choice, sha256));
+    }
+
+    /// Note FC5: true once, in the frame after the run Review's Export started has fully ended (with Also on, after
+    /// its zips); `app.rs` then calls `MeshesModel::export_nif_edits` and passes the result to `nif_export_result`.
+    pub fn take_nif_export_due(&mut self) -> bool {
+        std::mem::take(&mut self.nif_export_due)
+    }
+
+    /// Note FC5: the NIF export's result, in Messages and in the export's notes (Review is closed by then; the notes
+    /// are the Files tab's lines).
+    pub fn nif_export_result(&mut self, result: Result<usize, String>) {
+        let (sev, text) = match result {
+            Ok(0) => return,
+            Ok(n) => (
+                super::messages::Severity::Info,
+                format!("NIF edits written: {n} file{}", plural(n)),
+            ),
+            Err(why) => (
+                super::messages::Severity::Warning,
+                format!("NIF edits skipped: {why}"),
+            ),
+        };
+        self.export.notes.push(text.clone());
+        self.messages.notify(sev, text);
     }
 
     /// Note FC2: the half-size question's rows: each texture the last export flagged (`CHK-LOW-DETAIL`) that the plan
@@ -485,6 +564,8 @@ impl AppModel {
             && self.export_files() > 0
             && self.review_gate().is_ok()
             && self.undecided() == 0
+            // Note FC5: NIF edits are written by Review's Export only.
+            && self.nif_rows.is_empty()
     }
 
     /// Note FB1: the header's Export button: `Export {n} files` once the project is clean, else `Review {n} files`.

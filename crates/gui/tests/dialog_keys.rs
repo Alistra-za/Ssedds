@@ -297,7 +297,6 @@ fn esc_closes_the_dialogs_that_use_the_shared_modal() {
             to: vec![],
             fields: vec![],
         },
-        Dialog::OverwriteJson(d.path().join("x.json")),
     ] {
         let mut m = opened(d.path());
         m.dialog = Some(dialog.clone());
@@ -402,48 +401,52 @@ fn has_set(m: &AppModel, id: &str) -> bool {
         .any(|s| s.id == id)
 }
 
+/// Note FC5 (supersedes AG13's confirm): Delete set asks nothing; it is one undo step and a toast whose Undo brings
+/// the set back.
 #[test]
-fn delete_set_asks_cancel_keeps_it_and_delete_is_one_undo_step() {
+fn delete_set_has_no_dialog_and_undoes() {
+    use sdc_gui::model::messages::ToastAction;
     let d = tempfile::tempdir().unwrap();
     let (m, id) = with_a_created_set(d.path());
     let before = m.history.undo.len();
+    let members = sdc_gui::model::sets::set_views(&m)
+        .iter()
+        .find(|s| s.id == id)
+        .unwrap()
+        .members
+        .len();
     let mut h = harness(m);
     h.run();
-    // Cancel keeps the set.
     pill(&h, &id).click_secondary();
     h.run();
     h.get_by_label("Delete set").click();
-    h.run();
-    h.get_by_label_contains(&format!("Delete set '{id}'"));
-    h.get_by_label_contains("Its textures stay; only the set is removed.");
-    assert!(has_set(h.state(), &id), "nothing deleted before the answer");
-    h.get_by_label("Cancel").click();
-    h.run();
-    assert!(has_set(h.state(), &id));
-    assert_eq!(h.state().history.undo.len(), before);
-    // Esc cancels too.
-    pill(&h, &id).click_secondary();
-    h.run();
-    h.get_by_label("Delete set").click();
-    h.run();
-    h.run();
-    h.key_press(Key::Escape);
-    h.run();
-    assert!(has_set(h.state(), &id));
-    assert!(h.query_by_label_contains("Its textures stay").is_none());
-    // Delete removes it, as one step.
-    pill(&h, &id).click_secondary();
-    h.run();
-    h.get_by_label("Delete set").click();
-    h.run();
-    h.get_by_label("Delete").click();
     h.run();
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert!(h.state().dialog.is_none());
+    assert!(
+        h.query_by_label_contains("Its textures stay").is_none(),
+        "no question"
+    );
     assert!(!has_set(h.state(), &id));
     assert_eq!(h.state().history.undo.len(), before + 1);
-    h.state_mut().undo();
+    let s = if members == 1 { "" } else { "s" };
+    // The toast (drawn by `app.rs`, so read off the model) carries the Undo.
+    let toast = h
+        .state()
+        .messages
+        .toasts()
+        .iter()
+        .find(|t| t.text == format!("Deleted set {id} ({members} member{s})"))
+        .cloned()
+        .expect("the toast");
+    let Some(ToastAction::UndoDeleteSet(depth, pushes)) = toast.action else {
+        panic!("{:?}", toast.action)
+    };
+    h.state_mut().undo_delete_set(depth, pushes);
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
-    assert!(has_set(h.state(), &id), "one undo brings it back");
+    assert!(has_set(h.state(), &id), "the toast's Undo brings it back");
+    assert_eq!(h.state().history.undo.len(), before);
 }
 
 #[test]
@@ -583,14 +586,15 @@ fn the_enter_default_is_rightmost_and_filled() {
     let mut h = harness(m);
     h.run();
     h.run();
+    // Note FC5: Cancel is the Enter default; Save and Don't save need a click.
     let (save, discard, cancel) = (
         dialog_button(&h, "Save"),
-        dialog_button(&h, "Discard"),
+        dialog_button(&h, "Don't save"),
         dialog_button(&h, "Cancel"),
     );
     assert!(
-        save.center().x > discard.center().x && discard.center().x > cancel.center().x,
-        "the footer reads Cancel, Discard, Save: {cancel:?} {discard:?} {save:?}"
+        cancel.center().x > discard.center().x && discard.center().x > save.center().x,
+        "the footer reads Save, Don't save, Cancel: {save:?} {discard:?} {cancel:?}"
     );
     let rects = painted_rects(&h);
     let fill = h.ctx.style_of(h.ctx.theme()).visuals.selection.bg_fill;
@@ -606,12 +610,15 @@ fn the_enter_default_is_rightmost_and_filled() {
             .any(|r| r.stroke == red && r.rect.contains(b.center()))
     };
     assert!(
-        filled(save),
-        "Save, the Enter default, is filled with the accent"
+        filled(cancel),
+        "Cancel, the Enter default, is filled with the accent"
     );
-    assert!(outlined(discard), "Discard has the red destructive outline");
     assert!(
-        !filled(discard) && !filled(cancel),
+        outlined(discard),
+        "Don't save has the red destructive outline"
+    );
+    assert!(
+        !filled(discard) && !filled(save),
         "only the default is filled"
     );
     assert!(
@@ -640,38 +647,7 @@ fn docs_text(root: &std::path::Path) -> String {
 /// set_editor_ui.rs and fill_from_names.rs, the rename dialog's below.
 #[test]
 fn every_dialogs_enter_still_presses_what_it_pressed() {
-    use sdc_gui::model::AfterExport;
-    // CloseUnsaved: Enter saves.
-    let d = tempfile::tempdir().unwrap();
-    let mut m = with_a_step(d.path());
-    m.dialog = Some(Dialog::CloseUnsaved);
-    let mut h = harness(m);
-    press_enter(&mut h);
-    assert!(
-        h.state().dialog.is_none() && !h.state().is_dirty(),
-        "CloseUnsaved: Enter saved"
-    );
-    // OpenUnsaved: Enter saves, then opens the other folder.
-    let d = tempfile::tempdir().unwrap();
-    let other_dir = tempfile::tempdir().unwrap();
-    let other = mod_folder(other_dir.path());
-    let mut m = with_a_step(d.path());
-    let root = m.root.clone().unwrap();
-    let before = docs_text(&root);
-    m.dialog = Some(Dialog::OpenUnsaved(other.clone()));
-    let mut h = harness(m);
-    press_enter(&mut h);
-    assert!(h.state().dialog.is_none(), "OpenUnsaved: closed");
-    assert_ne!(
-        docs_text(&root),
-        before,
-        "OpenUnsaved: Enter saved the edits"
-    );
-    assert_eq!(
-        h.state().root.as_deref(),
-        Some(other.as_path()),
-        "OpenUnsaved: and opened the other folder"
-    );
+    // Close / Open unsaved: `enter_in_unsaved_dialog_cancels` (Note FC5).
     // ReloadUnsaved: Enter cancels.
     let d = tempfile::tempdir().unwrap();
     let mut m = with_a_step(d.path());
@@ -696,6 +672,43 @@ fn every_dialogs_enter_still_presses_what_it_pressed() {
         "ExternalChange: the edits are kept"
     );
     assert_eq!(docs_text(&root), before, "ExternalChange: nothing written");
+    every_other_dialogs_enter();
+}
+
+/// Note FC5 (supersedes AG11/CE3's Enter = Save): Close / Open unsaved: Enter cancels, back to the app.
+#[test]
+fn enter_in_unsaved_dialog_cancels() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    m.dialog = Some(Dialog::CloseUnsaved);
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(
+        h.state().dialog.is_none() && h.state().is_dirty(),
+        "CloseUnsaved: Enter cancelled"
+    );
+    let d = tempfile::tempdir().unwrap();
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = mod_folder(other_dir.path());
+    let mut m = with_a_step(d.path());
+    let root = m.root.clone().unwrap();
+    let before = docs_text(&root);
+    m.dialog = Some(Dialog::OpenUnsaved(other.clone()));
+    let mut h = harness(m);
+    press_enter(&mut h);
+    assert!(h.state().dialog.is_none(), "OpenUnsaved: closed");
+    assert_eq!(docs_text(&root), before, "OpenUnsaved: Enter saved nothing");
+    assert_eq!(
+        h.state().root.as_deref(),
+        Some(root.as_path()),
+        "OpenUnsaved: and opened nothing"
+    );
+    assert!(h.state().is_dirty(), "OpenUnsaved: the edits are kept");
+}
+
+/// The rest of `every_dialogs_enter_still_presses_what_it_pressed`.
+fn every_other_dialogs_enter() {
+    use sdc_gui::model::AfterExport;
     // ExportRunning: Enter keeps exporting.
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
@@ -710,24 +723,7 @@ fn every_dialogs_enter_still_presses_what_it_pressed() {
         "ExportRunning: Enter kept exporting"
     );
     assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
-    // OverwriteJson: Enter keeps the edited JSON.
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_ready(d.path());
-    export_through(&mut m);
-    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
-    let p = pgp_json_path(&m);
-    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
-    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
-    export_through(&mut m);
-    assert!(m.wait_idle(std::time::Duration::from_secs(120)));
-    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
-    let mut h = harness(m);
-    press_enter(&mut h);
-    assert!(h.state().dialog.is_none(), "OverwriteJson: closed");
-    assert!(
-        std::fs::read_to_string(&p).unwrap().contains("edited"),
-        "OverwriteJson: Enter kept the edited file"
-    );
+    // (OverwriteJson is gone: Review asks before the export, Note FC5.)
     // Error: Enter is OK.
     let d = tempfile::tempdir().unwrap();
     let mut m = opened(d.path());
@@ -806,18 +802,8 @@ fn the_set_dialogs_enter_still_presses_what_it_pressed() {
         h.run();
         assert_eq!(h.state().1.drops.pending, None, "Esc cancels: {p:?}");
     }
-    // ConfirmDelete: Enter cancels.
-    h.state_mut().1.drops.pending = Some(Pending::ConfirmDelete {
-        id: "s".into(),
-        members: 1,
-    });
-    press_enter(&mut h);
-    assert_eq!(h.state().1.drops.pending, None, "ConfirmDelete: closed");
-    assert_eq!(
-        h.state().0.history.undo.len(),
-        steps,
-        "ConfirmDelete: nothing deleted"
-    );
+    // (ConfirmDelete is gone: Delete set asks nothing, Note FC5.)
+    assert_eq!(h.state().0.history.undo.len(), steps);
     // Slot commands: Enter does nothing; Esc closes it (A2).
     h.state_mut().1.slot_cmds.open = Some("s".into());
     press_enter(&mut h);
@@ -877,6 +863,111 @@ fn enter_right_after_typing_in_find_applies_the_rename() {
     );
 }
 
+/// Note FC5 (supersedes CZ4's "other Destructive buttons unchanged"): Enter or Space on a focused Destructive button
+/// in any `dialogs::dialog` does nothing; a click still does. One row per dialog with a Destructive button.
+#[test]
+fn focused_destructive_buttons_ignore_enter_and_space() {
+    use sdc_gui::model::AfterExport;
+    // Focus the dialog's `label` button, press `key`, and give it two frames.
+    fn press_on(h: &mut Harness<'static, AppModel>, label: &str, key: Key) {
+        h.run();
+        h.run();
+        let r = dialog_button(h, label);
+        h.query_all_by_label(label)
+            .find(|n| n.rect() == r)
+            .unwrap()
+            .focus();
+        h.run();
+        h.key_press(key);
+        h.run();
+    }
+    for key in [Key::Enter, Key::Space] {
+        // Reload: the edits stay.
+        let d = tempfile::tempdir().unwrap();
+        let mut m = with_a_step(d.path());
+        m.dialog = Some(Dialog::ReloadUnsaved);
+        let mut h = harness(m);
+        press_on(&mut h, "Discard and reload", key);
+        assert!(h.state().is_dirty(), "ReloadUnsaved {key:?}: edits kept");
+        // Changed on disk: the file stays.
+        let d = tempfile::tempdir().unwrap();
+        let mut m = with_a_step(d.path());
+        let root = m.root.clone().unwrap();
+        let before = docs_text(&root);
+        m.dialog = Some(Dialog::ExternalChange(DocKind::Project));
+        let mut h = harness(m);
+        press_on(&mut h, "Overwrite with my changes", key);
+        assert_eq!(
+            docs_text(&root),
+            before,
+            "ExternalChange {key:?}: nothing written"
+        );
+        // Reset all: nothing reset.
+        let mut m = with_a_step(d.path());
+        let steps = m.history.undo.len();
+        m.dialog = Some(Dialog::ConfirmResetAll(vec!["landscape/rock01".into()]));
+        let mut h = harness(m);
+        press_on(&mut h, "Reset", key);
+        assert_eq!(h.state().history.undo.len(), steps, "ResetAll {key:?}");
+        // Delete generated file: the file stays.
+        let mut m = opened(d.path());
+        let f = d.path().join("gen.png");
+        std::fs::write(&f, b"x").unwrap();
+        m.dialog = Some(Dialog::ConfirmDeleteGenerated(Box::new(
+            sdc_gui::model::from_normal::DeleteGenerated {
+                key: "gen.png".into(),
+                name: "gen.png".into(),
+                path: f.clone(),
+                body: "Delete gen.png?".into(),
+                refused: None,
+                seen: None,
+            },
+        )));
+        let mut h = harness(m);
+        press_on(&mut h, "Delete gen.png", key);
+        assert!(f.exists(), "DeleteGenerated {key:?}: file kept");
+        // Export running: the export keeps going.
+        let d = tempfile::tempdir().unwrap();
+        let mut m = opened(d.path());
+        export_through(&mut m);
+        assert!(!m.request_close());
+        assert_eq!(m.dialog, Some(Dialog::ExportRunning(AfterExport::Close)));
+        let mut h = harness(m);
+        press_on(&mut h, "Stop the export and close", key);
+        assert!(
+            !h.state().export.running.as_ref().unwrap().is_cancelled(),
+            "ExportRunning {key:?}: not stopped"
+        );
+        assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(120)));
+        // Close / Open unsaved: Don't save drops the edits.
+        let d = tempfile::tempdir().unwrap();
+        let mut m = with_a_step(d.path());
+        m.dialog = Some(Dialog::CloseUnsaved);
+        let mut h = harness(m);
+        press_on(&mut h, "Don't save", key);
+        assert!(h.state().is_dirty(), "CloseUnsaved {key:?}: edits kept");
+        let other_dir = tempfile::tempdir().unwrap();
+        let other = mod_folder(other_dir.path());
+        let mut m = with_a_step(d.path());
+        let root = m.root.clone();
+        m.dialog = Some(Dialog::OpenUnsaved(other));
+        let mut h = harness(m);
+        press_on(&mut h, "Don't save", key);
+        assert_eq!(h.state().root, root, "OpenUnsaved {key:?}: nothing opened");
+        assert!(h.state().is_dirty(), "OpenUnsaved {key:?}: edits kept");
+    }
+    // A pointer click still works.
+    let d = tempfile::tempdir().unwrap();
+    let mut m = with_a_step(d.path());
+    m.dialog = Some(Dialog::ReloadUnsaved);
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.get_by_label("Discard and reload").click();
+    h.run();
+    assert!(!h.state().is_dirty(), "a click discards");
+}
+
 #[test]
 fn the_footer_order_is_plain_then_destructive_then_the_default() {
     use sdc_gui::ui::dialogs::{footer_order, Role::*};
@@ -920,32 +1011,6 @@ fn assert_dialog_settles_on_screen<S>(h: &mut Harness<'static, S>, area: &str, p
             );
         }
     }
-}
-
-#[test]
-fn a_long_json_name_keeps_the_overwrite_dialog_on_screen() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = opened(d.path());
-    let name = format!("{}.json", "n".repeat(195));
-    assert_eq!(name.chars().count(), 200);
-    m.dialog = Some(Dialog::OverwriteJson(d.path().join(&name)));
-    let mut h = harness(m);
-    assert_dialog_settles_on_screen(
-        &mut h,
-        "overwrite-json",
-        &[
-            "The PGPatcher JSON was edited",
-            "was edited outside Tessalith",
-            "Overwrite n",
-            "Keep the edited",
-        ],
-    );
-    // The body keeps the whole name; the buttons carry a shortened one.
-    h.get_by_label_contains(&format!("{name} was edited outside"));
-    let short = sdc_gui::ui::dialogs::short_name(&name);
-    assert_eq!(short, format!("{}…{}.json", "n".repeat(20), "n".repeat(11)));
-    h.get_by_label(&format!("Keep the edited {short}"));
-    h.get_by_label(&format!("Overwrite {short}"));
 }
 
 #[test]

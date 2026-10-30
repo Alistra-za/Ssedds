@@ -39,11 +39,6 @@ pub enum Pending {
         choice: DropChoice,
     },
     Refused(String),
-    /// Delete set asks first: the set and how many members it has (item 4).
-    ConfirmDelete {
-        id: String,
-        members: usize,
-    },
     /// The rename dialog: the set, the name being typed, and why the last try was refused.
     Rename {
         id: String,
@@ -715,9 +710,8 @@ pub fn draw(
                     error: None,
                 })
             }
-            Act::Delete(id, members) => {
-                st.pending = Some(Pending::ConfirmDelete { id, members });
-            }
+            // Note FC5: no question; one undo step and a toast with Undo.
+            Act::Delete(id, members) => model.delete_set_with_toast(&id, members),
             Act::FillNames(set) => {
                 let rows = fill_proposals(model, &set);
                 st.pending = Some(if rows.is_empty() {
@@ -1430,7 +1424,6 @@ fn menu(
 enum ModalAnswer {
     Choice(DropChoice),
     Replace,
-    Delete,
     Close,
 }
 
@@ -1479,18 +1472,6 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
             let footer = vec![("OK".to_string(), Role::Default, ModalAnswer::Close)];
             ("Can't do that".to_string(), Some(why.clone()), footer)
         }
-        Pending::ConfirmDelete { id, members } => {
-            let title = format!(
-                "Delete set '{id}' ({members} member{})?",
-                if *members == 1 { "" } else { "s" }
-            );
-            let footer = vec![
-                ("Delete".to_string(), Role::Destructive, ModalAnswer::Delete),
-                ("Cancel".to_string(), Role::Default, ModalAnswer::Close),
-            ];
-            let line = "Its textures stay; only the set is removed.".to_string();
-            (title, Some(line), footer)
-        }
         Pending::Rename { .. } | Pending::FillNames { .. } | Pending::MoveTo { .. } => return,
     };
     let buttons: Vec<(&str, _, bool)> = footer.iter().map(|b| (b.0.as_str(), b.1, true)).collect();
@@ -1515,9 +1496,9 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
     if let Some(i) = clicked {
         answer = Some(footer[i].2);
     }
-    // Esc and a click outside cancel; Enter takes the safe default of a confirm (Cancel) and presses the OK of a refusal.
-    let confirm = matches!(p, Pending::ConfirmDelete { .. } | Pending::Refused(_));
-    if answer.is_none() && (keys.cancel || (keys.enter && confirm)) {
+    // Esc and a click outside cancel; Enter presses the OK of a refusal.
+    let refusal = matches!(p, Pending::Refused(_));
+    if answer.is_none() && (keys.cancel || (keys.enter && refusal)) {
         answer = Some(ModalAnswer::Close);
     }
     let Some(answer) = answer else { return };
@@ -1544,10 +1525,6 @@ pub fn pending_modal(ctx: &egui::Context, model: &mut AppModel, st: &mut DropSta
             .drop_replace(&item, &set, choice)
             .err()
             .map(Pending::Refused),
-        (ModalAnswer::Delete, Pending::ConfirmDelete { id, .. }) => {
-            model.delete_set(&id);
-            None
-        }
         _ => None,
     };
 }

@@ -17,7 +17,6 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel) {
         Dialog::ReloadUnsaved => reload_unsaved(ctx, model),
         Dialog::ExportRunning(action) => export_running(ctx, model, action),
         Dialog::ExternalChange(which) => external_change(ctx, model, which),
-        Dialog::OverwriteJson(path) => overwrite_json(ctx, model, &path),
         Dialog::Error(msg) => error(ctx, model, &msg),
         Dialog::CopySettings { from, to, fields } => copy_settings(ctx, model, &from, &to, fields),
         Dialog::ConfirmResetAll(keys) => confirm_reset_all(ctx, model, &keys),
@@ -160,7 +159,14 @@ pub fn dialog_hover(
                     if let Some(Some(h)) = hovers.get(i) {
                         r = r.on_disabled_hover_text(*h);
                     }
-                    if r.clicked() {
+                    // Note FC5: egui turns Enter or Space on a focused button into a click; a Destructive one needs
+                    // a pointer or AccessKit click (as CZ4's NIF guard did).
+                    let by_key = role == Role::Destructive
+                        && r.has_focus()
+                        && ui.input(|i| {
+                            i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space)
+                        });
+                    if r.clicked() && !by_key {
                         clicked = Some(i);
                     }
                 }
@@ -306,12 +312,15 @@ fn confirm_delete_generated(
     }
 }
 
+/// Note FC5 (supersedes AG11/CE3's Enter = Save): Enter is Cancel, back to the app; Save and Don't save need a click.
+const UNSAVED_BUTTONS: [(&str, Role, bool); 3] = [
+    ("Save", Role::Plain, true),
+    ("Don't save", Role::Destructive, true),
+    ("Cancel", Role::Default, true),
+];
+
 fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
-    let buttons = [
-        ("Cancel", Role::Plain, true),
-        ("Discard", Role::Destructive, true),
-        ("Save", Role::Default, true),
-    ];
+    let buttons = UNSAVED_BUTTONS;
     let (k, clicked) = dialog(
         ctx,
         "close-unsaved",
@@ -324,7 +333,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
             files_hint(ui);
         },
     );
-    if clicked == Some(2) || k.enter {
+    if clicked == Some(0) {
         model.dialog = None;
         // A failed save raises its own dialog (changed on disk, or an error) and the window stays open.
         if model.save().is_ok() {
@@ -342,7 +351,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         model.history.clear();
         model.refresh_banner();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-    } else if clicked == Some(0) || k.cancel {
+    } else if clicked == Some(2) || k.cancel || k.enter {
         model.dialog = None;
     }
 }
@@ -417,11 +426,7 @@ fn error(ctx: &egui::Context, model: &mut AppModel, msg: &str) {
 }
 
 fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::PathBuf) {
-    let buttons = [
-        ("Cancel", Role::Plain, true),
-        ("Discard", Role::Destructive, true),
-        ("Save", Role::Default, true),
-    ];
+    let buttons = UNSAVED_BUTTONS;
     let (k, clicked) = dialog(
         ctx,
         "open-unsaved",
@@ -434,11 +439,11 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
             files_hint(ui);
         },
     );
-    if clicked == Some(2) || k.enter {
+    if clicked == Some(0) {
         model.resolve_open_unsaved(root, true);
     } else if clicked == Some(1) {
         model.resolve_open_unsaved(root, false);
-    } else if clicked == Some(0) || k.cancel {
+    } else if clicked == Some(2) || k.cancel || k.enter {
         model.dialog = None;
     }
 }
@@ -470,32 +475,5 @@ fn export_running(ctx: &egui::Context, model: &mut AppModel, action: AfterExport
         model.resolve_export_running(action, true);
     } else if clicked == Some(1) || k.cancel || k.enter {
         model.resolve_export_running(action, false);
-    }
-}
-
-fn overwrite_json(ctx: &egui::Context, model: &mut AppModel, path: &std::path::Path) {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let short = short_name(&name);
-    let (overwrite, keep) = (
-        format!("Overwrite {short}"),
-        format!("Keep the edited {short}"),
-    );
-    let buttons = [
-        (overwrite.as_str(), Role::Destructive, true),
-        (keep.as_str(), Role::Default, true),
-    ];
-    let title = "The PGPatcher JSON was edited";
-    let (k, clicked) = dialog(ctx, "overwrite-json", true, 420.0, title, &buttons, |ui| {
-        ui.label(format!(
-            "{name} was edited outside Tessalith since the last export."
-        ));
-    });
-    if clicked == Some(0) {
-        model.resolve_overwrite_json(true);
-    } else if clicked == Some(1) || k.cancel || k.enter {
-        model.resolve_overwrite_json(false);
     }
 }

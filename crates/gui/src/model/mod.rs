@@ -158,8 +158,6 @@ pub enum Dialog {
     ReloadUnsaved,
     /// An export is running; closing or opening would have to cancel it first (M3a spec §2.6).
     ExportRunning(AfterExport),
-    /// The PGPatcher JSON was edited outside sdc since the last export; the new text waits for the answer.
-    OverwriteJson(PathBuf),
     /// F3a D4: copy the ticked `[files]` fields of texture `from` to `to` (the other selected textures).
     CopySettings {
         from: String,
@@ -530,14 +528,24 @@ pub struct AppModel {
     after_export: Option<AfterExport>,
     /// What the running export writes afterwards (the JSON and the vanilla copies).
     pending_json: Option<pbr_export::PendingJson>,
-    /// The JSON text waiting for the answer to `Dialog::OverwriteJson`.
-    pending_text: Option<String>,
     /// Design §5: the CS PBR files the running export writes afterwards.
     pending_cs: Option<cs_pbr_export::PendingCs>,
     /// Complex material design §6: the `<texture>.json` files the running export writes afterwards.
     pending_cm: Option<cm_json::PendingCm>,
     /// C4: Review's answer for the edited PGPatcher JSON, for the running export only (K12).
     pending_json_answer: Option<review::JsonAnswer>,
+    /// Note FC5: the NIF edits Review lists, as `app.rs` hands them over each frame (`MeshesModel::nif_review_rows`).
+    pub(crate) nif_rows: Vec<meshes::NifReviewRow>,
+    /// Note FC5: Review's Keep/Overwrite for a foreign NIF, for `app.rs` to pass to `MeshesModel::set_nif_answer`.
+    pub nif_answer_request: Option<(String, meshes::export::GuardChoice, [u8; 32])>,
+    /// Note FC5 (GD29): Review closed or the project changed; `app.rs` calls `MeshesModel::clear_nif_answers`.
+    pub nif_clear_answers_request: bool,
+    /// Note FC5 (GD2): the NIF footer's `Review…`; `app.rs` calls `open_review` and switches to the Textures view.
+    pub open_review_request: bool,
+    /// Note FC5: the running export was started by Review's Export and not cancelled: the NIF edits export after it.
+    nif_export_queued: bool,
+    /// Note FC5: the run has ended; `take_nif_export_due` hands it to `app.rs` once.
+    nif_export_due: bool,
     /// Note CN: the running (or last) export is an Also export (`run_also`).
     also_pass: bool,
     /// Note CN: the last Also export's phase error (CN56), so its end is logged as an error, not a success.
@@ -717,10 +725,15 @@ impl AppModel {
             continue_after_plan: None,
             after_export: None,
             pending_json: None,
-            pending_text: None,
             pending_cs: None,
             pending_cm: None,
             pending_json_answer: None,
+            nif_rows: vec![],
+            nif_answer_request: None,
+            nif_clear_answers_request: false,
+            open_review_request: false,
+            nif_export_queued: false,
+            nif_export_due: false,
             also_pass: false,
             also_error: None,
             also_written: None,
@@ -831,10 +844,11 @@ impl AppModel {
         // Whatever was pending for the previous folder no longer applies (spec §8).
         self.after_export = None;
         self.pending_json = None;
-        self.pending_text = None;
         self.pending_cs = None;
         self.pending_cm = None;
         self.pending_json_answer = None;
+        self.nif_export_queued = false;
+        self.nif_export_due = false;
         // A Generate of the previous folder: cancelled; one that writes still lands, and records nothing here (I1).
         self.gen_cancel();
         self.gen_select = None;
@@ -1386,14 +1400,9 @@ impl AppModel {
         self.raise_error(f.message);
     }
 
-    /// An error dialog, unless the PGPatcher overwrite question is open (#48): an answer is pending there, so the
-    /// error goes to the export notes and the question stays.
+    /// An error dialog. (#48's "unless the overwrite question is open" ended with that question, Note FC5.)
     fn raise_error(&mut self, msg: String) {
-        if matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
-            self.export.notes.push(msg);
-        } else {
-            self.dialog = Some(Dialog::Error(msg));
-        }
+        self.dialog = Some(Dialog::Error(msg));
     }
 
     /// Messages the export and the preview handle.
@@ -1440,6 +1449,10 @@ impl AppModel {
     fn export_ended(&mut self, result: Result<engine::api::BatchSummary, String>) {
         let token = self.export.running.take();
         let cancelled = token.as_ref().is_some_and(|c| c.is_cancelled());
+        // Note FC5: a cancelled export writes no NIF edits either (as `finish_json` writes no JSON).
+        if cancelled || result.as_ref().is_ok_and(|s| !s.cancelled.is_empty()) {
+            self.nif_export_queued = false;
+        }
         if self.also_reply.is_some() {
             self.also_cancel = token;
         }
@@ -1511,6 +1524,8 @@ impl AppModel {
 
     /// The end of an export: what was asked while it ran (close, or open another folder), else its error as a dialog.
     fn after_export(&mut self, failure: Option<String>) {
+        // Note FC5: the run has fully ended (with Also on, after its zips). Opening another folder below clears it.
+        self.nif_export_due |= std::mem::take(&mut self.nif_export_queued);
         // A user who cancelled the export to leave does not need its error as a dialog.
         if !self.run_after_export() {
             // Audit 08f-6: an open dialog stays; the error is in the Files tab and the Messages log.
@@ -1620,7 +1635,9 @@ impl AppModel {
         // Note CN (C1, owner answer 5): a tick opens Review; its Export is the only way to an Also export.
         // Note FB1: no chosen folder is a Review blocker, so the click lists it there instead of writing to `sdc-out`.
         // Note FC2: the half-size question is asked in Review, before the export.
+        // Note FC5: NIF edits are Review rows; its Export is the only way they are written.
         if asks
+            || !self.nif_rows.is_empty()
             || !self.half_size_rows().is_empty()
             || self.undecided() > 0
             || self.pgp_json_edited()
@@ -1818,6 +1835,8 @@ impl AppModel {
                             return;
                         }
                         self.start_export_pass();
+                        // Note FC5: Review's Export also writes the NIF edits, once the run has ended.
+                        self.nif_export_queued = self.export.running.is_some();
                     }
                     Err(why) => {
                         self.undo_half_step();
@@ -1910,6 +1929,7 @@ impl AppModel {
         let (Some(session), Some(mut req)) = (self.session.clone(), self.request()) else {
             return;
         };
+        self.nif_export_queued = false;
         req.on_existing = engine::api::OnExisting::IfChanged;
         let c = self.settings.checks;
         // Note FC2: Hold measures (an up-to-date output too) and writes the full chain, like Warn; nothing is held.
@@ -1931,7 +1951,6 @@ impl AppModel {
         self.pending_json = pbr_export::prepare(self);
         self.pending_cs = cs_pbr_export::prepare(self);
         self.pending_cm = cm_json::prepare(self);
-        self.pending_text = None;
         // R4: the ticks are for this export only. K12: the JSON answer goes with this export, or none does.
         self.pending_json_answer = self.review.take().and_then(|r| r.json_answer);
         self.review_json_cache.take();
@@ -2033,23 +2052,16 @@ impl AppModel {
                     ));
                 }
             }
-            // Audit 08f-6: an end-of-export question never replaces an open dialog; the file is kept, with a note.
-            // `ExportRunning` is not in the way: the export it asks about has ended (`run_after_export`).
-            pbr_export::Finish::Overwrite(_)
-                if self
-                    .dialog
-                    .as_ref()
-                    .is_some_and(|d| !matches!(d, Dialog::ExportRunning(_))) =>
-            {
-                self.export.notes.push(format!(
-                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept (another question was open); export again to choose",
+            // Note FC5 (supersedes CA7's question after the export and BV10 08f-6's dialog half): Review waits for
+            // the answer, so an edited file here is one with no answer for these bytes (changed during the export,
+            // or exported without Review). It is kept, with a note; nothing asks after the export.
+            pbr_export::Finish::Overwrite(_) => {
+                let t = format!(
+                    "PGPatcher JSON not written: {} was edited outside Tessalith and is kept; export again to choose",
                     p.path.display()
-                ));
-            }
-            pbr_export::Finish::Overwrite(text) => {
-                self.pending_text = Some(text);
-                self.dialog = Some(Dialog::OverwriteJson(p.path.clone()));
-                self.pending_json = Some(p);
+                );
+                self.messages.notify(messages::Severity::Warning, t.clone());
+                self.export.notes.push(t);
             }
             pbr_export::Finish::Nothing => {}
         }
@@ -2162,37 +2174,6 @@ impl AppModel {
         }
     }
 
-    /// Re-review N1: before `ExportRunning` replaces it, an open (or pending) overwrite question is answered "keep",
-    /// with its note, also as a message (opening another folder clears the notes), as #44 does at the export's end.
-    /// It can be open while an Also export's zips run.
-    fn keep_pending_json(&mut self) {
-        if self.pending_text.is_none() {
-            return;
-        }
-        self.resolve_overwrite_json(false);
-        if let Some(n) = self.export.notes.last().cloned() {
-            self.messages.notify(messages::Severity::Warning, n);
-        }
-    }
-
-    /// The answer to `Dialog::OverwriteJson`.
-    pub fn resolve_overwrite_json(&mut self, overwrite: bool) {
-        self.dialog = None;
-        let (Some(p), Some(text)) = (self.pending_json.take(), self.pending_text.take()) else {
-            return;
-        };
-        if overwrite {
-            if let Some(sha) = pbr_export::overwrite(&p.path, &text, &mut self.export.notes) {
-                self.record_json_sha(&p.root, &history::record_key(&p.path), &sha);
-            }
-        } else {
-            self.export.notes.push(format!(
-                "PGPatcher JSON kept as edited: {}",
-                p.path.display()
-            ));
-        }
-    }
-
     /// The export ended: do what was asked while it ran (close, or open another folder). True when there was
     /// something to do (only an answered question counts).
     fn run_after_export(&mut self) -> bool {
@@ -2201,15 +2182,6 @@ impl AppModel {
         if matches!(self.dialog, Some(Dialog::ExportRunning(_))) {
             self.dialog = None;
             return false;
-        }
-        // #44: the export finished before the cancel was seen and asked about the PGPatcher JSON; leaving answers
-        // "keep" (with its note) rather than dropping the question. Opening another folder clears the export notes, so
-        // the note is also a message.
-        if self.after_export.is_some() && matches!(self.dialog, Some(Dialog::OverwriteJson(_))) {
-            self.resolve_overwrite_json(false);
-            if let Some(n) = self.export.notes.last().cloned() {
-                self.messages.notify(messages::Severity::Warning, n);
-            }
         }
         let action = self.after_export.take();
         match action {
@@ -3433,7 +3405,6 @@ impl AppModel {
     /// Open `root`, or ask first when unsaved edits would be lost. True when the folder was opened.
     pub fn request_open(&mut self, root: PathBuf) -> bool {
         if self.export.running.is_some() {
-            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             false
         } else if self.gen_writing() {
@@ -3476,7 +3447,6 @@ impl AppModel {
         // Audit 08f-1: an export started while the question was up; opening now would drop its JSON. Ask to stop
         // it first, as Open does; the question comes back once it has ended.
         if self.export.running.is_some() {
-            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Open(root)));
             return;
         }
@@ -3501,7 +3471,6 @@ impl AppModel {
 
     pub fn request_close(&mut self) -> bool {
         if self.export.running.is_some() {
-            self.keep_pending_json();
             self.dialog = Some(Dialog::ExportRunning(AfterExport::Close));
             false
         } else if self.gen_writing() {
@@ -3732,8 +3701,12 @@ mod tests {
         std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
         m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
         assert!(m.wait_idle(Duration::from_secs(60)));
-        export(&mut m);
-        assert!(m.export.running.is_some(), "{:?}", m.dialog);
+        // Note FC5: Review waits for the answer; it is given for the file as it is now.
+        m.export_clicked();
+        m.answer_review_json(true);
+        m.acknowledge_all_asks();
+        m.export_from_review();
+        assert!(m.export.running.is_some(), "{:?}", m.status_line);
         (m, p)
     }
 
@@ -3755,92 +3728,42 @@ mod tests {
         }
     }
 
-    /// Re-review N1: the overwrite question is open while an Also export's zips still run (`running` re-armed). A
-    /// close, an open or a dropped folder answers it "keep", with its note, before asking about the export.
+    /// Note FC5 (supersedes N1, #44 and #48's overwrite question): a JSON edited again during the export has no
+    /// answer for its bytes at the end: it is kept, with a note and a message, and nothing asks after the export.
     #[test]
-    fn a_close_or_open_during_the_zip_step_keeps_the_edited_json_with_note() {
-        for how in 0..3 {
-            let d = tempfile::tempdir().unwrap();
-            let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
-            run_export(&mut m, |_| {});
-            assert!(
-                matches!(m.dialog, Some(Dialog::OverwriteJson(_))),
-                "{:?}",
-                m.dialog
-            );
-            // As `finish_export` leaves an Also export while its zips run.
-            m.export.running = Some(CancelToken::default());
-            let other = d.path().join("other");
-            match how {
-                0 => assert!(!m.request_close()),
-                1 => assert!(!m.request_open(other)),
-                _ => m.resolve_open_unsaved(other, false),
-            }
-            assert!(
-                matches!(m.dialog, Some(Dialog::ExportRunning(_))),
-                "{how}: {:?}",
-                m.dialog
-            );
-            assert!(
-                m.pending_text.is_none() && m.pending_json.is_none(),
-                "{how}"
-            );
-            assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
-            let note = |t: &str| t.contains("PGPatcher JSON kept as edited");
-            assert!(
-                m.export.notes.iter().any(|n| note(n)),
-                "{how}: {:?}",
-                m.export.notes
-            );
-            assert!(m.messages.entries().any(|e| note(&e.text)), "{how}");
-        }
-    }
-
-    /// Trace-debug 2026-10-16 #44: "Cancel and close" answered as the export finishes (the cancel is not seen): the
-    /// overwrite question it raises is answered "keep" with a note, not dropped by the close.
-    #[test]
-    fn cancel_and_close_after_finished_export_keeps_edited_json_with_note() {
+    fn a_json_edited_during_the_export_is_kept_with_a_note_and_no_dialog() {
         let d = tempfile::tempdir().unwrap();
         let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
-        run_export(&mut m, |m| m.after_export = Some(AfterExport::Close));
-        assert!(m.take_close_ready());
+        let again = p.clone();
+        run_export(&mut m, move |_| {
+            std::fs::write(&again, "{ \"edited\": 2 }\n").unwrap();
+        });
         assert!(m.dialog.is_none(), "{:?}", m.dialog);
         assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
+        let note = |t: &str| t.contains("PGPatcher JSON not written");
         assert!(
-            m.export.notes.iter().any(|n| n.contains("kept as edited")),
+            m.export.notes.iter().any(|n| note(n)),
             "{:?}",
             m.export.notes
         );
-        assert!(m
-            .messages
-            .entries()
-            .any(|e| e.text.contains("kept as edited")));
+        assert!(m.messages.entries().any(|e| note(&e.text)));
     }
 
-    /// Trace-debug 2026-10-16 #48: a plan failure or a worker panic while the overwrite question is open goes to
-    /// the export notes; the question stays.
+    /// Note FC5: a cancelled run makes no NIF export due; a run that ended otherwise (here a failure) does.
     #[test]
-    fn plan_failure_and_worker_panic_keep_open_overwrite_json_question() {
-        let d = tempfile::tempdir().unwrap();
-        let (mut m, p) = hand_edited_json_and_a_second_export(d.path());
-        run_export(&mut m, |_| {});
-        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
-        m.plan_failed(PlanFailure {
-            message: "plan broke".into(),
-            config: false,
-        });
-        m.handle(WorkerMsg::Panicked {
-            what: "preview",
-            message: "preview broke".into(),
-        });
-        assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p)));
-        for e in ["plan broke", "preview broke"] {
-            assert!(
-                m.export.notes.iter().any(|n| n.contains(e)),
-                "{e}: {:?}",
-                m.export.notes
-            );
-        }
+    fn a_cancelled_run_makes_no_nif_export_due() {
+        let mut m = bare_model();
+        let c = CancelToken::default();
+        c.cancel();
+        m.export.running = Some(c);
+        m.nif_export_queued = true;
+        m.end_export_with(Err("cancelled".into()));
+        assert!(!m.take_nif_export_due());
+        m.export.running = Some(CancelToken::default());
+        m.nif_export_queued = true;
+        m.end_export_with(Err("boom".into()));
+        assert!(m.take_nif_export_due());
+        assert!(!m.take_nif_export_due());
     }
 
     /// Audit 08f-9: an export-thread panic sets the error dialog once (`export_ended`'s), not twice.

@@ -253,14 +253,15 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         // A12: the hover counts the files and the problems. FB1: and, while it reads Review, what is still open.
         // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
-            // Meshes UI T3 (owner OK 2026-10-22): the Meshes view has a second export, for NIF edits.
-            if meshes_view_active(ui.ctx()) {
-                ui.label("Exports textures. NIF edits export with Export NIF in the edit panel.");
-            }
+            // Note FC5 (supersedes CZ6's hover): NIF edits are Review rows, so the Meshes view's line is gone.
             ui.label(export_hover(model));
             if !clean {
+                let nifs = model.nif_review_rows().len();
                 match model.review_gate() {
                     Err(why) => ui.label(format!("Review first: {why}")),
+                    Ok(_) if model.undecided() == 0 && nifs > 0 => {
+                        ui.label(format!("Review first: NIF edits ({nifs})"))
+                    }
                     Ok(_) => ui.label(format!("Review first: {} undecided", model.undecided())),
                 };
             }

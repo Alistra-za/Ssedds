@@ -10,7 +10,7 @@ use image::{ImageBuffer, Rgb, Rgba};
 use sdc_gui::model::bottom::{problems, At};
 use sdc_gui::model::export::{cli_command, RowState};
 use sdc_gui::model::review::DiskState;
-use sdc_gui::model::{AppModel, Dialog};
+use sdc_gui::model::AppModel;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -279,7 +279,8 @@ fn the_pbr_json_in_the_pbr_folder_is_ours_on_the_next_export() {
     m.acknowledge_all_asks();
     m.export_from_review();
     idle(&mut m);
-    assert!(!matches!(m.dialog, Some(Dialog::OverwriteJson(_))));
+    // Note FC5: nothing waits for a Keep/Overwrite answer, so the export ran.
+    assert!(m.export.summary.is_some(), "{}", m.status_line);
 }
 
 #[test]
@@ -1337,4 +1338,25 @@ fn open_recipe(h: &mut H) {
     if !has_label(h, "Diffuse brightness") {
         press(h, |h| h.get_by_label("Also export recipe"));
     }
+}
+
+/// Note FC5: with Also on, the NIF edits are due once, after the Also run has fully ended (its zips too).
+#[test]
+fn nif_export_is_due_once_after_an_also_run_ends() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = project(d.path());
+    tick(&mut m, AlsoTarget::Vanilla);
+    m.set_nif_review_rows(vec![sdc_gui::model::meshes::NifReviewRow {
+        path: r"meshes\x.nif".into(),
+        mod_name: "Mod".into(),
+        blocked: None,
+        foreign: None,
+        answer: None,
+        compaction: None,
+    }]);
+    export(&mut m);
+    assert!(m.export.summary.is_some(), "{}", m.status_line);
+    assert!(m.export.running.is_none());
+    assert!(m.take_nif_export_due(), "due after the run");
+    assert!(!m.take_nif_export_due(), "once");
 }

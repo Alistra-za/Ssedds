@@ -478,10 +478,21 @@ fn a_hand_edited_json_asks_before_overwriting() {
     let p = pgp_json_path(&m);
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    // Note FC5: Review asks before the export, and its Export waits for the answer.
     export_and_wait(&mut m);
-    assert_eq!(m.dialog, Some(Dialog::OverwriteJson(p.clone())));
+    assert!(m.review.is_some());
+    assert!(
+        m.status_line
+            .starts_with("Export not started: Answer Keep or Overwrite for "),
+        "{}",
+        m.status_line
+    );
     assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
-    m.resolve_overwrite_json(true);
+    m.answer_review_json(true);
+    m.export_from_review();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert_eq!(m.dialog, None);
     assert!(std::fs::read_to_string(&p).unwrap().contains("0.06"));
     assert_eq!(
         m.sets_doc.as_ref().unwrap().last_json_sha256(),
@@ -498,9 +509,12 @@ fn keeping_a_hand_edited_json_leaves_it_and_the_record() {
     let before = m.sets_doc.as_ref().unwrap().last_json_sha256();
     std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
     m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
+    assert!(m.wait_idle(Duration::from_secs(60)));
     export_and_wait(&mut m);
-    m.resolve_overwrite_json(false);
-    assert!(m.dialog.is_none());
+    m.answer_review_json(false);
+    m.export_from_review();
+    assert!(m.wait_idle(Duration::from_secs(120)));
+    assert!(m.dialog.is_none() && m.export.summary.is_some());
     assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
     assert_eq!(m.sets_doc.as_ref().unwrap().last_json_sha256(), before);
 }
@@ -1301,29 +1315,6 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     );
 }
 
-/// Audit 08f-6: an end-of-export question never replaces a dialog that is already open; the hand-edited JSON is
-/// kept and a note says so.
-#[test]
-fn the_overwrite_question_does_not_replace_an_open_dialog() {
-    let d = tempfile::tempdir().unwrap();
-    let mut m = pbr_ready(d.path());
-    export_and_wait(&mut m);
-    let p = pgp_json_path(&m);
-    std::fs::write(&p, "{ \"edited\": true }\n").unwrap();
-    m.set_json_value("landscape/rock01", "specular_level", Some(json!(0.06)));
-    export_through(&mut m);
-    assert!(m.export.running.is_some(), "{:?}", m.dialog);
-    // A question that came up while the export ran (here the banner's Reload over unsaved edits).
-    m.dialog = Some(Dialog::ReloadUnsaved);
-    idle(&mut m);
-    assert_eq!(m.dialog, Some(Dialog::ReloadUnsaved));
-    assert!(std::fs::read_to_string(&p).unwrap().contains("edited"));
-    assert!(
-        m.export
-            .notes
-            .iter()
-            .any(|n| n.contains("edited outside Tessalith")),
-        "{:?}",
-        m.export.notes
-    );
-}
+// Audit 08f-6's "the overwrite question never replaces an open dialog" ended with the question (Note FC5): Review
+// asks before the export, and a JSON with no answer at the end is kept with a note
+// (`model::tests::a_json_edited_during_the_export_is_kept_with_a_note_and_no_dialog`).

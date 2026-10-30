@@ -291,10 +291,7 @@ fn a_folder_change_closes_the_sets_modals_and_slot_commands() {
     let m = pbr_opened(d.path());
     let mut h = harness(m);
     h.run();
-    h.state_mut().1.drops.pending = Some(Pending::ConfirmDelete {
-        id: LEAF.into(),
-        members: 1,
-    });
+    h.state_mut().1.drops.pending = Some(Pending::Refused("why".into()));
     h.state_mut().1.slot_cmds.open = Some(LEAF.into());
     h.run();
     let root = h.state().0.root.clone().unwrap();

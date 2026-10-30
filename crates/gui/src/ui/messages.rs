@@ -106,11 +106,17 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
                                     text(ui);
                                     let b = ui.small_button("Undo");
                                     // The header has an Undo too: this one names what it takes back.
+                                    let name = match action {
+                                        ToastAction::UndoCrashRestore => {
+                                            "Undo the restored crash edits"
+                                        }
+                                        ToastAction::UndoDeleteSet(..) => "Undo the deleted set",
+                                    };
                                     b.widget_info(|| {
                                         egui::WidgetInfo::labeled(
                                             egui::WidgetType::Button,
                                             true,
-                                            "Undo the restored crash edits",
+                                            name,
                                         )
                                     });
                                     if b.clicked() {
@@ -129,6 +135,7 @@ pub fn draw_at(ctx: &egui::Context, model: &mut AppModel, now: Instant) {
         model.messages.dismiss(toast);
         match action {
             ToastAction::UndoCrashRestore => model.undo_crash_restore(),
+            ToastAction::UndoDeleteSet(depth, pushes) => model.undo_delete_set(depth, pushes),
         }
     }
     // A resting toast wakes once, when its fade is due; the animate call above repaints while anything moves. A

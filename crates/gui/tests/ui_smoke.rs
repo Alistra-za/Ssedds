@@ -143,9 +143,9 @@ fn closing_with_unsaved_edits_asks_and_discard_drops_them() {
     h.run();
     h.get_by_label("Cancel");
     // egui hit-tests against the previous frame: let the pointer settle on the button before the click.
-    h.get_by_label("Discard").hover();
+    h.get_by_label("Don't save").hover();
     h.run();
-    h.get_by_label("Discard").click();
+    h.get_by_label("Don't save").click();
     h.run();
     assert!(!h.state().is_dirty());
     assert!(h.state().dialog.is_none());
