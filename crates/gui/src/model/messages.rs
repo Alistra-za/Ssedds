@@ -12,6 +12,8 @@ pub const MAX_QUEUED: usize = 5;
 /// How long a toast stays, and a warning or error.
 pub const FADE: Duration = Duration::from_secs(4);
 pub const FADE_WARN: Duration = Duration::from_secs(8);
+/// A toast with a button (Note FB5) stays long enough to be answered: still frozen on hover.
+pub const FADE_ACTION: Duration = Duration::from_secs(20);
 /// The last part of a toast's time fades it out (on egui time, `ui::messages`; Note CF2).
 pub const FADE_OUT: Duration = Duration::from_millis(200);
 
@@ -132,7 +134,9 @@ impl Messages {
             severity,
             text,
             action,
-            left: if severity == Severity::Info {
+            left: if action.is_some() {
+                FADE_ACTION
+            } else if severity == Severity::Info {
                 FADE
             } else {
                 FADE_WARN

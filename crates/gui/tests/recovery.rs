@@ -185,6 +185,7 @@ fn a_read_only_project_does_not_stop_the_sets_restore() {
         "still untouched"
     );
 }
+
 /// The toast's own `Undo` button does the same through the drawn toast, and the toast goes.
 #[test]
 fn the_drawn_toast_has_an_undo_button_that_rejects_the_recovery() {
@@ -227,7 +228,7 @@ fn toast_undo_after_another_edit_leaves_everything() {
         m.messages
             .toasts()
             .iter()
-            .any(|t| t.text.contains("you have edited since")),
+            .any(|t| t.text.contains("already undone or edited since")),
         "it says why nothing happened"
     );
 }

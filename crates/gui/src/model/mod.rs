@@ -2948,8 +2948,10 @@ impl AppModel {
             );
         }
     }
+
     /// The restore toast's Undo (Note FB5): takes back the restore step and deletes the `.recovery` files, since the
-    /// user rejected them. Does nothing once another edit sits on top of the step. (A plain Ctrl+Z keeps the files.)
+    /// user rejected them. Once another edit sits on top of the step it only says so and changes nothing. (A plain
+    /// Ctrl+Z keeps the files.)
     pub fn undo_crash_restore(&mut self) {
         let Some((depth, files)) = self.crash_restore.as_ref() else {
             return;
@@ -2963,7 +2965,7 @@ impl AppModel {
         {
             self.messages.notify(
                 messages::Severity::Info,
-                "The restored edits were not undone: you have edited since. Use Undo to step back.",
+                "The restored edits were already undone or edited since: use Undo or Redo",
             );
             return;
         }

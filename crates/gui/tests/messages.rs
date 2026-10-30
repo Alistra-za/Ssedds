@@ -44,6 +44,24 @@ fn a_toast_fades_after_four_seconds_and_a_warning_after_eight() {
 }
 
 #[test]
+fn a_toast_with_a_button_stays_long_enough_to_answer() {
+    use sdc_gui::model::messages::ToastAction;
+    let (mut m, t0) = (store(), Instant::now());
+    m.notify_with(
+        Severity::Info,
+        "Restored",
+        Some(ToastAction::UndoCrashRestore),
+    );
+    m.tick(t0, &none());
+    m.tick(secs(t0, 4.1), &none());
+    assert_eq!(m.toasts().len(), 1, "still shown after 4 s");
+    m.tick(secs(t0, 19.0), &none());
+    assert_eq!(m.toasts().len(), 1);
+    m.tick(secs(t0, 20.1), &none());
+    assert!(m.toasts().is_empty());
+}
+
+#[test]
 fn a_toast_that_waited_for_the_first_tick_still_gets_its_full_time() {
     let (mut m, t0) = (store(), Instant::now());
     m.notify(Severity::Info, "a");
