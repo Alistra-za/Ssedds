@@ -999,7 +999,7 @@ fn pgp_lock_hover(
     let n = slot.slot_number();
     resp.on_hover_ui(|ui| {
         ui.label(format!(
-            "kept by PGPatcher. PGPatcher lock ({}): the original texture in this spot is used",
+            "Kept by PGPatcher ({}): the mesh's original texture is used here",
             lock_key(n).unwrap_or_default()
         ));
         match model.original_textures(&v.id, n) {

@@ -286,7 +286,7 @@ A row has these columns: Slot (title; weak when empty; a lock when pinned), the 
 
 A pinned slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The pin is saved in `sdc-project.toml` and never written to the JSON.
 
-*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a grey padlock over the dimmed thumbnail, captioned *kept by PGPatcher*; its hover says "PGPatcher lock (lock_<slot>): the original texture in this spot is used" and, with a scan, lists the meshes' textures in that slot, and the member thumbnail a small grey padlock. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
+*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a grey padlock over the dimmed thumbnail, captioned *kept by PGPatcher*; its hover says "Kept by PGPatcher (lock_<slot>): the mesh's original texture is used here" and, with a scan, lists the meshes' textures in that slot, and the member thumbnail a small grey padlock. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
 
 A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has an outline in the accent colour (teal); see [RNM layers](#rnm-normal-layers).
 

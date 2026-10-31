@@ -21,7 +21,7 @@ const SET: &str = "landscape/rock01";
 const KEEP: &str = "Keep original texture (PGPatcher lock)";
 const STOP: &str = "Stop keeping original texture (PGPatcher lock)";
 const CAPTION: &str = "The original texture in this spot is used";
-const HOVER: &str = "PGPatcher lock (lock_rmaos): the original texture in this spot is used";
+const HOVER: &str = "Kept by PGPatcher (lock_rmaos): the mesh's original texture is used here";
 
 fn s(pairs: &[(&str, Value)]) -> Settings {
     pairs
