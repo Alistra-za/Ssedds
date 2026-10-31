@@ -337,6 +337,45 @@ fn nif_row_text(
     t
 }
 
+/// Note FC14: one row of the footer's shared list (NIF edits, stale outputs, what will be written).
+enum Footer<'a> {
+    Heading(String),
+    Nif(&'a crate::model::meshes::NifReviewRow),
+    Stale(&'a engine::manifest::StaleOutput),
+    Written(usize),
+    Json(&'a JsonLine),
+}
+
+/// FC11: a `Stale outputs` row: its text, and `Delete` (on a click only) while Tessalith still owns the file.
+fn stale_row(
+    ui: &mut egui::Ui,
+    m: &AppModel,
+    s: &engine::manifest::StaleOutput,
+    off: Option<&str>,
+) -> Option<Act> {
+    let t = m.stale_text(s);
+    let mut act = None;
+    egui::Sides::new().shrink_left().truncate().show(
+        ui,
+        |ui| {
+            ui.add(egui::Label::new(&t).truncate())
+                .on_hover_text(s.path.display().to_string());
+        },
+        |ui| {
+            let tip = format!(
+                "Delete {}: Tessalith wrote it and no longer writes it",
+                s.path.display()
+            );
+            // Rule 8.4: every row's button is named for its file.
+            let name = format!("Delete {}", s.path.display());
+            if s.ours && super::problems::destructive_button(ui, "Delete", Some(&name), &tip, off) {
+                act = Some(Act::DeleteStale(s.path.clone()));
+            }
+        },
+    );
+    act
+}
+
 /// Note FC2: the half-size question, one row per texture the last export flagged: `rock_d.png · Half size ▾`, the
 /// menu `Half size` / `Full size`. "Half size" is the one name; the code and "mip 0" are hover text (CL15). Nothing
 /// is written until Review's Export. An answer writes nothing, so the menu is always on; only Half is off while
@@ -697,6 +736,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         None
     };
     let mut act = None;
+    // Note FC14: the footer's lists share one scroll area of at most a third of the tab, so the columns keep room.
+    let footer_cap = ui.available_height() / 3.0;
     // The footer first, pinned to the bottom, so the columns scroll above it and it is never clipped.
     egui::Panel::bottom("review-footer")
         .resizable(false)
@@ -704,72 +745,64 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             // Note FC5: the NIF edits sit between Warnings (above, in the columns) and the files rows; a blocked
             // one is listed under Warnings instead.
             let nif_written: Vec<_> = nif_rows.iter().filter(|r| r.blocked.is_none()).collect();
+            let mut list = vec![];
             if !nif_written.is_empty() {
-                ui.strong(format!("NIF edits ({})", nif_written.len()));
-                egui::ScrollArea::vertical()
-                    .id_salt("review-nif")
-                    .max_height(96.0)
-                    .show(ui, |ui| {
-                        for r in &nif_written {
-                            let t = nif_row_text(r, nif_folder.as_deref());
-                            ui.add(egui::Label::new(&t).truncate())
-                                .on_hover_text(format!("{}: {t}", r.path));
-                        }
-                    });
+                list.push(Footer::Heading(format!(
+                    "NIF edits ({})",
+                    nif_written.len()
+                )));
+                list.extend(nif_written.iter().map(|r| Footer::Nif(r)));
             }
             // FC11: not a gate. A row Tessalith still owns (its stamp matches) has Delete, on a click only.
             if !m.stale.is_empty() {
-                ui.strong(format!("Stale outputs ({})", m.stale.len()));
-                let off = m.export.running.is_some().then_some(also::EXPORT_RUNNING);
+                list.push(Footer::Heading(format!(
+                    "Stale outputs ({})",
+                    m.stale.len()
+                )));
+                list.extend(m.stale.iter().map(Footer::Stale));
+            }
+            list.push(Footer::Written(m.export_files()));
+            // Note FC5: the Keep/Overwrite question moved to Blockers.
+            list.extend(json.iter().map(Footer::Json));
+            let off = m.export.running.is_some().then_some(also::EXPORT_RUNNING);
+            let row_h = ui.spacing().interact_size.y;
+            let stride = row_h + ui.spacing().item_spacing.y;
+            ui.scope(|ui| {
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
                 egui::ScrollArea::vertical()
-                    .id_salt("review-stale")
-                    .max_height(96.0)
-                    .show(ui, |ui| {
-                        for s in &m.stale {
-                            let t = m.stale_text(s);
-                            egui::Sides::new().shrink_left().truncate().show(
-                                ui,
-                                |ui| {
+                    .id_salt("review-footer-lists")
+                    .max_height(footer_cap.max(3.0 * stride))
+                    .auto_shrink([false, true])
+                    // Rule 9.2: only the rows on screen are laid out, each exactly `row_h` tall.
+                    .show_rows(ui, row_h, list.len(), |ui, range| {
+                        for row in &list[range] {
+                            let size = egui::vec2(ui.available_width(), row_h);
+                            let layout = egui::Layout::left_to_right(egui::Align::Center);
+                            ui.allocate_ui_with_layout(size, layout, |ui| match row {
+                                Footer::Heading(t) => {
+                                    ui.strong(t);
+                                }
+                                Footer::Nif(r) => {
+                                    let t = nif_row_text(r, nif_folder.as_deref());
                                     ui.add(egui::Label::new(&t).truncate())
-                                        .on_hover_text(s.path.display().to_string());
-                                },
-                                |ui| {
-                                    let tip = format!(
-                                        "Delete {}: Tessalith wrote it and no longer writes it",
-                                        s.path.display()
-                                    );
-                                    // Rule 8.4: every row's button is named for its file.
-                                    let name = format!("Delete {}", s.path.display());
-                                    if s.ours
-                                        && super::problems::destructive_button(
-                                            ui,
-                                            "Delete",
-                                            Some(&name),
-                                            &tip,
-                                            off,
-                                        )
-                                    {
-                                        act = Some(Act::DeleteStale(s.path.clone()));
+                                        .on_hover_text(format!("{}: {t}", r.path));
+                                }
+                                Footer::Stale(s) => {
+                                    if let Some(a) = stale_row(ui, m, s, off) {
+                                        act = Some(a);
                                     }
-                                },
-                            );
+                                }
+                                Footer::Written(files) => {
+                                    ui.strong("What will be written");
+                                    ui.label(format!("{files} DDS file{}", plural(*files)));
+                                }
+                                Footer::Json(l) => {
+                                    ui.label(json_line_text(l));
+                                }
+                            });
                         }
                     });
-            }
-            ui.horizontal(|ui| {
-                ui.strong("What will be written");
-                let files = m.export_files();
-                ui.label(format!("{files} DDS file{}", plural(files)));
             });
-            egui::ScrollArea::vertical()
-                .id_salt("review-json")
-                .max_height(96.0)
-                .show(ui, |ui| {
-                    // Note FC5: the Keep/Overwrite question moved to Blockers.
-                    for l in &json {
-                        ui.label(json_line_text(l));
-                    }
-                });
             ui.horizontal(|ui| {
                 if ui.button("Close").clicked() {
                     act = Some(Act::Close);

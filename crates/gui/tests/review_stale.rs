@@ -201,6 +201,28 @@ fn a_pgpatcher_json_no_longer_made_is_listed_by_its_hash() {
     assert!(row(&m).is_none());
 }
 
+/// Note FC14 (final review, minor; rule 9.2): the footer's lists share one scroll area of at most a third of the tab,
+/// and only the rows on screen are laid out: 2000 stale rows draw a screenful.
+#[test]
+fn the_review_footer_lays_out_only_the_rows_on_screen() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    decide_all(&mut m);
+    for i in 0..2000 {
+        m.stale.push(engine::manifest::StaleOutput {
+            path: d.path().join(format!("out/textures/old{i:04}.dds")),
+            reason: engine::manifest::StaleWhy::SourceGone,
+            ours: false,
+        });
+    }
+    m.open_review();
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    let drawn = h.query_all_by_label_contains(STALE_NOT_OURS).count();
+    assert!((1..60).contains(&drawn), "{drawn} rows laid out");
+}
+
 /// Note FC14 (final review I2): while the PBR set's diffuse is undecided again, `prepare` makes no entry, yet the
 /// JSON at the current name is still this project's: it is not listed (no Delete for the file PGPatcher reads).
 #[test]
