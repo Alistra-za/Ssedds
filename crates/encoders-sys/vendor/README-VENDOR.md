@@ -54,9 +54,12 @@ ISPC TC patch 0001 "BC6H peak mode" (`ispctc/patches/0001-bc6h-peak-mode.patch`,
 (`git diff main -- crates/encoders-sys/vendor/ispctc/kernel.ispc` at the time). It adds a peak-preserving BC6H mode that is
 on when a `bc6h_enc_settings` has both `slow_mode` and `fast_mode` set, a combination no upstream profile uses (`fast_mode`
 is read only when `slow_mode` is off), so the settings struct, `ispc_texcomp.h/.cpp` and the generated header do not change.
-In that mode the encoder finds each block's brightest texel; a candidate encoding that decodes it below 0.9 of its source
-luminance ranks after every candidate that keeps it; and if none keeps it, the search runs again with every channel lifted
-to at least 2^-12 of its texel's largest channel (the retry is kept only if it holds the peak). The shim builds the
+In that mode the encoder finds each block's brightest texel and guards only highlight blocks, where that texel is at
+least 32 times the block's geometric-mean luminance; other blocks encode exactly as veryslow. In a guarded block every
+candidate is ranked by its squared error against the block, and one that decodes the brightest texel below 0.9 of its
+source luminance ranks after every candidate that keeps it. A second search then runs on a copy with every channel
+lifted to at least 2^-12 of its texel's largest channel; it is ranked against the unlifted block too, and the better of
+the two results is kept. The shim builds the
 profile as veryslow plus `fast_mode` (`g_bc6[5]`, `Bc6hLevel::VeryslowPeak`). The five upstream profiles encode
 byte-identically to the pre-patch objects: `encoders-sys` `tests/bc6h.rs` pins their AVX2-path output, recorded from the
 pre-patch objects. Rebuilt with `tools/regen-ispc.ps1 -Update` and `tools/hash-vendor.ps1`; the bc7e objects did not

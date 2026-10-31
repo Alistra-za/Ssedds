@@ -8,8 +8,10 @@ pub enum Bc6hLevel {
     Basic = 2,
     Slow = 3,
     Veryslow = 4,
-    // Veryslow plus the peak-preserving mode (kernel.ispc sdc patch 0001): a block whose brightest texel would decode
-    // below 0.9 of its source luminance gets a candidate that keeps it when one exists. Not mapped to any effort.
+    // Veryslow plus the peak-preserving mode (kernel.ispc sdc patch 0001): in a block whose brightest texel is at
+    // least 32x the block's geometric-mean luminance, candidates that decode that texel below 0.9 of its source
+    // luminance rank last, and a second search on a lifted block competes. Other blocks encode as Veryslow.
+    // Not mapped to any effort.
     VeryslowPeak = 5,
 }
 
