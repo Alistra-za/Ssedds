@@ -32,7 +32,10 @@ The options sit in one column, top to bottom, each label above its list:
 Greyed controls show the value the encoder will use and remember your own pick. Until the first preview has measured the image, the dialog treats it as opaque. The name prompt and message boxes stay light under Paint.NET's dark theme.
 
 ## Alpha
-Alpha is kept when some pixel's alpha is below 254 of 255, as in the Photoshop plugin, and the format stores alpha (BC3, BC7, RGBA8). Alpha of 254 or 255 counts as opaque. Tick **Discard transparency** to save an opaque file whatever the pixels hold.
+Alpha is kept when some pixel's alpha is below 254 of 255, as in the Photoshop plugin, and the format stores alpha (BC3, BC7, RGBA8). Alpha of 254 or 255 counts as opaque: when the image's alpha is only 254 and 255 and Discard transparency is off, a line under the options says `alpha 254–255 only: written opaque` once the preview has measured the image. Tick **Discard transparency** to save an opaque file whatever the pixels hold.
+
+## If psdds.dll is missing
+If `psdds.dll` is missing from the plugin folder, is not the 64-bit build, or is the wrong version, Save As shows one message with the DLL's path and the ABI version the plugin needs, and the options dialog does not open. Reinstall the plugin, then restart Paint.NET: it keeps a failed load until it restarts.
 
 ## Presets
 The Preset list starts with Custom and five presets Tessalith provides. **Save preset...** stores the current choices under a name (up to 64 characters, where an emoji or other symbol outside the basic range counts as two; an existing name asks before replacing), and **Delete** removes the shown preset. Choosing Custom in the list keeps your settings and shows Custom until you pick or save a preset. Presets are kept in `%APPDATA%\Tessalith DDS\presets\paintdotnet.txt`, separate from the Photoshop plugin's. Deleting that file brings the five back.

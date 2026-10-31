@@ -10,9 +10,10 @@ public static unsafe class DdsSave
     /// <summary>
     /// Straight-alpha BGRA8 rows (first row at <paramref name="bgra"/>, <paramref name="stride"/> bytes apart) to one DDS
     /// written to <paramref name="output"/> with a single Write, only after psdds encoded (DC27). <paramref name="measured"/>
-    /// gets psdds_alpha_used's answer before the encode, also with Discard transparency on (DC31, DC36).
+    /// gets psdds_alpha_used's answer before the encode, also with Discard transparency on (DC31, DC36), and whether alpha
+    /// only 254-255 is written opaque with Discard off (Note FC6).
     /// </summary>
-    public static void Write(Stream output, byte* bgra, long stride, int width, int height, in PsddsSettings raw, Action<bool>? measured)
+    public static void Write(Stream output, byte* bgra, long stride, int width, int height, in PsddsSettings raw, Action<bool, bool>? measured)
     {
         uint w = (uint)width, h = (uint)height;
         if (Psdds.CheckSize(w, h) is { } why) throw new PsddsException(why); // before any allocation (DC12)
@@ -24,7 +25,7 @@ public static unsafe class DdsSave
             for (int y = 0; y < height; y++)
                 Pixels.BgraRowToRgbaFloats(bgra + y * stride, width, buf + (nuint)y * w * 4);
             bool m = Psdds.AlphaUsed(buf, pixels);
-            measured?.Invoke(m);
+            measured?.Invoke(m, !m && raw.DiscardAlpha == 0 && Psdds.Alpha254Only(buf, pixels));
             bytes = Psdds.Encode(buf, w, h, raw.DiscardAlpha == 0 && m, raw);
         }
         finally { NativeMemory.Free(buf); }

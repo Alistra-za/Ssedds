@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """ctypes wrapper around psdds.dll (photoshop/psdds.h). numpy + ctypes only; every rule lives in the DLL."""
 import ctypes as C
+import logging
 import os
 import tempfile
 import time
@@ -16,6 +17,7 @@ FILTERS = ("Box", "Tent", "Mitchell", "Kaiser")
 ROLES = ("roughness", "metallic", "ao", "specular")
 _KEYS = ("format", "texture_type", "srgb", "filter", "mips", "quality", "discard_alpha", "alpha_mode")
 _ERR = 1024
+ALPHA_254_NOTE = "alpha 254–255 only: written opaque"
 
 
 class PsddsError(RuntimeError):
@@ -202,6 +204,8 @@ def encode(img: np.ndarray, settings: dict, depth: int = 8) -> bytes:
     """depth 8 is psdds_encode; 16 (sRGB-coded 0..1) and 32 (linear light, HDR kept) use psdds_encode_depth."""
     rgba = to_rgba(img)
     has_alpha = 0 if settings["discard_alpha"] == 1 else int(alpha_used(rgba))
+    if settings["discard_alpha"] != 1 and not has_alpha and rgba[..., 3].min() < 1:
+        logging.getLogger("sanic.root").warning(ALPHA_254_NOTE)  # Note FC6: DC23's opaque rule is said once a save
     h, w = rgba.shape[:2]
     out, err = _Buf(), C.create_string_buffer(_ERR)
     try:

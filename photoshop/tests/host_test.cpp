@@ -6,6 +6,8 @@
 //   merged_composite_save     a layered save reads the merged composite through fake channel ports (8 and 16-bit,
 //                             scaling pinned), takes its alpha like the band path, and writes nothing on any failure
 //                             (Note DC38).
+//   save_notes                the Save dialog's status line for a layered save with no alpha source and for more
+//                             than one alpha channel (Note FC6).
 //   unload_after_save         the plug-in survives Photoshop unloading it after a save (Note DC25). The engine's rayon
 //                             workers outlive the save; if the module's code were unmapped under them, their next
 //                             wake-up would execute freed memory (the BEX64 crash at TessalithDDS.8bi_unloaded+0x9483).
@@ -197,6 +199,8 @@ struct DialogUser {
     wchar_t filter_shown[32] = {};
     bool dropdown_ok = false; // the Format drop-down fits the longest label
     bool layout_ok = false; // DC43: Discard under sRGB, Type and Format combos equally wide, the label fits
+    wchar_t note[160] = {}, note_after[160] = {}; // Note FC6: the status line at start and at the end
+    bool note_layout_ok = false; // the status line sits under Quality, above OK, as wide as the controls
 };
 
 static BOOL CALLBACK find_dialog(HWND w, LPARAM out) {
@@ -279,7 +283,14 @@ static DWORD WINAPI play_dialog(void *arg) {
                                  GetWindow(d, GW_HWNDNEXT) == a && GetWindow(a, GW_HWNDNEXT) == GetDlgItem(dlg, IDC_MIPS) &&
                                  (GetWindowLongW(a, GWL_STYLE) & WS_TABSTOP) != 0;
         }
+        { // Note FC6: the status line is under Quality and above OK, from the left edge to the Quality list's right
+            const RECT n = box(IDC_NOTE), q = box(IDC_QUALITY), ok = box(IDOK), mips = box(IDC_MIPS);
+            // dialog units round separately for x and width, so the right edges may differ by a pixel
+            u->note_layout_ok = GetDlgItem(dlg, IDC_NOTE) != nullptr && n.top >= q.bottom && n.bottom <= ok.top &&
+                                abs(n.right - q.right) <= 1 && n.left == mips.left && n.bottom - n.top > 0;
+        }
     }
+    GetDlgItemTextW(dlg, IDC_NOTE, u->note, 160);
     u->alpha_mode_enabled = IsWindowEnabled(GetDlgItem(dlg, IDC_ALPHA_MODE)) != 0;
     HWND filter = GetDlgItem(dlg, IDC_FILTER);
     u->filter_enabled_before_srgb = IsWindowEnabled(filter) != 0;
@@ -309,9 +320,15 @@ static DWORD WINAPI play_dialog(void *arg) {
     u->filter_enabled_after = IsWindowEnabled(filter) != 0;
     u->alpha_mode_enabled_after = IsWindowEnabled(GetDlgItem(dlg, IDC_ALPHA_MODE)) != 0;
     GetWindowTextW(filter, u->filter_shown, 32);
+    GetDlgItemTextW(dlg, IDC_NOTE, u->note_after, 160);
     PostMessageW(dlg, WM_COMMAND, u->cancel ? IDCANCEL : IDOK, 0);
     return 0;
 }
+
+// Note FC6: the dialog's status lines, verbatim.
+static const wchar_t kAlpha254Note[] = L"alpha 254–255 only: written opaque";
+static const wchar_t kNoAlphaNote[] = L"No alpha channel: the DDS is written opaque";
+static const wchar_t kFirstAlphaNote[] = L"Only the first alpha channel is written";
 
 static int opaque_alpha(int, int) { return 255; }
 static int floor_alpha(int x, int) { return x % 2 ? 254 : 255; } // Tessalith's own opaque BC7 floor
@@ -364,6 +381,16 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
                i == 0 ? "opaque layer: dialog after the pixels, filter editable with sRGB off and on (DC39), "
                         "Kaiser picked"
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
+        expect(wcscmp(u.note, i == 0 ? L"" : kAlpha254Note) == 0,
+               i == 0 ? "opaque layer: no status line" : "alpha 254/255: the status line says it is written opaque (FC6)");
+    }
+    { // FC6: Discard transparency is the user's own opaque choice, so the 254 line goes
+        write_file(path, original);
+        DialogUser u;
+        u.tick_discard = true;
+        const int16 result = interactive_save(entry, path, floor_alpha, &u);
+        expect(result == 0 && wcscmp(u.note, kAlpha254Note) == 0 && wcscmp(u.note_after, L"") == 0,
+               "alpha 254/255 + Discard transparency: the status line clears");
     }
     expect(kaiser.compare(0, 4, "DDS ") == 0 && box.compare(0, 4, "DDS ") == 0 && kaiser != box,
            "Kaiser is honoured (its DDS differs from the Box one)");
@@ -426,6 +453,7 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         expect(u.dropdown_ok, "Format drop-down is wide enough for RGBA16F (uncompressed) at this DPI and font");
         expect(result == 0 && u.seen && u.layout_ok, "layout: Discard transparency under sRGB, Type and Format equally wide (DC43)");
         expect(u.alpha_layout_ok, "layout: Alpha is transparency under Discard, mnemonic A, label fits, tab order (Note DH)");
+        expect(u.note_layout_ok, "layout: the status line under Quality, above OK, full width (FC6)");
     }
 
     // Cancel at the end: userCanceledErr and the file untouched.
@@ -658,6 +686,64 @@ static int merged_composite_save(Entry entry, const wchar_t *path) {
     printf("%s merged_composite_save\n", bad ? "FAIL" : "PASS");
     return bad;
 }
+// Note FC6: a layered save with the dialog (OptionsStart first, as an interactive Save As); the dialog opens inside
+// WriteStart, which reads the merged composite.
+static int16 layered_dialog_save(Entry entry, const wchar_t *path, MergedDoc *m, DialogUser *u) {
+    write_file(path, std::string(20000, 'x'));
+    HANDLE f = open_existing(path);
+    Host h(entry, f);
+    h.r->layerData = 2;
+    h.r->documentInfo = &m->doc;
+    h.r->channelPortProcs = &m->procs;
+    HANDLE t = CreateThread(nullptr, 0, play_dialog, u, 0, nullptr);
+    int16 result = h.call(formatSelectorOptionsStart);
+    if (!result) result = h.call(formatSelectorWritePrepare);
+    if (!result) result = h.call(formatSelectorWriteStart);
+    const bool started = result == 0;
+    WaitForSingleObject(t, 15000);
+    CloseHandle(t);
+    if (started) {
+        const int16 finish = h.call(formatSelectorWriteFinish);
+        if (!result) result = finish;
+    }
+    CloseHandle(f);
+    return result;
+}
+
+// Note FC6 (supersedes DC40's silent opaque and DC44's dropped warning): the Save dialog says what is not saved.
+static int save_notes(Entry entry, const wchar_t *path) {
+    int bad = 0;
+    auto expect = [&](bool ok, const char *what, const wchar_t *got) {
+        printf("  %s %s: \"%ls\"\n", ok ? "ok  " : "FAIL", what, got);
+        bad += ok ? 0 : 1;
+    };
+    {
+        MergedDoc none(8, gradient8, AlphaSource::None);
+        DialogUser u;
+        const int16 result = layered_dialog_save(entry, path, &none, &u);
+        expect(result == 0 && u.seen && wcscmp(u.note, kNoAlphaNote) == 0, "layered, no alpha source (DC40)", u.note);
+    }
+    {
+        MergedDoc two(8, with_alpha8, AlphaSource::None);
+        two.ch[3].channelType = two.ch[5].channelType = ctSelectionMask; // two alpha channels, no merged transparency
+        two.ch[3].next = &two.ch[5];
+        two.ch[5].next = nullptr;
+        two.doc.alphaChannels = &two.ch[3];
+        DialogUser u;
+        const int16 result = layered_dialog_save(entry, path, &two, &u);
+        expect(result == 0 && u.seen && wcscmp(u.note, kFirstAlphaNote) == 0, "two alpha channels (DC44)", u.note);
+    }
+    {
+        MergedDoc one(8, with_alpha8, AlphaSource::Merged);
+        DialogUser u;
+        const int16 result = layered_dialog_save(entry, path, &one, &u);
+        expect(result == 0 && u.seen && wcscmp(u.note, L"") == 0, "layered with its transparency: no status line", u.note);
+    }
+    DeleteFileW(path);
+    printf("%s save_notes\n", bad ? "FAIL" : "PASS");
+    return bad;
+}
+
 // DC42 on the band path: transparency plane 3 plus a spot channel and an alpha channel (planes R G B T spot A) maps
 // the alpha channel (plane 5 when the host sends the spot channel), not the transparency plane; with only the
 // transparency and a spot channel it stays plane 3.
@@ -966,6 +1052,7 @@ int wmain(int argc, wchar_t **argv) {
     int failed = save_without_image_fails(entry, out); // also runs one full save, which starts the workers
     failed += dialog_after_pixels(entry, out);
     failed += merged_composite_save(entry, out);
+    failed += save_notes(entry, out);
     failed += band_alpha_plane(entry, out);
     failed += eight_bit_bytes_pinned(entry, out);
     failed += hdr_band_save(entry, out);

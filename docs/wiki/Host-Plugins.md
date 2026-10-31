@@ -71,7 +71,7 @@ User presets: Photoshop and Paint.NET can save and delete your own presets (**Sa
 
 ## Alpha: data or transparency
 
-Alpha is kept only when some pixel is really transparent (alpha below 254 of 255), **Discard transparency** is off, and the format stores alpha (BC3, BC7, RGBA8, RGBA16F). Alpha of 254 or 255 counts as opaque.
+Alpha is kept only when some pixel is really transparent (alpha below 254 of 255), **Discard transparency** is off, and the format stores alpha (BC3, BC7, RGBA8, RGBA16F). Alpha of 254 or 255 counts as opaque. When an image's alpha is only 254 and 255 and Discard transparency is off, each plugin says so once per save: `alpha 254–255 only: written opaque`. Photoshop and Paint.NET show it as a line in the save dialog, GIMP in the status bar, and chaiNNer as a warning in its log.
 
 When alpha is kept, **Alpha is transparency** says what it means:
 
@@ -100,8 +100,9 @@ The `_rmaos` layout is on the [Texture types](Texture-Types.md) page.
 ## Things to know
 
 - **Layers.** Photoshop saves the merged image of the visible layers. GIMP saves a merged copy of the visible layers and never changes your image. Paint.NET flattens the image first (it asks). Keep your layered file.
-- **Photoshop alpha.** The first alpha channel wins over layer transparency. Extra alpha channels and spot channels are not saved.
-- **GIMP Overwrite.** File > Overwrite and Export to on a DDS you opened reuse your last export settings without the dialog. Use File > Export As to choose.
+- **Photoshop alpha.** The first alpha channel wins over layer transparency. Extra alpha channels and spot channels are not saved; the save dialog then says `Only the first alpha channel is written`. A layered document with no alpha channel and no transparency saves opaque, and the dialog says `No alpha channel: the DDS is written opaque`.
+- **GIMP Overwrite.** The first File > Overwrite or Export to on a DDS you opened in this session shows the dialog, preset with the file's own format, sRGB tag and mipmaps (BC5 opens as Normal map, BC4 as Linear mask). After you confirm it once, later Overwrites of that image reuse those settings without asking.
+- **A missing or wrong `psdds.dll`.** GIMP and Paint.NET show one message with the DLL's path and the ABI version the plugin needs. Reinstall the plugin. Paint.NET keeps a failed load until it restarts, so restart it after replacing the DLL.
 - **Paint.NET Open.** Paint.NET always opens `.dds` with its own reader. To save with Tessalith again, use Save As once and pick **Tessalith DDS**; after that Ctrl+S uses it.
 - **Opened files are 8-bit.** Photoshop and GIMP open the top mip only, as an 8-bit image, except Photoshop's HDR case above.
 

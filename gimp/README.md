@@ -24,7 +24,11 @@ Choose File > Export As with a name ending in `.dds`, or pick **Tessalith DDS** 
 - **Mipmaps** (checkbox) and **Filter** (Box, Tent, Mitchell, Kaiser): a full mip chain or none. The filter is greyed when Mipmaps is off, and where the encoder would use Box anyway.
 - **Quality**: the encoder effort for the chosen format. Greyed for RGBA8.
 
-**Warning: File > Overwrite (or Export to) on a DDS you opened reuses your last export settings without asking; use File > Export As to choose the format.** A normal map you opened can therefore be written with the settings of the last texture you exported. GIMP's Overwrite and Export to never show the dialog.
+**File > Overwrite (or Export to) on a DDS you opened in this session shows the dialog the first time**, preset with the file's own format, sRGB tag and mipmaps; the texture type follows the format (BC5 is Normal, BC4 is Linear mask, everything else Colour), and the other options take their defaults. After you press Export once, later Overwrites of that image reuse those settings without asking, as GIMP does for any image. Cancel writes nothing and asks again next time. A file in a format this plug-in does not write (BC2, for example) is preset with your last export settings instead.
+
+When the image's alpha is only 254 and 255 and Discard transparency is off, the export writes it opaque and says `alpha 254–255 only: written opaque` once, in the status bar (or the Error Console when it is open).
+
+If `psdds.dll` is missing or is the wrong version, opening and exporting show one message with the DLL's path and the ABI version the plug-in needs.
 
 ### 16-bit and 32-bit images
 The image's precision sets the bit depth: 8-bit images are encoded as 8-bit, 16-bit integer images as 16-bit, and half, float and double images as 32-bit. BC6H and RGBA16F are offered only for 16-bit and 32-bit images. Float images are read as linear light, so values above 1 are kept in BC6H and RGBA16F (for the other formats they clip). Normal and Linear mask images are read in the image's own encoding, with no colour conversion, because they hold data and not light. An 8-bit linear Normal or Linear mask image therefore saves different bytes than the same pixels would if read as sRGB.

@@ -7,10 +7,17 @@ namespace Tessalith.Dds;
 /// thread (ruling 7); null until the first preview pass reports.</summary>
 public sealed class MeasuredAlpha
 {
-    int _v = -1; // -1 unknown, 0, 1
+    int _v = -1; // -1 unknown, 0, 1, 2 = opaque with the alpha 254-255 note (Note FC6)
 
     /// <summary>true when the value differs from the last one (unknown counts as different).</summary>
-    public bool Set(bool used) => Interlocked.Exchange(ref _v, used ? 1 : 0) != (used ? 1 : 0);
+    public bool Set(bool used, bool note = false)
+    {
+        int v = used ? 1 : note ? 2 : 0;
+        return Interlocked.Exchange(ref _v, v) != v;
+    }
 
     public bool? Value => Volatile.Read(ref _v) is var v && v < 0 ? null : v == 1;
+
+    /// <summary>Alpha only 254-255 was written opaque by the last preview (Psdds.Alpha254Note).</summary>
+    public bool Note => Volatile.Read(ref _v) == 2;
 }

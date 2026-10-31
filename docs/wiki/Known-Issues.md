@@ -56,10 +56,6 @@ The program is not code-signed yet. On first run, click **More info**, then **Ru
 
 ## Host plugins
 
-**GIMP: Overwrite reuses your last export settings**
-
-File > Overwrite (or Export to) on a DDS you opened does not show the dialog. It writes with the settings of the last texture you exported, so a normal map can be saved as colour. Use File > Export As to choose.
-
 **Paint.NET opens DDS files with its own reader**
 
 Paint.NET always opens `.dds` with its built-in support, even files Tessalith wrote. To save with Tessalith again, use Save As once and pick **Tessalith DDS**.

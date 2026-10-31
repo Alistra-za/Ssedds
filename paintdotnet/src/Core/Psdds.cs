@@ -51,12 +51,16 @@ public static unsafe partial class Psdds
         NativeLibrary.SetDllImportResolver(typeof(Psdds).Assembly, (name, asm, _) =>
         {
             if (name != "psdds") return IntPtr.Zero;
-            var dir = Path.GetDirectoryName(asm.Location);
-            var path = dir == null ? null : Path.Combine(dir, "psdds.dll");
-            if (path != null && NativeLibrary.TryLoad(path, out var h)) return h;
+            if (NativeLibrary.TryLoad(DllPath, out var h)) return h;
             throw new DllNotFoundException("psdds.dll was not found beside " + asm.Location);
         });
     }
+
+    /// <summary>The one psdds.dll this plugin loads: beside its own assembly.</summary>
+    internal static string DllPath => Path.Combine(Path.GetDirectoryName(typeof(Psdds).Assembly.Location) ?? "", "psdds.dll");
+
+    /// <summary>Note FC6, verbatim in every host: alpha only 254-255 is written opaque (DC23, DD6).</summary>
+    public const string Alpha254Note = "alpha 254–255 only: written opaque";
 
     /// <summary>Refuses any psdds.dll whose ABI version is not the one this plugin was written for. Runs once; a failure is remembered.</summary>
     public static void EnsureCompatible()
@@ -74,15 +78,16 @@ public static unsafe partial class Psdds
         try { found = abiVersion(); }
         catch (Exception e) when (e is DllNotFoundException or BadImageFormatException or EntryPointNotFoundException)
         {
-            throw new PsddsException("psdds.dll is missing or is not the 64-bit build; reinstall Tessalith DDS next to TessalithDds.dll");
+            throw new PsddsException($"psdds.dll could not be loaded from {DllPath}. Tessalith DDS needs the 64-bit psdds.dll with ABI version {ExpectedAbiVersion}; reinstall Tessalith DDS");
         }
         CheckAbi(found);
     }
 
+    // One plain message with the path and the expected ABI (Note FC6, DI9); Paint.NET adds the final full stop.
     internal static void CheckAbi(uint found)
     {
         if (found != ExpectedAbiVersion)
-            throw new PsddsException($"psdds.dll is version {found} but this plugin needs version {ExpectedAbiVersion}; reinstall Tessalith DDS");
+            throw new PsddsException($"psdds.dll at {DllPath} has ABI version {found}. Tessalith DDS needs ABI version {ExpectedAbiVersion}; reinstall Tessalith DDS");
     }
 
     static string ErrText(byte* err)
@@ -183,6 +188,15 @@ public static unsafe partial class Psdds
     {
         EnsureCompatible();
         return psdds_alpha_used(rgba, pixels) != 0;
+    }
+
+    /// <summary>Note FC6: no alpha below 254/255 (psdds writes it opaque) yet some alpha below 1.</summary>
+    internal static bool Alpha254Only(float* rgba, nuint pixels)
+    {
+        if (AlphaUsed(rgba, pixels)) return false;
+        for (nuint i = 0; i < pixels; i++)
+            if (rgba[i * 4 + 3] < 1f) return true;
+        return false;
     }
 
     public static bool AlphaUsed(ReadOnlySpan<float> rgba)

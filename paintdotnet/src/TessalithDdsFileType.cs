@@ -1,6 +1,7 @@
 // Tessalith DDS for Paint.NET. Copyright (c) 2026 Alistraza. GPL-3.0-or-later with the additional permission in paintdotnet/COPYING.
 using System;
 using System.IO;
+using System.Windows.Forms;
 using PaintDotNet;
 using PaintDotNet.Rendering;
 
@@ -32,11 +33,29 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
 
     /// <summary>psdds_alpha_used of the last save (the preview's); raised on the save's worker thread. An instance event
     /// suffices: this is the one instance per process, and the host builds the widget from it and previews through it.</summary>
-    internal event Action<bool>? HasAlphaMeasured;
+    internal event Action<bool, bool>? HasAlphaMeasured;
 
-    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() => new() { Raw = Psdds.Defaults(Psdds.Colour) };
+    // Note FC6 (DI9): a missing or wrong-ABI psdds.dll shows one plain message box with the path and the expected ABI
+    // when the options dialog would open, instead of the host's raw exception; the dialog then does not open.
+    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() =>
+        new() { Raw = Compatible() ? Psdds.Defaults(Psdds.Colour) : default }; // the widget says why
 
-    protected override TessalithDdsWidget OnCreateSaveConfigWidgetT() => new(this);
+    protected override TessalithDdsWidget OnCreateSaveConfigWidgetT()
+    {
+        try { Psdds.EnsureCompatible(); }
+        catch (PsddsException e)
+        {
+            MessageBox.Show(e.Message + ".", "Tessalith DDS", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            throw;
+        }
+        return new(this);
+    }
+
+    static bool Compatible()
+    {
+        try { Psdds.EnsureCompatible(); return true; }
+        catch (PsddsException) { return false; }
+    }
 
     protected override object GetSerializablePortionOfSaveConfigToken(TessalithDdsToken token) => DialogModel.ToPortion(token.Raw);
 
@@ -52,7 +71,7 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
         scratchSurface.Clear();
         input.CreateRenderer().Render(scratchSurface);
         DdsSave.Write(output, (byte*)scratchSurface.GetRowPointer(0), scratchSurface.Stride, input.Width, input.Height, token.Raw,
-            m => HasAlphaMeasured?.Invoke(m));
+            (m, note) => HasAlphaMeasured?.Invoke(m, note));
     }
 
     protected override Document OnLoad(Stream input)

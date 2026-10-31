@@ -20,6 +20,8 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     readonly CheckBox _srgb = Box("&sRGB"), _discard = Box("Discard t&ransparency"), _alphaMode = Box("&Alpha is transparency"),
                       _mips = Box("&Mipmaps");
     readonly Button _save = new() { Text = "Sa&ve preset...", AutoSize = true }, _delete = new() { Text = "&Delete", AutoSize = true };
+    // Note FC6: the status line under the options, shown while the preview wrote alpha 254-255 opaque
+    readonly Label _note = new() { Text = Psdds.Alpha254Note, AutoSize = true, Anchor = AnchorStyles.Left, Visible = false, UseMnemonic = false };
 
     readonly string? _dir = PresetStore.Dir();
     readonly PresetFile _presets;
@@ -79,6 +81,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
                      _mips,
                      NewLabel("F&ilter:"), _filter,
                      NewLabel("&Quality:"), _quality,
+                     _note,
                  })
         {
             c.TabIndex = tab++;
@@ -102,6 +105,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
         // the lists fill the column and truncate when closed; the open Type and Format lists show the longest label in full
         _type.DropDownWidth = _format.DropDownWidth = DialogLists.Formats.Concat(DialogLists.Types)
             .Max(c => TextRenderer.MeasureText(c.Label, _format.Font).Width) + SystemInformation.VerticalScrollBarWidth + LogicalToDeviceUnits(12);
+        _note.MaximumSize = new System.Drawing.Size(Width, 0); // wraps inside the column
         FillPresets(); // again, now that the font and DPI are the host's (DropDownWidth)
         Sync(null); // also applies a measurement that arrived before the handle existed (ruling 7)
         _preset.Select(); // initial focus: Preset (dialog.rc's first tab stop)
@@ -115,9 +119,9 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     }
 
     // Raised on the preview save's worker thread; must never throw into the save.
-    void OnMeasured(bool used)
+    void OnMeasured(bool used, bool note)
     {
-        if (!_alpha.Set(used)) return; // every preview reports: refresh only on a change
+        if (!_alpha.Set(used, note)) return; // every preview reports: refresh only on a change
         try
         {
             // has_alpha changes only the filter, Alpha is transparency and the preset match, never type or format (psdds resolve), so no list
@@ -204,6 +208,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
             _filter.Enabled = s.FilterEnabled;
             _quality.Enabled = s.QualityEnabled;
             _delete.Enabled = _selection.CanDelete;
+            _note.Visible = _alpha.Note;
         }
         finally { _refreshing = false; }
     }
