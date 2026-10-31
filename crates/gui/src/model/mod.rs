@@ -1306,9 +1306,12 @@ impl AppModel {
                 self.opening = None;
                 // Note FC12 (supersedes AG92's reset): the folder comes back with its undo history and selection. Its
                 // documents were clean when the open started (saved, or their edits dropped and the history cleared),
-                // so the re-read files are where the history left them.
-                history.pushes = history.pushes.max(self.history.pushes);
-                self.history = history;
+                // so the re-read files are where the history left them. Note FC14: unless the re-open restored crash
+                // edits as a step; then its history is the one that matches the documents (and the toast's Undo).
+                if self.history.undo.is_empty() {
+                    history.pushes = history.pushes.max(self.history.pushes);
+                    self.history = history;
+                }
                 self.selection = selection;
             }
             None => {

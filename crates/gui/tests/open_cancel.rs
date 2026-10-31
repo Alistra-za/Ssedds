@@ -41,6 +41,32 @@ fn cancel_keeps_the_previous_project() {
     assert_eq!(m.target, Target::Cs);
 }
 
+/// Note FC14 (final review, minor): the folder Cancel goes back to finds a crash `.recovery` file, so the re-open pushes
+/// its `Restore crash edits` step. That history is kept (it matches the documents), so the toast's Undo takes back the
+/// restore, never the older `Mode` step it would otherwise have matched.
+#[test]
+fn a_crash_restore_on_the_cancel_reopen_keeps_its_history() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.save().unwrap();
+    let toml = m.root.clone().unwrap().join("sdc.toml");
+    let saved = std::fs::read_to_string(&toml).unwrap();
+    let od = tempfile::tempdir().unwrap();
+    m.open_folder(mod_folder(od.path()));
+    let rec = sdc_gui::crash_log::recovery_path(&toml);
+    std::fs::write(&rec, format!("{saved}\n# kept by the crash\n")).unwrap();
+    m.cancel_open();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.undo_label(), Some("Restore crash edits"));
+    m.undo_crash_restore();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.target, Target::Vanilla, "the Mode step is not undone");
+    assert!(!rec.exists(), "the toast's Undo drops the recovery file");
+    assert_eq!(m.project.as_ref().unwrap().text(), saved);
+}
+
 /// Fix round 1 (6a): "Don't save" drops the edits and their steps before the open starts, so Cancel brings back no
 /// step whose state is gone.
 #[test]
