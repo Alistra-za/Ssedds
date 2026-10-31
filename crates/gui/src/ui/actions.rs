@@ -617,6 +617,13 @@ fn focus_id() -> egui::Id {
     egui::Id::new("sdc-keys-focus")
 }
 
+/// Note FC14: a text field has the keyboard focus (not any focused widget: a Problems row takes focus too). Save and
+/// Ctrl+S are live for it, since it may hold the only unsaved edit.
+pub(crate) fn text_field_focused(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused())
+        .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+}
+
 /// Whether a widget had the keyboard focus when this frame's `keys` ran (its start).
 pub(crate) fn focused_at_start(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<bool>(focus_id()))
@@ -657,7 +664,7 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     }
     // Note FC8 (supersedes AG23 and AG32's refusal): Ctrl+S in a text field ends the edit, which commits on its focus
     // loss this frame, and saves next frame if that left anything unsaved.
-    if focused {
+    if text_field_focused(ctx) {
         let save = action("save").map_or(&[][..], |a| a.keys);
         if save
             .iter()

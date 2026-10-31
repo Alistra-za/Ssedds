@@ -439,6 +439,40 @@ fn an_alias_clash_row_removes_the_copys_aliases() {
     assert!(row(m, |f| matches!(f, Fix::RemoveAliases(..))).is_none());
 }
 
+/// Note FC14 (final review, minor; FC8): Save and Ctrl+S are live for a focused text field only. A focused Problems
+/// row with nothing unsaved leaves Save disabled, and Ctrl+S saves nothing.
+#[test]
+fn a_focused_problems_row_leaves_save_disabled() {
+    use egui_kittest::kittest::NodeT as _;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    idle(&mut m);
+    m.save().unwrap();
+    assert!(!m.is_dirty());
+    let text = problems(&m)[0].text.clone();
+    let mut h = harness(m);
+    h.run();
+    h.query_all_by_label_contains(&text)
+        .find(|n| n.accesskit_node().role() != Role::Button)
+        .expect("the row")
+        .focus();
+    h.run();
+    assert!(
+        h.ctx.memory(|mem| mem.focused().is_some()),
+        "the row has the focus"
+    );
+    let save = |h: &Harness<'static, AppModel>| {
+        h.get_by_role_and_label(Role::Button, "Save")
+            .accesskit_node()
+            .is_disabled()
+    };
+    assert!(save(&h), "Save is off with nothing unsaved");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+    h.run();
+    assert!(!h.state().is_dirty());
+    assert!(save(&h));
+}
+
 /// Note FC14 (final review I3): with `sdc presets export`'s default naming, `mine-export.toml` loads first (`-` sorts
 /// before `.`), so the original `mine.toml` is the one skipped. The row names both presets, the button names the
 /// skipped one, and its hover names the file it rewrites. The load order is unchanged (owner item).

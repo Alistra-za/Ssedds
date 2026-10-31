@@ -138,10 +138,12 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     export_to_menu(ui, model, text, full);
     // Note FC8: a focused text field may hold the only unsaved edit, so Save is live while one has the focus.
     let r = ui.add_enabled(
-        model.is_dirty() || ui.ctx().egui_wants_keyboard_input(),
+        model.is_dirty() || super::actions::text_field_focused(ui.ctx()),
         egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
     );
-    // Note FC8 (supersedes BS7's refusal): the field commits first, then this click saves.
+    // Note FC8 (supersedes BS7's refusal): the field commits first, then this click saves. That relies on the header
+    // and the bottom panel drawing before the central fields (`blur_on_press` runs first); `after_commit` covers a
+    // press and release in one frame.
     super::commit_click(ui, &r, model, |m| {
         if m.is_dirty() {
             // A failed save raises its own dialog.
