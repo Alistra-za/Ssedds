@@ -5,7 +5,7 @@
 use crate::cbuffer::CbWriter;
 use crate::compile::{Compiled, Reflection, SrvKind};
 use crate::device::Gpu;
-use crate::material::{pipe, write_material, write_skin_flags, Bound, Pipe};
+use crate::material::{pipe, write_material, write_skin_flags, Bound, Pipe, ProjectedLayer};
 use crate::mesh::GpuMesh;
 use crate::scene::{
     rows, write_static, LightValues, Mat3x4, PointValues, Scene, SceneFields, View, ViewValues,
@@ -200,10 +200,11 @@ impl ShapeDraw {
         linear_lighting: bool,
         feature_values: &[(String, Vec<f64>)],
         fixed: bool,
+        projected: Option<&ProjectedLayer>,
     ) {
         for cb in self.vs_cbs.iter_mut().chain(self.ps_cbs.iter_mut()) {
             cb.writer.zero();
-            write_material(&mut cb.writer, m, &self.bound, linear_lighting);
+            write_material(&mut cb.writer, m, &self.bound, linear_lighting, projected);
             write_static(&mut cb.writer, feature_values);
             write_skin_flags(&mut cb.writer, m, &self.bound);
             cb.dirty = true;

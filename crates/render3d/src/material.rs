@@ -28,6 +28,86 @@ pub const PBR_COAT_NORMAL: u32 = 256;
 pub const PBR_FUZZ: u32 = 512;
 pub const PBR_HAIR_MARSCHNER: u32 = 1024;
 pub const PBR_GLINT: u32 = 2048;
+/// CS `PBR::Flags::ProjectedGlint` (PBRMath.hlsli:35): the MATO layer's glint, set by [`write_projected`].
+pub const PBR_PROJECTED_GLINT: u32 = 4096;
+
+/// The MATO layer's glint (CS PBR material-object JSON `glint*` keys, Note GG).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Glint {
+    pub screen_space_scale: f32,
+    pub log_microfacet_density: f32,
+    pub microfacet_roughness: f32,
+    pub density_randomization: f32,
+}
+
+/// The CS PBR material-object (MATO) snow/ash layer the game projects onto statics (Note GG): the MATO record's
+/// DATA (falloff, noise scale, colour) and the CS JSON values (PBR shapes only). Renderer-wide, like the features.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectedLayer {
+    pub falloff_scale: f32,
+    pub falloff_bias: f32,
+    pub noise_uv_scale: f32,
+    pub colour: [f32; 3],
+    pub base_color_scale: [f32; 3],
+    pub roughness: f32,
+    pub specular_level: f32,
+    pub glint: Option<Glint>,
+}
+
+/// The layer applies to `m`: not skinned (CS's VS has no projection under SKINNED), not parallax (3), FaceGen (4, 5),
+/// MLP (11) or sparkle snow (14), whose `PROJECTED_UV` branches differ (Lighting.hlsl:1740-1748), and not SLSF2.24.
+pub fn projected_eligible(m: &MaterialState) -> bool {
+    // shortcut: PBR+MLP shapes are excluded without a capture; upgrade if a capture shows CS projects onto them
+    !m.skinned && !matches!(m.shader_type, 3 | 4 | 5 | 11 | 14) && !bit(m.slsf2, 24)
+}
+
+/// The layer's constants as the capture shows them (mato-capture-results.md). `ProjectedUVParams.z` is the noise
+/// UV scale's inverse, 0 when the scale is not positive. PBR only: `MaterialObjectRGBScale`, `ParallaxOccData`
+/// (roughness, specular level) and, with glint, `SparkleParams` and `PBRFlags` |= ProjectedGlint (ORed into what
+/// `write_pbr` wrote). Fields a layout lacks are skipped (`CbWriter::set`).
+pub fn write_projected(w: &mut CbWriter, l: &ProjectedLayer, pbr: bool) {
+    let inv_noise = if l.noise_uv_scale > 0.0 {
+        1.0 / l.noise_uv_scale
+    } else {
+        0.0
+    };
+    w.set(
+        "ProjectedUVParams",
+        &[l.falloff_scale, 0.0, inv_noise, l.falloff_bias],
+    );
+    w.set(
+        "ProjectedUVParams2",
+        &[l.colour[0], l.colour[1], l.colour[2], 1.0],
+    );
+    // Diffuse/normal tiling 0.2, detail tiling 0.8, projected normals on.
+    w.set("ProjectedUVParams3", &[0.2, 0.8, 0.0, 1.0]);
+    // shortcut: the captured matrix without the ref translation, so row 2 is world up only for a shape whose NIF
+    // rotation is identity; upgrade to inverse(world rotation)·up per shape if rotated statics show the wrong faces.
+    w.set(
+        "TextureProj",
+        &[0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    );
+    if !pbr {
+        return;
+    }
+    w.set("MaterialObjectRGBScale", &l.base_color_scale);
+    w.set(
+        "ParallaxOccData",
+        &[l.roughness, l.specular_level, 0.0, 0.0],
+    );
+    if let Some(g) = &l.glint {
+        w.set(
+            "SparkleParams",
+            &[
+                g.screen_space_scale,
+                40.0 - g.log_microfacet_density,
+                g.microfacet_roughness,
+                g.density_randomization,
+            ],
+        );
+        w.or_u32("PBRFlags", PBR_PROJECTED_GLINT);
+    }
+}
 
 const fn bit(v: u32, b: u32) -> bool {
     v & (1 << b) != 0
@@ -122,6 +202,8 @@ pub fn perm_material(m: &MaterialState) -> Material {
         alpha_test: m.alpha.is_some(),
         has_vertex_colors: m.has_vertex_colors,
         specular_strength: m.params.specular_strength,
+        projected: false,
+        projected_glint: false,
     }
 }
 
@@ -269,8 +351,15 @@ pub fn write_skin_flags(w: &mut CbWriter, m: &MaterialState, bound: &Bound) {
 
 /// Writes the material fields into one cbuffer of any stage. The writer must be zero (fresh from
 /// `CbWriter::new` or after `CbWriter::zero`): fields a branch does not write must read 0, never a previous
-/// material's value. `bound` = registers bound to a real texture in this draw.
-pub fn write_material(w: &mut CbWriter, m: &MaterialState, bound: &Bound, linear_lighting: bool) {
+/// material's value. `bound` = registers bound to a real texture in this draw. `projected`: the renderer's MATO
+/// layer, written when it applies to `m` ([`projected_eligible`]; the program then has `PROJECTED_UV`).
+pub fn write_material(
+    w: &mut CbWriter,
+    m: &MaterialState,
+    bound: &Bound,
+    linear_lighting: bool,
+    projected: Option<&ProjectedLayer>,
+) {
     let p = &m.params;
     let pbr = m.is_pbr();
     w.set(
@@ -333,6 +422,10 @@ pub fn write_material(w: &mut CbWriter, m: &MaterialState, bound: &Bound, linear
         .collect();
     w.set("Bones", &bones);
     w.set("PreviousBones", &bones);
+    // Last: it replaces MaterialObjectRGBScale and ORs into PBRFlags.
+    if let Some(l) = projected.filter(|_| projected_eligible(m)) {
+        write_projected(w, l, pbr);
+    }
 }
 
 /// How a material change reaches the screen (03 §1.2).
