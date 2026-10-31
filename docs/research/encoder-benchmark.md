@@ -282,6 +282,33 @@ Round 3, n = 18, against ISPC `bc6h_veryslow`:
 - ISPC (and texconv CPU) can clip a small, extremely bright highlight such as a visible sun. Round 3 showed this is specific to that kind of content, not general. Round 2's "NVTT has the best RMSLE" did not hold at n = 18.
 - NVTT keeps highlights but is clearly weaker in darks and wide-range content.
 
+### Peak-preserving ISPC mode (2026-10-31, Note F?)
+
+**Why ISPC loses the sun.** ISPC TC measures error on the half-float bit patterns, which is a log-like scale (`kernel.ispc` `bc6h_setup`). The sun's texels come from an RGBE source, where blue is stored as exactly 0.0, and on that scale 0.0 is far from every other value. So blue dominates the PCA axis, the index choice and the least-squares endpoints. venice_sunset's 6464 peak decodes as 1464, at every effort level.
+
+**The new mode.** `Bc6hLevel::VeryslowPeak` (ISPC TC patch 0001) changes only highlight blocks: blocks whose brightest texel is at least 32× the block's geometric-mean luminance. In those blocks it keeps that texel at 0.9 or more of its source luminance whenever some candidate can. Every other block encodes exactly as veryslow.
+
+Measured with `sdc-bench bc6-peak` against the `.f16` source as float (not the `.ref.npy` the Python bench used), n = 18 real images:
+
+| Image | Peak ratio (veryslow → peak) | mPSNR Δ (dB) | RMSLE ×1000 (veryslow → peak) |
+|---|---|---|---|
+| venice_sunset | 0.219 → 0.923 | −0.674 | 3.96 → 3.34 |
+| moonless_golf | 0.732 → 0.995 | −0.349 | 8.50 → 9.03 |
+| dikhololo_night | 0.817 → 1.090 | −0.002 | 1.99 → 2.02 |
+| dreifaltigkeitsberg | 0.849 → 1.008 | 0.000 | 5.57 → 5.59 |
+| satara_night | 1.026 → 1.026 | −0.048 | 14.43 → 14.99 |
+| the other 13 | unchanged | −0.007 to 0.000 | within ±0.01 |
+
+- Mean Δ over the 18 real images:
+  - peak ratio: +0.078 [−0.012, +0.168];
+  - mPSNR: −0.061 dB [−0.147, +0.026];
+  - RMSLE: +0.000028 [−0.00009, +0.00015], which is +0.6 % relative.
+- No image's peak goes down.
+- The four `hdr_grad` images encode identically.
+- Encode time is unchanged within noise: about 0.1 s per 0.5 Mpix image, multi-threaded.
+- The RMSLE bar ("not worse") is missed by that small, non-significant margin. The cost sits in moonless_golf and satara_night, where keeping the peak forces a two-region block to give up its dim texels.
+- Without the 32× contrast gate (first attempt), the guard re-encodes many ordinary blocks: mean mPSNR −0.168 dB and RMSLE +0.00023. Other effort levels do not use this mode.
+
 ## Settings that change nothing
 
 - NVTT 3 BC7: `-fast` and the default give byte-identical output, and so do `-production` and `-highest` (39 of 39 files). The same holds for BC6H `-production` and `-highest`.
