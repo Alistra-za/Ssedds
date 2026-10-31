@@ -582,7 +582,7 @@ pub struct AppModel {
     pub nif_answer_request: Option<(String, meshes::export::GuardChoice, [u8; 32])>,
     /// Note FC5 (GD29): Review closed or the project changed; `app.rs` calls `MeshesModel::clear_nif_answers`.
     pub nif_clear_answers_request: bool,
-    /// Note FC5 (GD2): the NIF footer's `Review…`; `app.rs` calls `open_review` and switches to the Textures view.
+    /// Note FC5 (GD2): the NIF footer's `Review…`; `app.rs` sets it and `poll` opens Review, in the view on show (GF1).
     pub open_review_request: bool,
     /// Note GF2: a foreign NIF row's `Diff…` in Review (its data path); `app.rs` calls `MeshesModel::show_nif_diff`.
     pub nif_diff_request: Option<String>,

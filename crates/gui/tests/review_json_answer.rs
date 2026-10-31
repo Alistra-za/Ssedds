@@ -177,3 +177,39 @@ fn a_review_request_opens_review_on_the_next_poll() {
     assert!(m.review.is_some(), "the NIF footer's Review… opens Review");
     assert!(!m.open_review_request, "consumed");
 }
+
+/// Note GF2 (ui-rules 3.1): a foreign NIF row's Diff… stays clickable at 1100 px with a long data path: its clipped
+/// rect is the whole button (AccessKit bounds are not clipped, so the rect alone proves nothing).
+#[test]
+fn a_foreign_nif_rows_diff_fits_at_1100_px() {
+    let d = tempfile::tempdir().unwrap();
+    let path = r"meshes\architecture\whiterun\wrclutter\wrbenchcarvedlong01.nif";
+    let m = reviewing(
+        d.path(),
+        vec![NifReviewRow {
+            foreign: Some([1; 32]),
+            ..row(path)
+        }],
+    );
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1100.0, 800.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let r = h
+        .get_by_role_and_label(egui::accesskit::Role::Button, &format!("Diff… {path}"))
+        .rect();
+    let clipped = h.ctx.viewport(|v| {
+        v.this_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, ws)| ws)
+            .find(|w| w.rect == r)
+            .map(|w| w.interact_rect)
+    });
+    let clipped = clipped.expect("the Diff… widget");
+    assert!(
+        clipped.width() >= r.width() - 0.5 && clipped.height() >= r.height() - 0.5,
+        "Diff… {r:?} is clipped to {clipped:?}"
+    );
+}
