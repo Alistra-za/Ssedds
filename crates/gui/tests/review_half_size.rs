@@ -414,6 +414,47 @@ fn a_failed_save_after_the_half_size_write_undoes_it() {
     assert_ne!(m.undo_label(), Some("Half size"));
 }
 
+/// Note FC14 (final review, minor): the plan the *Half size* write starts would record an automatic decision as a step
+/// on top of it (here noise.png's sub-type, whose entry was cleared). The recording waits while that step can still be
+/// taken back, so a refused export still undoes the half size, and the next plan records the type.
+#[test]
+fn an_automatic_recording_does_not_land_on_the_half_size_step() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    m.export_clicked();
+    m.project
+        .as_mut()
+        .unwrap()
+        .clear_file_value("noise.png", "subtype");
+    m.answer_half_size("up.png", HalfAnswer::Half);
+    m.answer_half_size("up2.png", HalfAnswer::Full);
+    m.export_from_review();
+    assert_eq!(drop_top_mip(&m, "up.png"), Some(serde_json::json!(true)));
+    m.dialog = Some(Dialog::Error("another question".into()));
+    assert!(m.wait_idle(WAIT));
+    m.dialog = None;
+    assert!(m.export.running.is_none());
+    assert_eq!(
+        drop_top_mip(&m, "up.png"),
+        None,
+        "the half size is taken back"
+    );
+    m.dismiss_review();
+    m.replan();
+    assert!(m.wait_idle(WAIT));
+    let st = m
+        .project
+        .as_ref()
+        .unwrap()
+        .file_value("noise.png", "subtype");
+    assert_eq!(
+        st,
+        Some(serde_json::json!("diffuse")),
+        "recorded by a later plan"
+    );
+}
+
 /// Finding r1 #5: "Cancel and close" during an export stops it at the next file and then closes.
 #[test]
 fn cancel_and_close_stops_the_export_at_the_next_file() {

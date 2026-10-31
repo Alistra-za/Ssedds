@@ -101,8 +101,16 @@ impl AppModel {
     /// {n} types automatically`) and one Problems row. Each `(key, field)` is written once per history
     /// (`History::auto_written`), so an Undo of the step stays undone. True when it wrote (and re-planned).
     pub(super) fn record_auto_decisions(&mut self) -> bool {
-        // Never over a running export, nor over the crash restore its toast can still undo (Note FB5).
-        if self.export.running.is_some() || self.crash_restore_on_top() {
+        // Never over a running export, nor over the crash restore its toast can still undo (Note FB5), nor over the
+        // *Half size* step Review's Export may still take back (Note FC14): the plan after it records instead.
+        let half_pending =
+            self.review
+                .as_ref()
+                .and_then(|r| r.half_step)
+                .is_some_and(|(depth, pushes)| {
+                    self.history.undo.len() == depth && self.history.pushes == pushes
+                });
+        if self.export.running.is_some() || self.crash_restore_on_top() || half_pending {
             return false;
         }
         let Some(doc) = self.project.as_ref().filter(|p| !p.read_only()) else {
