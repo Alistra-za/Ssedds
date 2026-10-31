@@ -682,13 +682,16 @@ pub struct StaleOutput {
 /// The files `recorded` lists under `root` that still exist and that no job, skipped file or failed file of `plan`
 /// claims, from sources under the plan's inputs (another project's records in a shared folder are left out). A
 /// reader like [`recode_causes`]: `read`, never `load`'s compaction; an unreadable manifest or a cancelled (partial)
-/// plan lists nothing.
+/// plan lists nothing. Nor does a plan whose discovery skipped an entry (`inputs_unreadable`: an `IN-UNREADABLE`
+/// warning, Note FC14): no job claims that entry's outputs, so they would all look stale after a transient ACL or lock
+/// problem.
 pub fn stale_outputs(
     recorded: &Manifest,
     plan: &crate::api::Plan,
     root: &Path,
+    inputs_unreadable: bool,
 ) -> Vec<StaleOutput> {
-    if !plan.cancelled.is_empty() {
+    if inputs_unreadable || !plan.cancelled.is_empty() {
         return vec![];
     }
     let Ok(records) = recorded.read() else {

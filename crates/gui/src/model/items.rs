@@ -439,6 +439,7 @@ impl PlanView {
                 _ => {}
             }
         }
+        let inputs_unreadable = !unreadable.is_empty();
         PlanView {
             target: plan.target,
             preset_id: plan.preset_id.clone(),
@@ -468,6 +469,7 @@ impl PlanView {
                 &engine::manifest::Manifest::at(out_root),
                 plan,
                 out_root,
+                inputs_unreadable,
             ),
         }
     }

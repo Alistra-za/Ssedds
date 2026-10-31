@@ -67,10 +67,26 @@ fn append_copy(dir: &Path, from: &str, f: impl Fn(&mut serde_json::Value)) {
 }
 
 fn stale(dir: &Path) -> Vec<StaleOutput> {
+    stale_with(dir, false)
+}
+
+fn stale_with(dir: &Path, inputs_unreadable: bool) -> Vec<StaleOutput> {
     let root = dir.join("out");
-    let mut s = stale_outputs(&Manifest::at(&root), &plan(dir), &root);
+    let mut s = stale_outputs(&Manifest::at(&root), &plan(dir), &root, inputs_unreadable);
     s.sort_by(|a, b| a.path.cmp(&b.path));
     s
+}
+
+/// Note FC14: while discovery skipped an entry (IN-UNREADABLE), nothing is listed, since that entry's outputs look
+/// unclaimed; with every entry read, the same records are listed.
+#[test]
+fn an_unreadable_input_lists_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    exported(d.path());
+    std::fs::remove_file(d.path().join("in/textures/t/b_n.png")).unwrap();
+    assert_eq!(stale_with(d.path(), true), []);
+    let got: Vec<_> = stale_with(d.path(), false).iter().map(name).collect();
+    assert_eq!(got, ["b_n.dds"]);
 }
 
 fn name(s: &StaleOutput) -> String {
