@@ -535,6 +535,30 @@ fn a_focused_problems_row_leaves_save_disabled() {
     assert!(save(&h));
 }
 
+/// Note FC14 (final residual 1): Ctrl+S with a Problems row focused and an unsaved edit saves it.
+#[test]
+fn ctrl_s_saves_with_a_focused_problems_row() {
+    use egui_kittest::kittest::NodeT as _;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    idle(&mut m);
+    m.save().unwrap();
+    let text = problems(&m)[0].text.clone();
+    m.project.as_mut().unwrap().set_dirty(true);
+    let mut h = harness(m);
+    h.run();
+    h.query_all_by_label_contains(&text)
+        .find(|n| n.accesskit_node().role() != Role::Button)
+        .expect("the row")
+        .focus();
+    h.run();
+    assert!(h.ctx.memory(|mem| mem.focused().is_some()));
+    assert!(h.state().is_dirty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
+    h.run();
+    assert!(!h.state().is_dirty(), "Ctrl+S saved");
+}
+
 /// Note FC14 (final review I3): with `sdc presets export`'s default naming, `mine-export.toml` loads first (`-` sorts
 /// before `.`), so the original `mine.toml` is the one skipped. The row names both presets, the button names the
 /// skipped one, and its hover names the file it rewrites. The load order is unchanged (owner item).

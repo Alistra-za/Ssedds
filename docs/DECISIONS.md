@@ -3614,10 +3614,11 @@ The fixes from the owner's review of the DECISIONS rulings (the review file is `
   - **Cancel-open keeps a crash restore.** `cancel_open` restores the previous history only when the re-open pushed no step, so a crash-restore step from the re-open stays undoable. Test `a_crash_restore_on_the_cancel_reopen_keeps_its_history`.
   - **No auto-record onto the half step.** `record_auto_decisions` waits while `review.half_step` is the top of the history. Test `an_automatic_recording_does_not_land_on_the_half_size_step`.
   - **PGPatcher path keys.** Only `rename` asks for its Advanced box in `pgp_fields.rs`; the `pbr_export.rs` comment says where `match1`-`match8` live.
-  - **Save while typing.** The header Save and Ctrl+S are on while a text field has focus (`text_field_focused`), so the focus guard can say "leave the text field first". Test `a_focused_problems_row_leaves_save_disabled`. The header carries a one-line draw-order comment (T8).
+  - **Save while typing.** The header Save and Ctrl+S are on while a text field has focus (`text_field_focused`); per FC8 the field commits and then Save runs. Test `a_focused_problems_row_leaves_save_disabled`. The header carries a one-line draw-order comment (T8).
   - **Review footer.** The NIF, stale and JSON lists share one scroll area of at most a third of the tab, drawn with `show_rows`. Test `the_review_footer_lays_out_only_the_rows_on_screen`.
+  - **Ctrl+S with a non-text widget focused.** The shortcut filter in `actions::keys` lets `save` through while any widget has the keyboard focus (a text field's Ctrl+S is consumed earlier, FC8). Test `ctrl_s_saves_with_a_focused_problems_row`.
   - **Quiet sidecar reload.** `load_sidecar` clears the dirty flag only when it set it.
-  - **PGPatcher lock hover.** "Kept by PGPatcher ({reason}): the mesh's original texture is used here", in `set_editor.rs` and the docs.
+  - **PGPatcher lock hover.** "Kept by PGPatcher (`lock_<slot>`, the lock key, e.g. `lock_rmaos`): the mesh's original texture is used here", in `set_editor.rs` and the docs.
   - **Tests.** `export_click_commits_the_field_and_runs` checks Review opened; `the_review_undecided_combo_offers_complex_grass_on_the_grass_fixture` opens Review's sub-type combo on a grass file (X3).
   - **`toml_edit`.** The workspace declares no `toml_edit`, so `crates/engine/Cargo.toml` keeps its own line.
   - **Blocked NIF rows.** `nif_rows_written()` counts only NIF rows that are not blocked; `export_is_clean` and `export_checks` both use it. Test `header_export_reads_review_until_clean`.
