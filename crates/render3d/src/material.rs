@@ -56,9 +56,14 @@ pub struct ProjectedLayer {
 
 /// The layer applies to `m`: not skinned (CS's VS has no projection under SKINNED), not parallax (3), FaceGen (4, 5),
 /// MLP (11) or sparkle snow (14), whose `PROJECTED_UV` branches differ (Lighting.hlsl:1740-1748), and not SLSF2.24.
+/// Also not eye (16) or model-space normals (SLSF1.12): those permutations do not compile with `PROJECTED_UV` (EYE
+/// takes the `VS_OUTPUT` arm that holds `TexProj`, Lighting.hlsl:77-84 vs 255; MSN has no PS `tbnTr`, 950-967 vs 1728).
 pub fn projected_eligible(m: &MaterialState) -> bool {
     // shortcut: PBR+MLP shapes are excluded without a capture; upgrade if a capture shows CS projects onto them
-    !m.skinned && !matches!(m.shader_type, 3 | 4 | 5 | 11 | 14) && !bit(m.slsf2, 24)
+    !m.skinned
+        && !matches!(m.shader_type, 3 | 4 | 5 | 11 | 14 | 16)
+        && !bit(m.slsf2, 24)
+        && !bit(m.slsf1, 12)
 }
 
 /// The layer's constants as the capture shows them (mato-capture-results.md). `ProjectedUVParams.z` is the noise

@@ -58,7 +58,8 @@ fn eligible_shapes() {
     let mut skinned = pbr();
     skinned.skinned = true;
     assert!(!projected_eligible(&skinned));
-    for t in [3, 4, 5, 11, 14] {
+    // 16 (eye) does not compile with PROJECTED_UV (no TexProj in its VS_OUTPUT arm).
+    for t in [3, 4, 5, 11, 14, 16] {
         let mut m = MaterialState::builtin_default();
         m.shader_type = t;
         assert!(!projected_eligible(&m), "type {t}");
@@ -66,6 +67,10 @@ fn eligible_shapes() {
     let mut mlp = pbr();
     mlp.slsf2 |= 1 << 24;
     assert!(!projected_eligible(&mlp));
+    // Model-space normals: the PS has no tbnTr for the projection's triplanar weights.
+    let mut msn = MaterialState::builtin_default();
+    msn.slsf1 |= 1 << 12;
+    assert!(!projected_eligible(&msn));
 }
 
 fn names(d: &render3d::permutation::Defines) -> Vec<&str> {
