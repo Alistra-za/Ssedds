@@ -705,6 +705,33 @@ pub fn stale_outputs(
         .chain(plan.failed.iter().map(|f| &f.output))
         .map(|o| output_key(root, o))
         .collect();
+    // Note FC14: a set with an undecided or held job writes nothing yet; its files' recorded outputs (the old
+    // `textures\pbr\` ones) are not stale until the set is decided to a recipe that leaves them out.
+    let undecided_sets: std::collections::BTreeSet<&str> = plan
+        .jobs
+        .iter()
+        .filter(|j| {
+            matches!(
+                j.status,
+                crate::policy::JobStatus::Unresolved { .. }
+                    | crate::policy::JobStatus::Blocked { .. }
+            )
+        })
+        .map(|j| j.set_key.as_str())
+        .collect();
+    let undecided_files: std::collections::BTreeSet<String> = plan
+        .jobs
+        .iter()
+        .filter(|j| undecided_sets.contains(j.set_key.as_str()))
+        .flat_map(|j| {
+            std::iter::once(&j.input).chain(
+                j.pack
+                    .iter()
+                    .flat_map(|p| p.sources.iter().map(|s| &s.path)),
+            )
+        })
+        .map(|p| normalize_key(&p.to_string_lossy()))
+        .collect();
     let inputs: Vec<String> = plan
         .request
         .inputs
@@ -717,6 +744,9 @@ pub fn stale_outputs(
         .filter_map(|e| {
             let source = e.raw.get("source")?.as_str()?;
             let folded = normalize_key(source);
+            if undecided_files.contains(&folded) {
+                return None;
+            }
             if !inputs.iter().any(|i| folded.starts_with(i.as_str())) {
                 return None;
             }

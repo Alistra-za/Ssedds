@@ -250,6 +250,33 @@ fn an_undecided_pbr_set_leaves_its_recorded_json_unlisted() {
     assert!(m.stale.iter().all(|s| s.path != json), "{:?}", m.stale);
 }
 
+/// Note FC14 (final residual 2): an undecided set's recorded DDS outputs (the old `textures\pbr\` ones) are not
+/// stale while the set is undecided; deciding it to a recipe that no longer writes them lists them.
+#[test]
+fn an_undecided_pbr_set_leaves_its_recorded_dds_unlisted() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    export_through(&mut m);
+    idle(&mut m);
+    let dds = |m: &AppModel| -> Vec<String> {
+        m.stale
+            .iter()
+            .filter(|s| s.path.extension().is_some_and(|e| e == "dds"))
+            .map(|s| s.path.to_string_lossy().replace('\\', "/"))
+            .collect()
+    };
+    assert!(dds(&m).is_empty(), "{:?}", m.stale);
+    m.set_shader(ROCK_SET, None);
+    idle(&mut m);
+    m.project
+        .as_mut()
+        .unwrap()
+        .clear_file_value("landscape/rock01.png", "subtype");
+    m.replan();
+    idle(&mut m);
+    assert!(dds(&m).is_empty(), "undecided lists {:?}", dds(&m));
+}
+
 /// `pbr_opened_plain` with a relief normal, so Generate makes a height map; the shader pick is unsaved.
 fn relief_rock(d: &Path) -> AppModel {
     let mut m = pbr_opened_plain(d);

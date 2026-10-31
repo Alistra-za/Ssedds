@@ -684,7 +684,11 @@ pub fn keys(ctx: &egui::Context, model: &mut AppModel, set_modal: bool) -> Optio
     // an extra Shift, so Ctrl+Shift+Z with nothing to redo would otherwise be Undo). It eats the key, runs nothing.
     let mut pairs: Vec<(&'static Action, Shortcut, bool)> = actions()
         .iter()
-        .filter(|a| a.run.is_some() && live(a.area, model, meshes) && (!text || a.id == PALETTE || a.id == "save"))
+        .filter(|a| {
+            a.run.is_some()
+                && live(a.area, model, meshes)
+                && (!text || a.id == PALETTE || a.id == "save")
+        })
         .flat_map(|a| {
             let on = enabled(a, model, ctx);
             a.keys.iter().map(move |s| (a, *s, on))
