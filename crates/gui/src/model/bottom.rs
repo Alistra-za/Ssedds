@@ -557,7 +557,8 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
             )
         });
     }
-    // Note FC10 (T8): a user preset skipped because another preset already declares its suffix aliases (a copy).
+    // Note FC10 (T8): a user preset skipped because another preset already declares its suffix aliases. Note FC14:
+    // the skipped one is whichever loads second, the original or its copy, so the row names both.
     for (file, reason) in &m.skipped_user_presets {
         if let Some((id, other)) = alias_clash(reason) {
             out.push(Problem {
@@ -566,7 +567,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                 ..row(
                     Level::Warning,
                     At::Project,
-                    format!("Preset {id} clashes with {other} on aliases"),
+                    format!("Preset {id} was skipped: it clashes with {other} on aliases"),
                     None,
                 )
             });

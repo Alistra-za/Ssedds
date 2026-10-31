@@ -299,11 +299,15 @@ fn fix_button(
             &format!("Remove match{n} from the set's PGPatcher settings"),
             sets_off,
         ),
-        Fix::RemoveAliases(_, id) => click_only_button(
+        // Note FC14: the hover names the file it rewrites, since the skipped one may be the original.
+        Fix::RemoveAliases(file, id) => click_only_button(
             ui,
             egui::Button::new(format!("Remove aliases from {id}")),
             None,
-            "Remove the suffix_aliases table from this preset file; its comments and other keys stay",
+            &format!(
+                "Rewrites {} without its suffix_aliases table; its comments and other keys stay",
+                file.display()
+            ),
             m.export
                 .running
                 .is_some()

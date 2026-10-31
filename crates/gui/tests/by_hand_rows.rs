@@ -406,7 +406,10 @@ fn an_alias_clash_row_removes_the_copys_aliases() {
     m.replan();
     idle(&mut m);
     let r = row(&m, |f| matches!(f, Fix::RemoveAliases(..))).expect("an alias clash row");
-    assert_eq!(r.text, "Preset mine-export clashes with mine on aliases");
+    assert_eq!(
+        r.text,
+        "Preset mine-export was skipped: it clashes with mine on aliases"
+    );
     let mut h = harness(m);
     h.run();
     assert!(std::fs::read_to_string(&copy).unwrap().contains("zz9"));
@@ -434,4 +437,46 @@ fn an_alias_clash_row_removes_the_copys_aliases() {
         .iter()
         .any(|(id, _)| id == "mine-export"));
     assert!(row(m, |f| matches!(f, Fix::RemoveAliases(..))).is_none());
+}
+
+/// Note FC14 (final review I3): with `sdc presets export`'s default naming, `mine-export.toml` loads first (`-` sorts
+/// before `.`), so the original `mine.toml` is the one skipped. The row names both presets, the button names the
+/// skipped one, and its hover names the file it rewrites. The load order is unchanged (owner item).
+#[test]
+fn an_alias_clash_row_names_the_skipped_file_under_export_naming() {
+    let d = tempfile::tempdir().unwrap();
+    let presets: PathBuf = d.path().join("user-presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    let text = |id: &str| {
+        format!(
+            "schema_version = 1\nid = \"{id}\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n\n\
+             [suffix_aliases]\nzz9 = \"n\"\n"
+        )
+    };
+    std::fs::write(presets.join("mine.toml"), text("mine")).unwrap();
+    std::fs::write(presets.join("mine-export.toml"), text("mine-export")).unwrap();
+    let mut m = opened(d.path());
+    m.user_presets = Some(presets.clone());
+    m.replan();
+    idle(&mut m);
+    let r = row(&m, |f| matches!(f, Fix::RemoveAliases(..))).expect("an alias clash row");
+    assert_eq!(
+        r.text,
+        "Preset mine was skipped: it clashes with mine-export on aliases"
+    );
+    let Some(Fix::RemoveAliases(file, id)) = &r.fix else {
+        unreachable!()
+    };
+    assert_eq!(id, "mine");
+    assert_eq!(file.file_name().unwrap(), "mine.toml");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Remove aliases from mine")
+        .hover();
+    h.run();
+    let tip = format!(
+        "Rewrites {} without its suffix_aliases table",
+        file.display()
+    );
+    assert!(h.query_all_by_label_contains(&tip).count() >= 1, "{tip}");
 }
