@@ -1,6 +1,7 @@
 //! The walk (spec §2.1): TES4, then top-level groups; a group whose label is not a wanted type is skipped by its
 //! size, and so is every nested group inside a wanted one.
 use crate::{records, PluginFacts, Rec, FLAG_COMPRESSED};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::Read;
 
@@ -65,6 +66,138 @@ pub(crate) fn each_sub<'a>(
     Ok(())
 }
 
+/// One top-level group: `start..end` is its body (the end is the end of the file for a group that claims more).
+pub(crate) struct TopGroup {
+    pub label: [u8; 4],
+    /// Group type 0 (a top-level group proper).
+    pub top: bool,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// The top-level items from `from` (the end of the TES4 record): every group, and a fault `Err("offset 0x…: message")`
+/// for each thing that is not one. A group that claims to run past the file is reported, then delivered clipped to
+/// the file, and ends the walk; so does a group smaller than its header. Never panics.
+pub(crate) fn top_groups(b: &[u8], from: usize, mut f: impl FnMut(Result<TopGroup, String>)) {
+    let mut off = from;
+    while off < b.len() {
+        if off + HEADER > b.len() {
+            f(Err(format!(
+                "offset {off:#x}: {} trailing bytes",
+                b.len() - off
+            )));
+            break;
+        }
+        let sig = sig_at(b, off);
+        let size = u32_at(b, off + 4) as usize;
+        if &sig != b"GRUP" {
+            f(Err(format!(
+                "offset {off:#x}: {} record outside a group",
+                sig_str(&sig)
+            )));
+            off = off.saturating_add(HEADER + size);
+            continue;
+        }
+        if size < HEADER {
+            f(Err(format!(
+                "offset {off:#x}: group size {size} is smaller than its header"
+            )));
+            break;
+        }
+        let label = sig_at(b, off + 8);
+        let top = u32_at(b, off + 12) == 0;
+        let gend = off + size;
+        if gend > b.len() {
+            f(Err(format!(
+                "offset {off:#x}: group {} runs past the end of the file",
+                sig_str(&label)
+            )));
+            f(Ok(TopGroup {
+                label,
+                top,
+                start: off + HEADER,
+                end: b.len(),
+            }));
+            break;
+        }
+        f(Ok(TopGroup {
+            label,
+            top,
+            start: off + HEADER,
+            end: gend,
+        }));
+        off = gend;
+    }
+}
+
+/// The records of one group body, `start..end`, as `Ok((record start, record end))` (header included). A nested group is
+/// skipped by its size, or entered (up to `MAX_DEPTH` levels) when `enter_nested`. A fault is delivered as
+/// `Err("offset 0x…: message")` and ends the group being walked (not its parent). Never panics.
+pub(crate) fn group_records(
+    b: &[u8],
+    start: usize,
+    end: usize,
+    depth: usize,
+    enter_nested: bool,
+    f: &mut impl FnMut(Result<(usize, usize), String>),
+) {
+    let mut p = start;
+    while p < end {
+        if p + HEADER > end {
+            f(Err(format!(
+                "offset {p:#x}: truncated header runs past its group"
+            )));
+            return;
+        }
+        let sig = sig_at(b, p);
+        let size = u32_at(b, p + 4) as usize;
+        if &sig == b"GRUP" {
+            if size < HEADER || p + size > end {
+                f(Err(format!(
+                    "offset {p:#x}: nested group size {size} runs past its group"
+                )));
+                return;
+            }
+            if enter_nested {
+                if depth >= MAX_DEPTH {
+                    f(Err(format!(
+                        "offset {p:#x}: groups nested deeper than {MAX_DEPTH}"
+                    )));
+                    return;
+                }
+                group_records(b, p + HEADER, p + size, depth + 1, true, f);
+            }
+            p += size;
+            continue;
+        }
+        let rend = p + HEADER + size;
+        if rend > end {
+            f(Err(format!(
+                "offset {p:#x}: {} record size {size} runs past its group",
+                sig_str(&sig)
+            )));
+            return;
+        }
+        f(Ok((p, rend)));
+        p = rend;
+    }
+}
+
+/// The data (subrecords) of the record at `p..rend`: inflated when flagged. The error names the record.
+pub(crate) fn record_data(b: &[u8], p: usize, rend: usize) -> Result<Cow<'_, [u8]>, String> {
+    let raw = &b[p + HEADER..rend];
+    if u32_at(b, p + 8) & FLAG_COMPRESSED == 0 {
+        return Ok(Cow::Borrowed(raw));
+    }
+    inflate(raw).map(Cow::Owned).map_err(|e| {
+        format!(
+            "offset {p:#x}: {} {:08X}: {e}",
+            sig_str(&sig_at(b, p)),
+            u32_at(b, p + 12)
+        )
+    })
+}
+
 /// One plugin's facts. Never panics on bad input; faults go to `errors` with their file offset.
 pub fn parse(name: &str, b: &[u8]) -> PluginFacts {
     let mut f = PluginFacts {
@@ -100,115 +233,41 @@ pub fn parse(name: &str, b: &[u8]) -> PluginFacts {
     }
     f.masters = masters;
     let mut bases = BTreeSet::new();
-    let mut off = end;
-    while off < b.len() {
-        if off + HEADER > b.len() {
-            f.errors
-                .push(format!("offset {off:#x}: {} trailing bytes", b.len() - off));
-            break;
-        }
-        let sig = sig_at(b, off);
-        let size = u32_at(b, off + 4) as usize;
-        if &sig != b"GRUP" {
-            f.errors.push(format!(
-                "offset {off:#x}: {} record outside a group",
-                sig_str(&sig)
-            ));
-            off = off.saturating_add(HEADER + size);
-            continue;
-        }
-        if size < HEADER {
-            f.errors.push(format!(
-                "offset {off:#x}: group size {size} is smaller than its header"
-            ));
-            break;
-        }
-        let label = sig_at(b, off + 8);
-        let wanted = u32_at(b, off + 12) == 0 && records::wanted(&label);
-        let placed = u32_at(b, off + 12) == 0 && (&label == b"CELL" || &label == b"WRLD");
-        let gend = off + size;
-        if gend > b.len() {
-            f.errors.push(format!(
-                "offset {off:#x}: group {} runs past the end of the file",
-                sig_str(&label)
-            ));
+    top_groups(b, end, |g| match g {
+        Err(e) => f.errors.push(e),
+        Ok(g) => {
+            let wanted = g.top && records::wanted(&g.label);
+            let placed = g.top && (&g.label == b"CELL" || &g.label == b"WRLD");
             if wanted {
-                walk_group(b, off + HEADER, b.len(), &mut f);
+                walk_group(b, g.start, g.end, &mut f);
             } else if placed {
-                walk_placed(b, off + HEADER, b.len(), 0, &mut bases, &mut f);
+                walk_placed(b, g.start, g.end, &mut bases, &mut f);
             }
-            break;
         }
-        if wanted {
-            walk_group(b, off + HEADER, gend, &mut f);
-        } else if placed {
-            walk_placed(b, off + HEADER, gend, 0, &mut bases, &mut f);
-        }
-        off = gend;
-    }
+    });
     f.placed = bases.into_iter().collect();
     f
 }
 
 /// The records of one wanted top-level group, `start..end`. A fault ends this group, never the plugin.
 fn walk_group(b: &[u8], start: usize, end: usize, f: &mut PluginFacts) {
-    let mut p = start;
-    while p < end {
-        if p + HEADER > end {
-            f.errors.push(format!(
-                "offset {p:#x}: truncated header runs past its group"
-            ));
-            return;
-        }
-        let sig = sig_at(b, p);
-        let size = u32_at(b, p + 4) as usize;
-        if &sig == b"GRUP" {
-            // CELL/WRLD children and any other nested group are not wanted (spec §2.1).
-            if size < HEADER || p + size > end {
-                f.errors.push(format!(
-                    "offset {p:#x}: nested group size {size} runs past its group"
-                ));
-                return;
-            }
-            p += size;
-            continue;
-        }
-        let rend = p + HEADER + size;
-        if rend > end {
-            f.errors.push(format!(
-                "offset {p:#x}: {} record size {size} runs past its group",
-                sig_str(&sig)
-            ));
-            return;
-        }
-        read_record(b, p, rend, f);
-        p = rend;
-    }
+    // CELL/WRLD children and any other nested group are not wanted (spec §2.1): skipped by size.
+    group_records(b, start, end, 0, false, &mut |r| match r {
+        Ok((p, rend)) => read_record(b, p, rend, f),
+        Err(e) => f.errors.push(e),
+    });
 }
 
 /// One record at `p..rend` of a group: inflated if needed, read into `f.records`; a fault is an error, never a panic.
 fn read_record(b: &[u8], p: usize, rend: usize, f: &mut PluginFacts) {
     let sig = sig_at(b, p);
-    let flags = u32_at(b, p + 8);
     let formid = u32_at(b, p + 12);
-    let raw = &b[p + HEADER..rend];
-    let inflated;
-    let data: &[u8] = if flags & FLAG_COMPRESSED != 0 {
-        match inflate(raw) {
-            Ok(v) => {
-                inflated = v;
-                &inflated
-            }
-            Err(e) => {
-                f.errors.push(format!(
-                    "offset {p:#x}: {} {formid:08X}: {e}",
-                    sig_str(&sig)
-                ));
-                return;
-            }
+    let data = match record_data(b, p, rend) {
+        Ok(d) => d,
+        Err(e) => {
+            f.errors.push(e);
+            return;
         }
-    } else {
-        raw
     };
     let mut rec = Rec {
         local_formid: formid,
@@ -216,7 +275,7 @@ fn read_record(b: &[u8], p: usize, rend: usize, f: &mut PluginFacts) {
         edid: None,
         payload: Default::default(),
     };
-    if let Err(at) = records::read(&mut rec, data) {
+    if let Err(at) = records::read(&mut rec, &data) {
         f.errors.push(format!(
             "offset {p:#x}: {} {formid:08X}: subrecord at +{at:#x} runs past the record",
             sig_str(&sig)
@@ -227,95 +286,42 @@ fn read_record(b: &[u8], p: usize, rend: usize, f: &mut PluginFacts) {
 
 /// A CELL/WRLD group, `start..end` (filtering spec §3): every nested group is entered; of the records only REFR and
 /// ACHR are read, for their base FormID (NAME); every other record is skipped by its size. A fault ends this group.
-fn walk_placed(
-    b: &[u8],
-    start: usize,
-    end: usize,
-    depth: usize,
-    bases: &mut BTreeSet<u32>,
-    f: &mut PluginFacts,
-) {
-    let mut p = start;
-    while p < end {
-        if p + HEADER > end {
-            f.errors.push(format!(
-                "offset {p:#x}: truncated header runs past its group"
-            ));
-            return;
-        }
+fn walk_placed(b: &[u8], start: usize, end: usize, bases: &mut BTreeSet<u32>, f: &mut PluginFacts) {
+    group_records(b, start, end, 0, true, &mut |r| {
+        let (p, rend) = match r {
+            Ok(x) => x,
+            Err(e) => return f.errors.push(e),
+        };
         let sig = sig_at(b, p);
-        let size = u32_at(b, p + 4) as usize;
-        if &sig == b"GRUP" {
-            if size < HEADER || p + size > end {
-                f.errors.push(format!(
-                    "offset {p:#x}: nested group size {size} runs past its group"
-                ));
-                return;
-            }
-            if depth >= MAX_DEPTH {
-                f.errors.push(format!(
-                    "offset {p:#x}: groups nested deeper than {MAX_DEPTH}"
-                ));
-                return;
-            }
-            walk_placed(b, p + HEADER, p + size, depth + 1, bases, f);
-            p += size;
-            continue;
-        }
-        let rend = p + HEADER + size;
-        if rend > end {
-            f.errors.push(format!(
-                "offset {p:#x}: {} record size {size} runs past its group",
-                sig_str(&sig)
-            ));
-            return;
-        }
         if &sig == b"WRLD" {
             // The worldspace record itself carries a cloud model (xEdit `wbRecord(WRLD…)`).
             read_record(b, p, rend, f);
         } else if &sig == b"REFR" || &sig == b"ACHR" {
-            let formid = u32_at(b, p + 12);
-            let raw = &b[p + HEADER..rend];
-            let inflated;
-            let data: &[u8] = if u32_at(b, p + 8) & FLAG_COMPRESSED != 0 {
-                match inflate(raw) {
-                    Ok(v) => {
-                        inflated = v;
-                        &inflated
-                    }
-                    Err(e) => {
-                        f.errors.push(format!(
-                            "offset {p:#x}: {} {formid:08X}: {e}",
-                            sig_str(&sig)
-                        ));
-                        p = rend;
-                        continue;
-                    }
-                }
-            } else {
-                raw
+            let data = match record_data(b, p, rend) {
+                Ok(d) => d,
+                Err(e) => return f.errors.push(e),
             };
             let mut base = None;
-            if let Err(at) = each_sub(data, |s, d| {
+            if let Err(at) = each_sub(&data, |s, d| {
                 if &s == b"NAME" && d.len() >= 4 && base.is_none() {
                     base = Some(u32_at(d, 0));
                 }
             }) {
                 f.errors.push(format!(
-                    "offset {p:#x}: {} {formid:08X}: subrecord at +{at:#x} runs past the record",
-                    sig_str(&sig)
+                    "offset {p:#x}: {} {:08X}: subrecord at +{at:#x} runs past the record",
+                    sig_str(&sig),
+                    u32_at(b, p + 12)
                 ));
             }
             if let Some(id) = base.filter(|&id| id != 0) {
                 bases.insert(id);
             }
         }
-        p = rend;
-    }
+    });
 }
 
 /// u32 decompressed size + zlib stream → the record data.
-pub(crate) fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
+fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
     if raw.len() < 4 {
         return Err("compressed record shorter than its size field".into());
     }
