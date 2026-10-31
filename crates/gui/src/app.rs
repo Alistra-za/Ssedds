@@ -353,10 +353,32 @@ impl eframe::App for SdcApp {
                 .messages
                 .log(crate::model::messages::Severity::Info, line);
         }
-        // Note GD2: the edit panel's Review… opens Review, where NIF edits export.
+        // Note GF1: the edit panel's Review… sets the Textures model's flag, which its next poll consumes (FC5).
         if std::mem::take(&mut self.meshes.open_review_request) {
-            self.model.open_review();
+            self.model.open_review_request = true;
+            ctx.request_repaint();
         }
+        // Note GF (FC5's hand-overs): Review's answers, its Export and its Diff… reach the NIF edit here.
+        if std::mem::take(&mut self.model.nif_clear_answers_request) {
+            self.meshes.clear_nif_answers();
+        }
+        if let Some((path, choice, sha)) = self.model.nif_answer_request.take() {
+            self.meshes.set_nif_answer(&path, choice, sha);
+        }
+        if self.model.take_nif_export_due() {
+            // FC5 adds its own "NIF edits skipped: " prefix.
+            let r = self.meshes.export_nif_edits().map_err(|e| {
+                e.strip_prefix("NIF edits skipped: ")
+                    .map_or(e.clone(), str::to_string)
+            });
+            self.model.nif_export_result(r);
+        }
+        if let Some(path) = self.model.nif_diff_request.take() {
+            self.meshes.show_nif_diff(&path);
+        }
+        self.model
+            .set_nif_review_rows(self.meshes.nif_review_rows());
+        self.model.set_nif_problems(self.meshes.nif_problems());
         let scanning = self.meshes.scanning();
         self.meshes.poll();
         // S-shader-10: a finished scan may change what the meshes report (re-plans when the evidence changed).

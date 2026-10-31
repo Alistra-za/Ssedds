@@ -10632,3 +10632,139 @@ fn a_blocked_nif_row_is_skipped_by_the_export() {
         ))
     );
 }
+
+// ---- Note GF: the app wires the NIF edit to Review (app.rs): rows, answers, Export, Diff… and the footer's Review… ----
+
+/// The app in the Meshes view with one pending NIF edit, its export folder the Textures one (`support::opened`).
+fn review_app() -> (tempfile::TempDir, tempfile::TempDir, AppH) {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (d, h) = in_the_meshes_view(model, 1);
+    (t, d, h)
+}
+
+fn nif_out(h: &AppH) -> (String, std::path::PathBuf, Vec<u8>) {
+    let e = h.state().meshes.edit.as_ref().unwrap();
+    (e.data_path.clone(), e.export_path.clone(), e.out.to_vec())
+}
+
+/// Review's Export as the user does it (its model call), then frames until the run and the NIF export after it end.
+fn export_from_review(h: &mut AppH) {
+    h.state_mut().model.export_clicked();
+    assert!(h.state().model.review.is_some(), "NIF edits open Review");
+    h.state_mut().model.acknowledge_all_asks();
+    h.state_mut().model.export_from_review();
+    let start = Instant::now();
+    while !(h.state().model.export.summary.is_some() && h.state().model.review.is_none()) {
+        assert!(
+            start.elapsed() < Duration::from_secs(120),
+            "{}",
+            h.state().model.status_line
+        );
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+}
+
+#[test]
+fn reviews_export_writes_the_nif_edit() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, out) = nif_out(&h);
+    assert!(
+        !out_path.as_os_str().is_empty(),
+        "the edit has an export path"
+    );
+    let rows = h.state().model.nif_review_rows().to_vec();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the app hands the NIF rows to Review: {rows:?}"
+    );
+    assert_eq!(rows[0].path, path);
+    export_from_review(&mut h);
+    assert_eq!(
+        std::fs::read(&out_path).ok(),
+        Some(out),
+        "Review's Export wrote the edit"
+    );
+    assert!(!h.state().meshes.edit.as_ref().unwrap().doc.pending());
+    assert!(h
+        .state()
+        .model
+        .messages
+        .entries()
+        .any(|e| e.text == "NIF edits written: 1 file"));
+}
+
+#[test]
+fn a_foreign_nifs_overwrite_answer_reaches_the_export() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, out) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    let theirs = h.state().meshes.edit.as_ref().unwrap().source.to_vec();
+    std::fs::write(&out_path, &theirs).unwrap();
+    h.run_steps(4);
+    // Unanswered, Review's gate waits and nothing is written.
+    h.state_mut().model.export_clicked();
+    h.state_mut().model.acknowledge_all_asks();
+    h.run_steps(4);
+    assert!(h.state().model.review_gate().is_err());
+    h.state_mut().model.export_from_review();
+    h.run_steps(8);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        theirs,
+        "skipped without an answer"
+    );
+    h.get_by_label(&format!("{path} was not written by Tessalith"));
+    h.get_by_label("Overwrite it").click();
+    h.run_steps(4);
+    let rows = h.state().model.nif_review_rows().to_vec();
+    assert_eq!(rows[0].answer, Some(GuardChoice::Overwrite), "{rows:?}");
+    export_from_review(&mut h);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        out,
+        "the answer overwrote it"
+    );
+}
+
+#[test]
+fn reviews_diff_opens_the_edit_panels_diff_view() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, _) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    let theirs = h.state().meshes.edit.as_ref().unwrap().source.to_vec();
+    std::fs::write(&out_path, &theirs).unwrap();
+    h.run_steps(4);
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(h.state().meshes.nif_diff_view, None);
+    h.get_by_role_and_label(AkRole::Button, &format!("Diff… {path}"))
+        .click();
+    h.run_steps(4);
+    let want = h
+        .state()
+        .meshes
+        .nif_diff(&path)
+        .expect("a foreign file has a diff");
+    assert_eq!(h.state().meshes.nif_diff_view, Some((path, want.clone())));
+    assert!(sdc_gui::ui::header::meshes_view_active(&h.ctx));
+    assert!(h
+        .query_all_by_label(&format!("Diff line: {}", want[0]))
+        .next()
+        .is_some());
+}
+
+#[test]
+fn the_footers_review_opens_review() {
+    let (_t, _d, mut h) = review_app();
+    assert!(h.state().model.review.is_none());
+    h.get(review_button()).click();
+    h.run_steps(4);
+    assert!(
+        h.state().model.review.is_some(),
+        "the footer's Review… opens Review"
+    );
+}

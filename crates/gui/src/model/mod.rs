@@ -584,6 +584,8 @@ pub struct AppModel {
     pub nif_clear_answers_request: bool,
     /// Note FC5 (GD2): the NIF footer's `Review…`; `app.rs` calls `open_review` and switches to the Textures view.
     pub open_review_request: bool,
+    /// Note GF2: a foreign NIF row's `Diff…` in Review (its data path); `app.rs` calls `MeshesModel::show_nif_diff`.
+    pub nif_diff_request: Option<String>,
     /// Note FC5: the running export was started by Review's Export and not cancelled: the NIF edits export after it.
     nif_export_queued: bool,
     /// Note FC5: the run has ended; `take_nif_export_due` hands it to `app.rs` once.
@@ -786,6 +788,7 @@ impl AppModel {
             nif_answer_request: None,
             nif_clear_answers_request: false,
             open_review_request: false,
+            nif_diff_request: None,
             nif_export_queued: false,
             nif_export_due: false,
             also_pass: false,

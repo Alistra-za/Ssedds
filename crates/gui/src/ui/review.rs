@@ -271,6 +271,7 @@ enum Act {
     Others,
     Json(bool),
     Nif(String, bool, [u8; 32]),
+    NifDiff(String),
     DeleteStale(std::path::PathBuf),
     Export,
     Close,
@@ -923,9 +924,24 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     .answer
                     .map(|c| c == crate::model::meshes::export::GuardChoice::Overwrite);
                 let text = format!("{} was not written by Tessalith", r.path);
-                if let Some(o) = overwrite_row(ui, &text, answer) {
-                    act = Some(Act::Nif(r.path.clone(), o, sha));
-                }
+                ui.horizontal(|ui| {
+                    if let Some(o) = overwrite_row(ui, &text, answer) {
+                        act = Some(Act::Nif(r.path.clone(), o, sha));
+                    }
+                    // Note GF2: the edit panel's Diff view of this file against what the export writes.
+                    let diff = ui.button("Diff…");
+                    // ui-rules 8.4: the edit panel's footer has a Diff… too; this one names its NIF.
+                    let name = format!("Diff… {}", r.path);
+                    diff.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
+                    });
+                    if diff
+                        .on_hover_text(format!("Show the changed blocks of {}", r.path))
+                        .clicked()
+                    {
+                        act = Some(Act::NifDiff(r.path.clone()));
+                    }
+                });
             }
         }
         1 => {
@@ -1058,6 +1074,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         Some(Act::Others) => model.open_problems(None),
         Some(Act::Json(overwrite)) => model.answer_review_json(overwrite),
         Some(Act::Nif(path, overwrite, sha)) => model.answer_review_nif(&path, overwrite, sha),
+        Some(Act::NifDiff(path)) => {
+            model.nif_diff_request = Some(path);
+            super::header::set_meshes_view(ui.ctx(), true);
+        }
         Some(Act::DeleteStale(path)) => {
             if let Err(e) = model.delete_stale_output(&path) {
                 model.status_line = e;
