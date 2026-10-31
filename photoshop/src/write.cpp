@@ -115,6 +115,25 @@ int16 encode_and_write(FormatRecord *r, const PsddsSettings &chosen, SaveState *
     return ok ? noErr : report_error(r, "the DDS file could not be written.");
 }
 
+// Note FC6: the Save dialog's fixed status lines.
+const wchar_t kNoAlphaNote[] = L"No alpha channel: the DDS is written opaque";
+const wchar_t kFirstAlphaNote[] = L"Only the first alpha channel is written";
+
+// The document's alpha channels; spot channels never count (DC42).
+int alpha_channels(const FormatRecord *r) {
+    int n = 0;
+    for (const ReadChannelDesc *c = r->documentInfo ? r->documentInfo->alphaChannels : nullptr; c; c = c->next)
+        n += c->channelType != ctSpotColor ? 1 : 0;
+    return n;
+}
+
+// Some alpha below 1.0; with psdds_alpha_used false that is alpha 254-255 only, written opaque (DC23, DD6).
+bool alpha_below_one(const float *rgba, size_t pixels) {
+    for (size_t i = 0; i < pixels; i++)
+        if (rgba[i * 4 + 3] < 1.0f) return true;
+    return false;
+}
+
 // The last-band step shared by the band path and the merged path (DC38): alpha from the pixels, the dialog, the
 // encode and the single write; frees the save state whatever the outcome.
 // `path` is "band" or "merged", for the trace.
@@ -132,7 +151,12 @@ int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, c
     if (g->show_dialog) { // modal UI inside the write is allowed without SupportsBackgroundSave (PiPL keys)
         const PlatformData *platform = static_cast<const PlatformData *>(r->platformData);
         HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
-        const DialogResult shown = ShowSaveDialog(owner, has_alpha, uint32_t(r->depth), &g->settings);
+        // Note FC6: what the save drops is said in the dialog (supersedes DC40's silent opaque, DC44's dropped warning).
+        const wchar_t *note = r->layerData > 0 && channels == 3 ? kNoAlphaNote
+                              : channels == 4 && alpha_channels(r) > 1 ? kFirstAlphaNote // only a saved alpha plane drops the rest
+                                                                : nullptr;
+        const bool alpha_254 = channels == 4 && !has_alpha && alpha_below_one(s->rgba.data(), s->rgba.size() / 4);
+        const DialogResult shown = ShowSaveDialog(owner, has_alpha, uint32_t(r->depth), note, alpha_254, &g->settings);
         if (shown == DialogResult::Cancel) result = userCanceledErr; // nothing has been written
         else if (shown == DialogResult::Failed) result = report_error(r, "the Tessalith DDS options dialog could not be shown");
         else save_settings(r->sSPBasic, g->settings);

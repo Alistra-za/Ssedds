@@ -10,13 +10,14 @@ gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, GLib, GObject  # noqa: E402
 
-from psdds_ctypes import (BC1, BC3, BC4, BC5, BC6H, BC7, BOX, COLOUR, KAISER, LINEAR_MASK,  # noqa: E402
+from psdds_ctypes import (ALPHA_254_NOTE, BC1, BC3, BC4, BC5, BC6H, BC7, BOX, COLOUR, KAISER, LINEAR_MASK,  # noqa: E402
                           MITCHELL, NORMAL, RGBA8, RGBA16F, TENT, PresetState, Psdds, PsddsError, Settings,
                           apply_preset, plan_refresh, preset_event, refuse_ui)
 from tdds_pixels import band_rows, precision_depth  # noqa: E402
 
 LOAD_PROC = "file-tessalith-dds-load"
 EXPORT_PROC = "file-tessalith-dds-export"
+OPENED = "tessalith-dds-opened"  # image parasite: opened by this plug-in, not yet exported through the dialog
 # (nick, psdds id, label). All eight formats stay valid arguments (DC32); psdds decides which apply at the
 # image's depth (BC6H and RGBA16F only for 16- and 32-bit images, DF2). Labels as Photoshop's (DF5).
 FORMATS = [("bc1", BC1, "BC1"), ("bc3", BC3, "BC3"), ("bc4", BC4, "BC4"), ("bc5", BC5, "BC5"),
@@ -35,6 +36,21 @@ TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
 NOT_LOCAL = "Tessalith DDS can open only files on a local disk."
 NO_FILE_DDS = ("GIMP's own DDS plug-in is needed for this file (HDR, cube map or texture array), "
                "and it is not installed.")
+# shortcut: copies of psdds's Colour defaults, top quality index and preset count, used only to register Export when
+# psdds.dll fails (Note FC6.5); test_plugin checks them against psdds. Upgrade if psdds gains an ABI call for them.
+FALLBACK = Settings(BC7, COLOUR, 0, BOX, 1, 4, 0, 0)
+FALLBACK_TOP_Q = 18
+FALLBACK_PRESETS = 5
+
+
+def registration_values():
+    """(Colour defaults, top quality index, preset count) from psdds, or the fixed copies when psdds.dll fails."""
+    try:
+        psdds = Psdds()
+    except PsddsError:
+        return FALLBACK, FALLBACK_TOP_Q, FALLBACK_PRESETS
+    return (psdds.defaults(COLOUR), max(len(psdds.quality_labels(f)) for _, f, _ in FORMATS) - 1,
+            len(psdds.presets()))
 
 
 def error(procedure, msg):
@@ -75,6 +91,9 @@ def _load(procedure, run_mode, file):
                            Gimp.ImageType.RGBA_IMAGE if with_alpha else Gimp.ImageType.RGB_IMAGE,
                            100, Gimp.LayerMode.NORMAL)
     img.insert_layer(layer, None, 0)
+    # Note FC6: marks the image as opened from this DDS (flags 0: never saved into an XCF), with the header, so the
+    # first Overwrite asks with the file's own settings.
+    img.attach_parasite(Gimp.Parasite.new(OPENED, 0, list(head.hex().encode("ascii"))))
     buf = layer.get_buffer()
     rows = band_rows(w * 4, h)
     for y in range(0, h, rows):
@@ -289,6 +308,15 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
     try:
         psdds = Psdds()
         precision = image.get_precision()
+        # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config and asks only for a
+        # DDS opened in this session and not yet exported through the dialog, preselected with the file's own
+        # settings (Note FC6, supersedes DG9's no-dialog Overwrite); NONINTERACTIVE uses the arguments as given.
+        opened = image.get_parasite(OPENED)
+        ask = run_mode == Gimp.RunMode.INTERACTIVE or (run_mode == Gimp.RunMode.WITH_LAST_VALS and opened is not None)
+        if ask and opened is not None and run_mode == Gimp.RunMode.WITH_LAST_VALS:
+            own = psdds.file_settings(bytes.fromhex(bytes(opened.get_data()).decode("ascii")))
+            if own is not None:  # a format Tessalith does not write keeps the remembered settings
+                _set_raw(config, own)
 
         def read_format(raw):
             # The read follows the effective type: Normal and Linear mask are data, never colour-converted.
@@ -299,12 +327,11 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
         depth, fmt = read_format(raw_settings(config))
         rgba = read_pixels(layer, fmt)
         has_alpha = psdds.alpha_used(rgba, w, h)  # DC31; alpha is the same in either read format
-        # DC22: INTERACTIVE always asks; WITH_LAST_VALS has GIMP's remembered values in config; NONINTERACTIVE
-        # uses the arguments as given. The dialog comes after the pixel read so its greying matches (DC31).
+        # The dialog comes after the pixel read so its greying matches (DC31).
         # shortcut: the float RGBA buffer (16 B/px) and the copy image stay alive while the modal dialog is open,
         # hundreds of MB at 4k; the pixels are re-read after OK only when the type switches between Colour and data,
         # so freeing the buffer during the dialog would mean re-reading always, if that memory matters.
-        if run_mode == Gimp.RunMode.INTERACTIVE and not show_dialog(procedure, config, image, has_alpha, depth):
+        if ask and not show_dialog(procedure, config, image, has_alpha, depth):
             return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, None)
         s = raw_settings(config)
         chosen = read_format(s)[1]
@@ -313,8 +340,13 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
             rgba = read_pixels(layer, chosen)
         # The pixels' has_alpha as the dialog resolved it; psdds applies Discard itself (DC36).
         out = psdds.encode(rgba, w, h, has_alpha, s, depth)
+        note = not s.discard_alpha and psdds.alpha_254_only(rgba, w, h, has_alpha)
         del rgba
         _write_atomic(path, out)
+        if ask and opened is not None:
+            image.detach_parasite(OPENED)  # this image now has its own remembered values: the next Overwrite may skip
+        if note:
+            Gimp.message(ALPHA_254_NOTE)  # Note FC6: once a save; GIMP shows a short message in the status bar
     except (PsddsError, OSError, ExportError) as e:
         return error(procedure, str(e))
     except Exception as e:  # noqa: BLE001 - the user gets a message, the traceback goes to stderr
@@ -339,12 +371,11 @@ def _nick(items, cid):
 class TessalithDds(Gimp.PlugIn):
     def do_query_procedures(self):
         try:
-            Psdds()  # the export's defaults and quality range come from psdds
+            Psdds()
         except PsddsError as e:
-            # GIMP caches this list until the .py file's mtime changes, so the user must reinstall.
-            print(f"Tessalith DDS: export is not registered: {e}. Fix psdds.dll, then reinstall the plug-in.",
-                  file=sys.stderr)
-            return [LOAD_PROC]
+            # Note FC6.5: both procedures still register (GIMP caches this list until the .py mtime changes), and
+            # running either returns this message as its error.
+            print(f"Tessalith DDS: {e}", file=sys.stderr)
         return [LOAD_PROC, EXPORT_PROC]
 
     def do_set_i18n(self, name):
@@ -360,9 +391,7 @@ class TessalithDds(Gimp.PlugIn):
         return proc
 
     def _export_procedure(self, name):
-        psdds = Psdds()
-        d = psdds.defaults(COLOUR)
-        top_q = max(len(psdds.quality_labels(f)) for _, f, _ in FORMATS) - 1
+        d, top_q, presets = registration_values()
         proc = Gimp.ExportProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, False, export_dds, None)
         proc.set_image_types("*")
         proc.set_capabilities(Gimp.ExportCapabilities.CAN_HANDLE_RGB | Gimp.ExportCapabilities.CAN_HANDLE_ALPHA,
@@ -382,7 +411,7 @@ class TessalithDds(Gimp.PlugIn):
         # Dialog state (aux, never passed to the encode): the shown-* widgets show psdds's effective values
         # while the raw arguments above keep the user's picks (DC19).
         proc.add_int_aux_argument("preset", "Preset", "0 = Custom, then the psdds seeds", 0,
-                                  len(psdds.presets()), 0, rw)
+                                  presets, 0, rw)
         proc.add_int_aux_argument("shown-format", "Format", "Shown format", 0, max(f for _, f, _ in FORMATS),
                                   d.format, rw)
         proc.add_boolean_aux_argument("shown-srgb", "sRGB", "Shown sRGB", bool(d.srgb), rw)

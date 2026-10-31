@@ -27,10 +27,36 @@ public unsafe class DdsSaveTests
 
     static (byte[] Dds, bool? Measured) Save(byte[] src, int w, int h, int stride, PsddsSettings s, Stream? output = null)
     {
+        var r = SaveNoted(src, w, h, stride, s, output);
+        return (r.Dds, r.Measured);
+    }
+
+    static (byte[] Dds, bool? Measured, bool? Note) SaveNoted(byte[] src, int w, int h, int stride, PsddsSettings s, Stream? output = null)
+    {
         var ms = output ?? new MemoryStream();
-        bool? measured = null;
-        fixed (byte* p = src) DdsSave.Write(ms, p, stride, w, h, s, m => measured = m);
-        return (((MemoryStream)ms).ToArray(), measured);
+        bool? measured = null, note = null;
+        fixed (byte* p = src) DdsSave.Write(ms, p, stride, w, h, s, (m, n) => { measured = m; note = n; });
+        return (((MemoryStream)ms).ToArray(), measured, note);
+    }
+
+    [Fact]
+    public void Alpha254OnlyIsNotedUnlessDiscarded() // Note FC6
+    {
+        const int w = 4, h = 3, stride = 16;
+        var src = Bgra(w, h, stride);
+        for (int i = 3; i < src.Length; i += 4) src[i] = 255;
+        Assert.Equal((false, false), Noted(src));
+        src[3] = 254;
+        Assert.Equal((false, true), Noted(src));
+        Assert.Equal(false, SaveNoted(src, w, h, stride, Rgba8(1)).Note); // Discard transparency: the user chose opaque
+        src[3] = 253;
+        Assert.Equal((true, false), Noted(src));
+
+        (bool?, bool?) Noted(byte[] b)
+        {
+            var r = SaveNoted(b, w, h, stride, Rgba8(0));
+            return (r.Measured, r.Note);
+        }
     }
 
     [Fact]
@@ -108,7 +134,7 @@ public unsafe class DdsSaveTests
         bool called = false;
         var e = Assert.Throws<PsddsException>(() =>
         {
-            fixed (byte* p = new byte[4]) DdsSave.Write(ms, p, 4, 0, 1, Rgba8(0), _ => called = true);
+            fixed (byte* p = new byte[4]) DdsSave.Write(ms, p, 4, 0, 1, Rgba8(0), (_, _) => called = true);
         });
         Assert.Equal(Psdds.CheckSize(0, 1), e.Message);
         Assert.False(called);

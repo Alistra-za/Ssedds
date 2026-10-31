@@ -16,6 +16,7 @@
 #define IDD_PRESET_NAME 101
 #define IDC_PRESET_NAME 1011
 #define IDC_ALPHA_MODE 1012
+#define IDC_NOTE 1013
 
 #ifndef RC_INVOKED
 #include <windows.h>
@@ -49,5 +50,8 @@ enum class DialogResult { Ok, Cancel, Failed };
 
 // Modal Save options. *inout holds the raw choices (what the user picked, including values of greyed controls) on
 // entry and, after Ok, on return. Failed: the dialog could not be created.
-DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, uint32_t depth, PsddsSettings *inout);
+// The status line under the options (Note FC6): `note` (or nullptr) always, then "alpha 254-255 only: written opaque"
+// when alpha_254_only and Discard transparency is not ticked.
+DialogResult ShowSaveDialog(HWND owner, uint32_t has_alpha, uint32_t depth, const wchar_t *note, bool alpha_254_only,
+                            PsddsSettings *inout);
 #endif

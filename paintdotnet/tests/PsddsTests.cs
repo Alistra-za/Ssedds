@@ -60,6 +60,49 @@ public unsafe class PsddsTests
         Psdds.CheckAbi(Psdds.ExpectedAbiVersion);
     }
 
+    [Fact]
+    public void DllMessagesNameThePathAndTheAbi() // Note FC6 (DI9): one plain message with the path and the expected ABI
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "psdds.dll");
+        var missing = Assert.Throws<PsddsException>(() => Psdds.Check(() => throw new DllNotFoundException("raw")));
+        var wrong = Assert.Throws<PsddsException>(() => Psdds.CheckAbi(Psdds.ExpectedAbiVersion + 1));
+        foreach (var e in new[] { missing, wrong })
+        {
+            Assert.Contains(path, e.Message);
+            Assert.Contains($"ABI version {Psdds.ExpectedAbiVersion}", e.Message);
+            Assert.DoesNotContain("raw", e.Message);
+        }
+        Assert.Contains($"has ABI version {Psdds.ExpectedAbiVersion + 1}", wrong.Message);
+    }
+
+    [Fact]
+    public void AFailedLoadIsThrownAsThePlainMessageEveryTime() // Note FC6.5: what Paint.NET's save catch shows, once
+    {
+        int probes = 0;
+        var gate = new AbiGate(() => { probes++; throw new DllNotFoundException("raw"); });
+        var first = Assert.Throws<PsddsException>(gate.Ensure);
+        var again = Assert.Throws<PsddsException>(gate.Ensure);
+        Assert.Equal(first.Message, again.Message);
+        Assert.Equal(1, probes);
+        Assert.Null(first.InnerException);
+        Assert.StartsWith($"psdds.dll could not be loaded from {Path.Combine(AppContext.BaseDirectory, "psdds.dll")}. ", first.Message);
+        new AbiGate(() => Psdds.ExpectedAbiVersion).Ensure();
+    }
+
+    [Fact]
+    public void ColourDefaultsArePsddsColourDefaults() => // Note FC6.5: the default token, also when psdds.dll fails
+        Assert.Equal(Psdds.Defaults(Psdds.Colour), Psdds.ColourDefaults);
+
+    [Fact]
+    public void Alpha254OnlyIsTheOpaqueRulesLoss() // Note FC6: DC23/DD6 write it opaque; the host says so
+    {
+        bool Only(float a) { var px = Image(2, 2, (x, y) => x == 1 && y == 1 ? a : 1f); fixed (float* p = px) return Psdds.Alpha254Only(p, 4, Psdds.AlphaUsed(p, 4)); }
+        Assert.False(Only(1f));
+        Assert.True(Only(254f / 255));
+        Assert.False(Only(253f / 255)); // kept: nothing to say
+        Assert.Equal("alpha 254–255 only: written opaque", Psdds.Alpha254Note);
+    }
+
     [DllImport("kernel32", CharSet = CharSet.Unicode, SetLastError = true)]
     static extern nint GetModuleHandleW(string name);
 
@@ -81,7 +124,8 @@ public unsafe class PsddsTests
     [Fact]
     public void MissingOrWrongBitnessDllMessage()
     {
-        const string msg = "psdds.dll is missing or is not the 64-bit build; reinstall Tessalith DDS next to TessalithDds.dll";
+        var msg = $"psdds.dll could not be loaded from {Path.Combine(AppContext.BaseDirectory, "psdds.dll")}. " +
+                  $"Tessalith DDS needs the 64-bit psdds.dll with ABI version {Psdds.ExpectedAbiVersion}; reinstall Tessalith DDS"; // Note FC6
         Assert.Equal(msg, Assert.Throws<PsddsException>(() => Psdds.Check(() => throw new DllNotFoundException())).Message);
         Assert.Equal(msg, Assert.Throws<PsddsException>(() => Psdds.Check(() => throw new BadImageFormatException())).Message);
     }

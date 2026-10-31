@@ -10,6 +10,12 @@ BOX, TENT, MITCHELL, KAISER = range(4)
 
 _ERR_CAP = 512
 _FORMATS = (BC1, BC3, BC4, BC5, BC7, RGBA8, BC6H, RGBA16F)
+ALPHA_254_NOTE = "alpha 254–255 only: written opaque"  # Note FC6, verbatim in every host
+# DDS header codes (dxgiformat.h, the legacy FourCCs) -> (format, sRGB); layout facts for file_settings, not rules.
+_DXGI = {70: (BC1, 0), 71: (BC1, 0), 72: (BC1, 1), 76: (BC3, 0), 77: (BC3, 0), 78: (BC3, 1), 79: (BC4, 0),
+         80: (BC4, 0), 82: (BC5, 0), 83: (BC5, 0), 97: (BC7, 0), 98: (BC7, 0), 99: (BC7, 1), 27: (RGBA8, 0),
+         28: (RGBA8, 0), 29: (RGBA8, 1), 87: (RGBA8, 0), 90: (RGBA8, 0), 91: (RGBA8, 1)}
+_FOURCC = {b"DXT1": BC1, b"DXT5": BC3, b"ATI1": BC4, b"BC4U": BC4, b"ATI2": BC5, b"BC5U": BC5}
 
 
 class Settings(ctypes.Structure):
@@ -121,18 +127,20 @@ class Psdds:
     def __init__(self, path=None):
         path = path or os.environ.get("TESSALITH_PSDDS_DLL") or os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "psdds.dll")
+        # One plain message with the path and the ABI this plug-in needs (Note FC6, DG3).
+        needs = f"Tessalith DDS needs ABI version {EXPECTED_ABI}; reinstall the plug-in."
         try:
             d = self._dll = ctypes.CDLL(path)
         except OSError as e:
-            raise PsddsError(f"Cannot load psdds.dll: {e}") from e
+            raise PsddsError(f"psdds.dll could not be loaded from {path}. {needs}") from e
         # Check the ABI before touching anything else.
         try:
             d.psdds_abi_version.argtypes, d.psdds_abi_version.restype = [], ctypes.c_uint32
             got = d.psdds_abi_version()
         except AttributeError as e:
-            raise PsddsError(f"psdds.dll has no ABI version, this plug-in needs {EXPECTED_ABI}") from e
+            raise PsddsError(f"psdds.dll at {path} has no ABI version. {needs}") from e
         if got != EXPECTED_ABI:
-            raise PsddsError(f"psdds.dll has ABI version {got}, this plug-in needs {EXPECTED_ABI}")
+            raise PsddsError(f"psdds.dll at {path} has ABI version {got}. {needs}")
         u32, vp, sz, cp = ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_char_p
         S, C, B = ctypes.POINTER(Settings), ctypes.POINTER(Controls), ctypes.POINTER(_Buf)
         pu32, eb = ctypes.POINTER(u32), ctypes.c_char_p
@@ -219,6 +227,33 @@ class Psdds:
 
     def alpha_used(self, rgba, w, h):
         return bool(self._dll.psdds_alpha_used(self._floats(rgba, w, h), w * h))
+
+    @staticmethod
+    def alpha_254_only(rgba, w, h, has_alpha):
+        """Note FC6: no alpha below 254/255 (has_alpha is the caller's alpha_used, so psdds writes it opaque,
+        DC23/DD6) yet some alpha below 1.0."""
+        if has_alpha:
+            return False
+        n = w * h  # byte-wise compare against float 1.0 (00 00 80 3f): C speed, no per-pixel Python loop
+        return any(rgba[12 + i::16] != bytes([b]) * n for i, b in enumerate(b"\x00\x00\x80\x3f"))
+
+    def file_settings(self, head):
+        """Note FC6: a DDS header's own format, sRGB tag and mipmaps over the defaults of the type its format implies
+        (BC5 Normal, BC4 Linear mask, else Colour); None for a format Tessalith does not write."""
+        head = bytes(head[:148])
+        if len(head) < 128:
+            return None
+        if not head[80] & 4:  # no DDPF_FOURCC: uncompressed
+            fmt, srgb = RGBA8, 0
+        elif head[84:88] == b"DX10":
+            fmt, srgb = _DXGI.get(int.from_bytes(head[128:132], "little"), (None, 0))
+        else:
+            fmt, srgb = _FOURCC.get(head[84:88]), 0
+        if fmt is None:
+            return None
+        s = self.defaults({BC4: LINEAR_MASK, BC5: NORMAL}.get(fmt, COLOUR))
+        s.format, s.srgb, s.mips = fmt, srgb, int(int.from_bytes(head[28:32], "little") > 1)
+        return s
 
     def max_file_bytes(self):
         return self._dll.psdds_max_file_bytes()

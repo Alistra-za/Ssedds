@@ -42,7 +42,7 @@ class T(unittest.TestCase):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
         self.assertIn("ABI version 4", str(c.exception))
-        self.assertIn("needs 5", str(c.exception))
+        self.assertIn("needs ABI version 5", str(c.exception))
 
     def test_layout_follows_header(self):
         for cls, name in ((P.Settings, "PsddsSettings"), (P.Controls, "PsddsControls")):
@@ -300,7 +300,7 @@ class T(unittest.TestCase):
         with mock.patch.object(P.ctypes, "CDLL", return_value=object()):
             with self.assertRaises(P.PsddsError) as c:
                 P.Psdds()
-        self.assertIn("needs 4", str(c.exception))
+        self.assertIn("needs ABI version 4", str(c.exception))
 
     def test_floats_length_mismatch(self):
         with self.assertRaises(ValueError):
@@ -459,6 +459,48 @@ class T(unittest.TestCase):
         self.assertFalse(used(254 / 255))
         self.assertTrue(used(253 / 255))
         self.assertFalse(used(float("nan")))
+
+    def test_alpha_254_only(self):  # FC6: the pixels DC23/DD6 write opaque although alpha is below 255
+        def only(alpha):
+            rgba = rgba_floats([(0, 0, 0, 1.0)] * 3 + [(0, 0, 0, alpha)])
+            return DLL.alpha_254_only(rgba, 2, 2, DLL.alpha_used(rgba, 2, 2))
+        self.assertFalse(only(1.0))
+        self.assertTrue(only(254 / 255))
+        self.assertFalse(only(253 / 255))  # kept: nothing to say
+        self.assertEqual(P.ALPHA_254_NOTE, "alpha 254–255 only: written opaque")
+
+    def test_dll_message_names_path_and_abi(self):  # FC6 (DI9/DG3)
+        missing = os.path.join(HERE, "no-such-dir", "psdds.dll")
+        with self.assertRaises(P.PsddsError) as c:
+            P.Psdds(missing)
+        self.assertIn(missing, str(c.exception))
+        self.assertIn("ABI version 4", str(c.exception))
+        path = os.environ["TESSALITH_PSDDS_DLL"]
+        with mock.patch.object(P, "EXPECTED_ABI", 5), self.assertRaises(P.PsddsError) as c:
+            P.Psdds(path)
+        self.assertIn(path, str(c.exception))
+        self.assertIn("ABI version 5", str(c.exception))
+
+    def test_file_settings(self):  # FC6: Overwrite of an opened DDS starts from the file's own settings
+        def fs(**kw):
+            s = DLL.file_settings(dds_header(**kw))
+            return None if s is None else (s.format, s.texture_type, s.srgb, s.mips)
+        self.assertEqual(fs(dxgi=83), (P.BC5, P.NORMAL, 0, 0))
+        self.assertEqual(fs(dxgi=99), (P.BC7, P.COLOUR, 1, 0))
+        self.assertEqual(fs(dxgi=98), (P.BC7, P.COLOUR, 0, 0))
+        self.assertEqual(fs(dxgi=80), (P.BC4, P.LINEAR_MASK, 0, 0))
+        self.assertEqual(fs(dxgi=29), (P.RGBA8, P.COLOUR, 1, 0))
+        self.assertEqual(fs(fourcc=b"DXT1"), (P.BC1, P.COLOUR, 0, 0))
+        self.assertEqual(fs(fourcc=b"DXT5"), (P.BC3, P.COLOUR, 0, 0))
+        self.assertEqual(fs(fourcc=b"ATI2"), (P.BC5, P.NORMAL, 0, 0))
+        self.assertEqual(fs(), (P.RGBA8, P.COLOUR, 0, 0))  # uncompressed RGBA
+        self.assertIsNone(fs(fourcc=b"DXT3"))  # no Tessalith format: the remembered settings stay
+        head = bytearray(dds_header(dxgi=98))
+        head[28:32] = (11).to_bytes(4, "little")  # mip count
+        self.assertEqual(DLL.file_settings(bytes(head)).mips, 1)
+        s = DLL.file_settings(dds_header(dxgi=83))
+        d = DLL.defaults(P.NORMAL)
+        self.assertEqual((s.quality, s.filter, s.discard_alpha, s.alpha_mode), (d.quality, d.filter, 0, 0))
 
     def test_opens_with_alpha(self):
         self.assertFalse(DLL.opens_with_alpha(bytes([1, 2, 3, 254] * 4), True))

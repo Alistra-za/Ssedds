@@ -19,7 +19,7 @@ import gi  # noqa: E402
 gi.require_version("Gimp", "3.0")
 gi.require_version("Gegl", "0.4")
 from gi.repository import Gegl, Gimp, Gio, GLib  # noqa: E402
-from psdds_ctypes import (BC4, BC5, BC6H, BC7, COLOUR, LINEAR_MASK, NORMAL, RGBA8, Psdds,  # noqa: E402
+from psdds_ctypes import (ALPHA_254_NOTE, BC4, BC5, BC6H, BC7, COLOUR, LINEAR_MASK, NORMAL, RGBA8, Psdds,  # noqa: E402
                           PsddsError)
 
 OUT = os.environ["TDDS_OUT"]
@@ -508,6 +508,35 @@ def export_with_last_vals_skips_dialog():
         img.delete()
 
 
+def export_opened_dds_overwrite_asks():
+    """FC6 (supersedes DG9's no-dialog Overwrite): WITH_LAST_VALS on a DDS opened in this session asks (the UI guard
+    trips); NONINTERACTIVE still never asks; a new image's WITH_LAST_VALS is export_with_last_vals_skips_dialog."""
+    s = psdds.defaults(NORMAL)
+    s.format, s.mips = BC5, 0
+    rgba = bytearray(struct.pack("<64f", *([0.5, 0.5, 1.0, 1.0] * 16)))
+    img = _load(_write("opened_bc5.dds", psdds.encode(rgba, 4, 4, False, s)))
+    assert img is not None, "the BC5 file did not open"
+    try:
+        res, path = _export_run(img, "opened_overwrite.dds", Gimp.RunMode.WITH_LAST_VALS)
+        assert res.index(0) == Gimp.PDBStatusType.EXECUTION_ERROR, f"status {res.index(0)}: no dialog was asked for"
+        msg = res.index(1) if res.length() > 1 else ""
+        assert "TDDS_NO_UI" in msg, f"error text {msg!r}: the guard did not trip"
+        assert not os.path.exists(path), "a file was written"
+        assert _export(img, "opened_nonint.dds", format="bc5", texture_type="normal")[:4] == b"DDS ", "no DDS"
+    finally:
+        img.delete()
+
+
+def export_alpha_254_note():
+    """FC6: alpha 254-255 only is written opaque and said once (a message, not an error)."""
+    img = _image(8, 8, bytearray(_gradient(8, 8, 254)))
+    assert _opaque(_export(img, "note254.dds", format="bc7")), "alpha 254 export is not opaque"
+    img.delete()
+
+
+EXPECT_LOG["export_alpha_254_note"] = [ALPHA_254_NOTE]  # imported: exec() reads this file as cp1252, not UTF-8
+
+
 def export_precision_table_matches_gimp():
     """The unit test's GimpPrecision table is GIMP's own enum, so precision_depth covers every value."""
     from tdds_pixels import precision_depth
@@ -641,6 +670,8 @@ CASES = {f.__name__: f for f in (    load_rgba8_opaque_opens_rgb,
     export_noninteractive_never_opens_dialog,
     export_interactive_refused_under_ui_guard,
     export_with_last_vals_skips_dialog,
+    export_opened_dds_overwrite_asks,
+    export_alpha_254_note,
     export_precision_table_matches_gimp,
     export_8_bit_bytes_unchanged,
     export_u16_is_depth_16,

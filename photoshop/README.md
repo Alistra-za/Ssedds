@@ -34,6 +34,8 @@ Choose File > Save As (or Save a Copy) > **Tessalith DDS**. The plugin saves the
 - **Filter** (beside Mipmaps): how mips are shrunk. It is greyed when Mipmaps is unticked, and greyed showing Box where the encoder would use Box anyway (for example when alpha is kept and *Alpha is transparency* is ticked).
 - **Quality**: the encoder effort for the chosen format (BC7 effort, BC1/BC3 level, BC4/BC5 search). Greyed for RGBA8.
 
+A line under the options says what the save will not keep: `No alpha channel: the DDS is written opaque` for a layered document with no alpha channel and no transparency, `Only the first alpha channel is written` when the document has more than one alpha channel, and `alpha 254–255 only: written opaque` when the alpha source holds only 254 and 255 (that line goes when Discard transparency is ticked).
+
 Your last choices are remembered and preselected the next time the dialog opens. The dialog opens on every interactive save, and Cancel there writes nothing; only actions and batches run with dialogs off skip it and use the remembered choices. Images up to 16384 x 16384 are accepted; Skyrim supports no more.
 
 Documents can be 8-bit, 16-bit or 32-bit RGB. A 16-bit document is encoded at full depth, never squeezed to 8-bit first. A 32-bit document is saved as Photoshop gives it, per the table above.

@@ -164,6 +164,23 @@ class PbrTests(unittest.TestCase):
         for a, b in zip(self.files("pon"), self.files("poff")):
             self.assertEqual(a.read_bytes(), b.read_bytes())
 
+    def test_alpha_254_only_is_said_once(self):  # FC6: DC23/DD6's opaque rule is said, not silent
+        n = normal_img(4)
+        n[..., 3] = 254 / 255
+        n[0, 0, 3] = 1
+        with self.assertLogs("sanic.root", "INFO") as logs:
+            self.save(None, normal=n)
+        self.assertEqual([m for m in logs.output if "254" in m], ["WARNING:sanic.root:alpha 254–255 only: written opaque"])
+        opaque = normal_img(4)
+        with self.assertNoLogs("sanic.root", "INFO"):
+            self.save(None, name="o", normal=opaque)
+        with self.assertNoLogs("sanic.root", "INFO"):  # Discard transparency: the user chose opaque
+            self.save(None, name="d", normal=n, settings=B.normal_settings(BC7, True, 4, True))
+        kept = n.copy()
+        kept[1, 1, 3] = 0.5
+        with self.assertNoLogs("sanic.root", "INFO"):  # alpha below 254 is kept: nothing to say
+            self.save(None, name="k", normal=kept)
+
     def test_size_mismatch_writes_nothing(self):
         job = self.job([(grey(0.5), 0), (grey(0.5, 32, 32), 0), None, None])
         with self.assertRaises(P.PsddsError) as want:

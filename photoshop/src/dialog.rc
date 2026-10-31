@@ -1,11 +1,12 @@
 // Tessalith DDS: the Save dialog templates. MIT licence (see photoshop/LICENSE).
-// Fixed layout (DC33, DC37, DC43; Note DH adds the Alpha is transparency row under Discard): every control is always present. Each label comes right before its list, so it names
+// Fixed layout (DC33, DC37, DC43; Note DH adds the Alpha is transparency row under Discard; Note FC6 the status line
+// above OK, set at run time so its en dash needs no code page): every control is always present. Each label comes right before its list, so it names
 // the list for screen readers and its mnemonic moves focus there; a checkbox's or button's text is its own label.
 // Tab order is the order below, which is the visual order: row by row, left to right.
 #include <windows.h>
 #include "dialog.h"
 
-IDD_SAVE DIALOGEX 0, 0, 250, 136
+IDD_SAVE DIALOGEX 0, 0, 250, 156
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Tessalith DDS options"
 FONT 9, "Segoe UI", 400, 0, 0x1
@@ -26,8 +27,9 @@ BEGIN
     COMBOBOX        IDC_FILTER, 88, 79, 155, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "&Quality:", -1, 7, 99, 52, 8
     COMBOBOX        IDC_QUALITY, 62, 97, 181, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
-    DEFPUSHBUTTON   "OK", IDOK, 139, 116, 50, 14
-    PUSHBUTTON      "Cancel", IDCANCEL, 193, 116, 50, 14
+    LTEXT           "", IDC_NOTE, 7, 116, 236, 16, SS_NOPREFIX
+    DEFPUSHBUTTON   "OK", IDOK, 139, 136, 50, 14
+    PUSHBUTTON      "Cancel", IDCANCEL, 193, 136, 50, 14
 END
 
 IDD_PRESET_NAME DIALOGEX 0, 0, 200, 52

@@ -32,9 +32,13 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
 
     /// <summary>psdds_alpha_used of the last save (the preview's); raised on the save's worker thread. An instance event
     /// suffices: this is the one instance per process, and the host builds the widget from it and previews through it.</summary>
-    internal event Action<bool>? HasAlphaMeasured;
+    internal event Action<bool, bool>? HasAlphaMeasured;
 
-    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() => new() { Raw = Psdds.Defaults(Psdds.Colour) };
+    // Note FC6.5 (DI9): a missing or wrong-ABI psdds.dll never throws while the options dialog is built: that throw would
+    // escape Paint.NET's save catch (DocumentWorkspace.GetSaveConfigToken runs before it) to the crash handler. The dialog
+    // opens with its options greyed, and the preview's OnSaveT throws the plain PsddsException (path and expected ABI),
+    // which the dialog's preview shows once in Paint.NET's own error box.
+    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() => new() { Raw = Psdds.ColourDefaults };
 
     protected override TessalithDdsWidget OnCreateSaveConfigWidgetT() => new(this);
 
@@ -52,7 +56,7 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
         scratchSurface.Clear();
         input.CreateRenderer().Render(scratchSurface);
         DdsSave.Write(output, (byte*)scratchSurface.GetRowPointer(0), scratchSurface.Stride, input.Width, input.Height, token.Raw,
-            m => HasAlphaMeasured?.Invoke(m));
+            (m, note) => HasAlphaMeasured?.Invoke(m, note));
     }
 
     protected override Document OnLoad(Stream input)
