@@ -775,10 +775,8 @@ fn export_click_commits_the_field_and_runs() {
     press_release(&mut h, p, false);
     settle(&mut h);
     let m = &h.state().0;
-    assert!(
-        m.review.is_some() || m.export.running.is_some() || m.export.summary.is_some(),
-        "the click ran"
-    );
+    // The fixture always opens Review (Note FC14: an OR with "it exported" would pass a click that skipped Review).
+    assert!(m.review.is_some(), "the click opened Review");
     assert_eq!(
         m.input_name_of("landscape/rock02").as_deref(),
         Some("textures/landscape/rock02")
