@@ -121,6 +121,20 @@ fn header_export_reads_review_until_clean() {
         format!("Export {n} file{}", if n == 1 { "" } else { "s" })
     );
     assert!(m.export_is_clean());
+    // Note FC14 (final review, minor): a blocked NIF edit is skipped, never written, so it keeps the project clean;
+    // one Review's Export would write does not.
+    let nif = |blocked: Option<&str>| sdc_gui::model::meshes::NifReviewRow {
+        path: r"meshes\x.nif".into(),
+        mod_name: "My Mod".into(),
+        blocked: blocked.map(String::from),
+        foreign: None,
+        answer: None,
+        compaction: None,
+    };
+    m.set_nif_review_rows(vec![nif(Some("its NIF changed on disk"))]);
+    assert!(m.export_is_clean());
+    m.set_nif_review_rows(vec![nif(None)]);
+    assert!(!m.export_is_clean());
 }
 
 #[test]

@@ -1754,7 +1754,7 @@ impl AppModel {
         // Note FC2: the half-size question is asked in Review, before the export.
         // Note FC5: NIF edits are Review rows; its Export is the only way they are written.
         if asks
-            || !self.nif_rows.is_empty()
+            || self.nif_rows_written()
             || !self.half_size_rows().is_empty()
             || self.undecided() > 0
             || self.pgp_json_edited()

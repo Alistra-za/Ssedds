@@ -628,6 +628,11 @@ impl AppModel {
         &self.nif_rows
     }
 
+    /// Note FC14: a NIF edit Review's Export would write (a blocked one is skipped, so it keeps nothing waiting).
+    pub(crate) fn nif_rows_written(&self) -> bool {
+        self.nif_rows.iter().any(|r| r.blocked.is_none())
+    }
+
     /// Note FC5: Review's Keep (false) or Overwrite (true) for the NIF at `path`, for the file with hash `sha256`;
     /// `app.rs` passes it to `MeshesModel::set_nif_answer`. No-op while Review is closed.
     pub fn answer_review_nif(&mut self, path: &str, overwrite: bool, sha256: [u8; 32]) {
@@ -799,8 +804,8 @@ impl AppModel {
             && self.export_files() > 0
             && self.review_gate().is_ok()
             && self.undecided() == 0
-            // Note FC5: NIF edits are written by Review's Export only.
-            && self.nif_rows.is_empty()
+            // Note FC5: NIF edits are written by Review's Export only. Note FC14: a blocked one is never written.
+            && !self.nif_rows_written()
     }
 
     /// Note FB1: the header's Export button: `Export {n} files` once the project is clean, else `Review {n} files`.
