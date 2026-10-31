@@ -315,6 +315,68 @@ fn every_subtype_combo_offers_complex_grass_only_in_a_grass_context() {
     assert!(lists(&job), "no textures ancestor");
 }
 
+/// Note FC14 (final review, X3 drawn): Review's Undecided combo on a grass file with no `textures` ancestor lists
+/// Complex grass when opened.
+#[test]
+fn the_review_undecided_combo_offers_complex_grass_on_the_grass_fixture() {
+    use engine::config::Subtype;
+    use sdc_gui::ui::settings_panel::subtype_label;
+    let e = tempfile::tempdir().unwrap();
+    let root = e.path().join("grassmod");
+    // Opaque, so it asks its sub-type and not its alpha.
+    let png = root.join("plants").join("tundragrass.png");
+    std::fs::create_dir_all(png.parent().unwrap()).unwrap();
+    ImageBuffer::from_fn(32, 32, |x, _| Rgb([60u8, 140, (x * 4) as u8]))
+        .save(&png)
+        .unwrap();
+    let mut m = opened_as_the_app(root, e.path().join("out"));
+    let key = "plants/tundragrass.png";
+    // The app's default accepts the confident suggestion; clear it so the file asks.
+    m.accept = engine::policy::AcceptSuggestions::None;
+    m.project.as_mut().unwrap().clear_file_value(key, "subtype");
+    m.replan();
+    assert!(m.wait_idle(WAIT));
+    let default = m
+        .subtype_question(key)
+        .map(|s| {
+            s.or(m
+                .item(key)
+                .and_then(|i| i.job.as_ref())
+                .map(|j| j.profile.subtype))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "the grass file asks its sub-type: {:?} {:?}",
+                m.item(key).map(|i| (&i.status, &i.decisions)),
+                m.items.iter().map(|i| &i.key).collect::<Vec<_>>()
+            )
+        })
+        .expect("a default");
+    m.open_review();
+    let mut h = harness(m);
+    h.state_mut().open_review();
+    h.run();
+    let grass = subtype_label(Subtype::ComplexGrass);
+    assert!(h.query_by_label(&grass).is_none(), "closed combo");
+    h.get_by_label_contains(&format!("Undecided ({})", 1));
+    // A combo's accessible text is its value.
+    let want = subtype_label(default);
+    {
+        let mut combos = h.query_all_by_role(Role::ComboBox).filter(|n| {
+            use egui_kittest::kittest::NodeT;
+            n.accesskit_node().value().as_deref() == Some(want.as_str())
+        });
+        let combo = combos.next().expect("the row's sub-type combo");
+        assert!(combos.next().is_none(), "one {want} combo");
+        combo.click();
+    }
+    h.run();
+    assert!(
+        h.query_by_label(&grass).is_some(),
+        "the open combo lists {grass}"
+    );
+}
+
 /// An OpenEXR with partial alpha: the colour is divided by alpha on load (BQ15).
 fn exr_with_alpha(path: &Path) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
