@@ -237,6 +237,7 @@ impl SetsDoc {
     /// Note FC11: read the sidecar (missing or unreadable: nothing, as before it existed) and reconcile the document's
     /// readable copy from it. A value that differs is an unsaved edit; an equal one changes nothing.
     fn load_sidecar(&mut self) {
+        let was_dirty = self.f.dirty;
         self.side = std::fs::read(self.sidecar_path())
             .ok()
             .and_then(|b| serde_json::from_slice::<Json>(&b).ok())
@@ -261,7 +262,8 @@ impl SetsDoc {
         }
         // Fix round 1 (controller ruling): applied quietly. The records are not the user's edits, so the document stays
         // clean (Discard leaves it clean too); the readable copy reaches `sdc-project.toml` with the next real Save.
-        if self.f.dirty {
+        // Note FC14: only a document that was clean before; `TomlFile::open`/`reload` always leave it so today.
+        if self.f.dirty && !was_dirty {
             self.f.dirty = false;
             self.f.saved_text = self.text();
         }
