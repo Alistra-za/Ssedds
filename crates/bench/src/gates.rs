@@ -342,7 +342,7 @@ pub fn bc6h_veryslow(root: &Path) -> Result<GateReport> {
         for src in files {
             let stem = stem(&src);
             let img = load_f16(&src)?;
-            let enc = encode_bc6h_image(&img);
+            let enc = encode_bc6h_image(&img, encoders_sys::Bc6hLevel::Veryslow);
             let bench = std::fs::read(
                 root.join("out2/bc6_ispc_veryslow")
                     .join(set)

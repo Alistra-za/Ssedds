@@ -36,6 +36,18 @@ pub fn mpsnr(reference: &[[f32; 3]], decoded: &[[f32; 3]]) -> f64 {
     psnr_from_mse(mean(&mses))
 }
 
+/// RMSLE (run_bench2.py hdr_metrics): sqrt(mean((log1p(dec) - log1p(ref))^2)) over every RGB value.
+pub fn rmsle(reference: &[[f32; 3]], decoded: &[[f32; 3]]) -> f64 {
+    assert_eq!(reference.len(), decoded.len());
+    let sum: f64 = reference
+        .iter()
+        .zip(decoded)
+        .flat_map(|(r, d)| r.iter().zip(d))
+        .map(|(&r, &d)| ((d as f64).ln_1p() - (r as f64).ln_1p()).powi(2))
+        .sum();
+    (sum / (reference.len() * 3) as f64).sqrt()
+}
+
 pub fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len() as f64
 }
