@@ -606,6 +606,9 @@ pub struct AppModel {
     also_tail: Option<Option<String>>,
     /// `sdc.toml` was made read-only because the engine rejected it (not because it failed to parse).
     ignored_by_plan: bool,
+    /// Note FC14: `history.pushes` at the last `replan`, and, when a step was pushed since the one before, that count:
+    /// the step whose edit started this plan, the only one a rejected `sdc.toml` blames.
+    replan_pushes: (u64, Option<u64>),
     /// The export that was in the way of a close has ended; the window may close now (see `take_close_ready`).
     close_ready: bool,
     /// The engine inputs the latest plan was requested with (DECISIONS P1: two-pass planning).
@@ -794,6 +797,7 @@ impl AppModel {
             also_cancel: None,
             also_tail: None,
             ignored_by_plan: false,
+            replan_pushes: (0, None),
             close_ready: false,
             restart_needed: false,
             nvtt: None,
@@ -1247,6 +1251,10 @@ impl AppModel {
             c.cancel();
         }
         self.generation += 1;
+        // A re-plan with no step pushed since (a scan, a superseded plan) keeps the blame of the plan it replaces.
+        let (last, blame) = self.replan_pushes;
+        let pushes = self.history.pushes;
+        self.replan_pushes = (pushes, if pushes != last { Some(pushes) } else { blame });
         self.drop_pending_votes();
         let cancel = CancelToken::default();
         self.planning = Some(cancel.clone());
@@ -1409,7 +1417,11 @@ impl AppModel {
                 self.plan_progress = None;
                 self.opening = None;
                 match result {
-                    Ok(view) => self.apply_plan(view),
+                    Ok(view) => {
+                        // Note FC14: the edit planned fine; a later failure is not its fault.
+                        self.replan_pushes.1 = None;
+                        self.apply_plan(view)
+                    }
                     Err(f) => self.plan_failed(f),
                 }
             }
@@ -1464,12 +1476,14 @@ impl AppModel {
                 p.set_error(&f.message);
                 self.drop_undo_note();
                 // Note FC12 (supersedes BN1's clear): the history stays. The edit that failed is the top step, named
-                // with the error, and Undo takes it back (`apply_snapshot` lifts the blame first).
+                // with the error, and Undo takes it back (`apply_snapshot` lifts the blame first). Note FC14: only
+                // while that step's edit started this plan (nothing pushed since), never an older or later step.
+                let edit_on_top = self.replan_pushes.1 == Some(self.history.pushes);
                 if let Some(top) = self
                     .history
                     .undo
                     .last_mut()
-                    .filter(|c| !c.label.contains(REJECTED))
+                    .filter(|c| edit_on_top && !c.label.contains(REJECTED))
                 {
                     top.label = format!("{}{REJECTED}{})", top.label, f.message);
                 }
@@ -2845,6 +2859,12 @@ impl AppModel {
         // Note FC12: the step the plan rejected `sdc.toml` after: its document comes back (read-only no more), and
         // the step's `before` is restored into it. A document rejected when it loaded has no such step.
         if c.label.contains(REJECTED) {
+            // Note FC14: a Redo re-applies the edit, not the old blame.
+            if let Some(r) = self.history.redo.last_mut() {
+                if let Some(i) = r.label.find(REJECTED) {
+                    r.label.truncate(i);
+                }
+            }
             if let Some(p) = self.project.as_mut().filter(|p| p.blamed()) {
                 p.unblame();
                 self.ignored_by_plan = false;

@@ -111,6 +111,31 @@ fn a_config_error_keeps_undo() {
     assert!(!matches!(m.dialog, Some(Dialog::Error(_))));
     assert!(m.can_undo(), "the earlier step is still there");
     assert_eq!(m.undo_label(), Some("Mode"));
+    // Note FC14: Redo re-applies the edit, without the old blame in its name.
+    assert_eq!(m.redo_label(), Some("Set alpha threshold"));
+}
+
+/// Note FC14 (final review, minor): a plan no edit started (here a plain re-plan over a value put into `sdc.toml`
+/// without a step) blames no step: the top step keeps its name.
+#[test]
+fn a_config_error_no_edit_started_blames_no_step() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_target(Target::Vanilla);
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert_eq!(m.undo_label(), Some("Mode"));
+    let key = m.items[0].key.clone();
+    m.project
+        .as_mut()
+        .unwrap()
+        .set_file_value(&key, "alpha.threshold", &serde_json::json!(1000));
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(
+        m.project.as_ref().unwrap().read_only(),
+        "sdc.toml is blamed"
+    );
+    assert_eq!(m.undo_label(), Some("Mode"), "the step is not blamed");
 }
 
 #[test]
