@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use std::io::Read;
 
 /// Record and group headers are both 24 bytes.
-const HEADER: usize = 24;
+pub(crate) const HEADER: usize = 24;
 
 /// Nested groups entered under a CELL/WRLD top group; valid files use at most 5.
 const MAX_DEPTH: usize = 8;
@@ -21,7 +21,7 @@ pub(crate) fn u32_at(b: &[u8], o: usize) -> u32 {
     u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
 }
 
-fn sig_at(b: &[u8], o: usize) -> [u8; 4] {
+pub(crate) fn sig_at(b: &[u8], o: usize) -> [u8; 4] {
     [b[o], b[o + 1], b[o + 2], b[o + 3]]
 }
 
@@ -315,7 +315,7 @@ fn walk_placed(
 }
 
 /// u32 decompressed size + zlib stream → the record data.
-fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn inflate(raw: &[u8]) -> Result<Vec<u8>, String> {
     if raw.len() < 4 {
         return Err("compressed record shorter than its size field".into());
     }
