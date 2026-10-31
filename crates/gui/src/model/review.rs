@@ -199,7 +199,7 @@ impl AppModel {
     }
 
     /// FC11 (fix round 1): the JSON files with a hash record that this project no longer writes (AG90's PGPatcher JSON
-    /// under an earlier name or with no PBR set left, AD5's CS PBR JSON no block binds, AT3's complex-material JSON no
+    /// under an earlier name or off the CS target, AD5's CS PBR JSON no block binds, AT3's complex-material JSON no
     /// set writes), as `stale` rows. The recorded SHA-256 is their baseline: ours when the file still hashes to it.
     /// Run when a plan settles and after an export's JSON step, never per frame (it hashes the files).
     pub(crate) fn refresh_stale_json(&mut self) {
@@ -215,25 +215,35 @@ impl AppModel {
                 .to_string_lossy()
                 .into_owned()
         };
-        let pgp = match pbr_export::prepare(self).filter(|p| !p.entries.is_empty()) {
-            Some(p) => (
-                d.pgp_json_shas(),
-                p.root.clone(),
-                vec![rel(&p.root, &p.path)],
-            ),
-            None => (d.pgp_json_shas(), root.clone(), vec![]),
+        // Note FC14 (final review I2): the PGPatcher JSON's path is derived from its name, whatever `prepare` gives: a
+        // set undecided or blocked for now makes no entry, and the file PGPatcher reads must not get a Delete then.
+        // As `PendingJson.root`: the PBR folder while a tick is on, else the export folder.
+        let pgp_root = self.output_root();
+        let pgp_made = match self.target {
+            engine::config::Target::Cs => {
+                let name = format!("{}.json", pbr_export::json_name(self));
+                vec![rel(&pgp_root, &pgp_root.join("PBRNIFPatcher").join(name))]
+            }
+            _ => vec![],
         };
-        let files = |p: Option<(PathBuf, Vec<(String, String)>)>| match p {
-            Some((r, f)) => (r, f.into_iter().map(|(r, _)| r).collect()),
-            None => (root.clone(), vec![]),
-        };
-        let (cs_root, cs_made) = files(cs_pbr_export::prepare(self).map(|p| (p.root, p.files)));
-        let (cm_root, cm_made) = files(cm_json::prepare(self).map(|p| (p.root, p.files)));
-        let kinds = [
-            pgp,
-            (d.cs_pbr_shas(), cs_root, cs_made),
-            (d.cm_json_shas(), cm_root, cm_made),
-        ];
+        let mut kinds = vec![(d.pgp_json_shas(), pgp_root, pgp_made)];
+        // A refused CS file (a bad or shared EDID) keeps its record, as `cs_pbr_export::finish` does.
+        kinds.push(match cs_pbr_export::prepare(self) {
+            Some(p) => {
+                let made = p.files.into_iter().map(|(r, _)| r).chain(p.refused);
+                (d.cs_pbr_shas(), p.root, made.collect())
+            }
+            None => (d.cs_pbr_shas(), root.clone(), vec![]),
+        });
+        // A ticked set whose complex `_m` is undecided for now writes nothing this time: that kind is left out.
+        match cm_json::prepare(self) {
+            Some(p) if p.partial => {}
+            Some(p) => {
+                let made = p.files.into_iter().map(|(r, _)| r).collect();
+                kinds.push((d.cm_json_shas(), p.root, made));
+            }
+            None => kinds.push((d.cm_json_shas(), root.clone(), vec![])),
+        }
         for (shas, root, made) in kinds {
             let shas = records_at(&shas, &root);
             for path in super::history::orphans(&shas, &root, made.iter()) {

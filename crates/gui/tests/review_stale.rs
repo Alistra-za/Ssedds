@@ -201,6 +201,33 @@ fn a_pgpatcher_json_no_longer_made_is_listed_by_its_hash() {
     assert!(row(&m).is_none());
 }
 
+/// Note FC14 (final review I2): while the PBR set's diffuse is undecided again, `prepare` makes no entry, yet the
+/// JSON at the current name is still this project's: it is not listed (no Delete for the file PGPatcher reads).
+#[test]
+fn an_undecided_pbr_set_leaves_its_recorded_json_unlisted() {
+    use sdc_gui::model::items::ItemStatus;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    export_through(&mut m);
+    idle(&mut m);
+    let json = pgp_json_path(&m);
+    assert!(json.is_file());
+    m.set_shader(ROCK_SET, None);
+    idle(&mut m);
+    m.project
+        .as_mut()
+        .unwrap()
+        .clear_file_value("landscape/rock01.png", "subtype");
+    m.replan();
+    idle(&mut m);
+    assert_eq!(
+        m.item("landscape/rock01.png").map(|i| i.status.clone()),
+        Some(ItemStatus::NeedsDecision)
+    );
+    assert!(sdc_gui::model::pbr_export::prepare(&m).is_none_or(|p| p.entries.is_empty()));
+    assert!(m.stale.iter().all(|s| s.path != json), "{:?}", m.stale);
+}
+
 /// `pbr_opened_plain` with a relief normal, so Generate makes a height map; the shader pick is unsaved.
 fn relief_rock(d: &Path) -> AppModel {
     let mut m = pbr_opened_plain(d);

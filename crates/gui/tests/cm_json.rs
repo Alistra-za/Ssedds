@@ -662,7 +662,7 @@ fn a_member_whose_dds_is_missing_gets_a_note_and_no_json() {
     let p = PendingCm {
         root: d.path().to_path_buf(),
         files: vec![("textures/a/x_m.json".into(), to_text(&Map::new()))],
-        notes: vec![],
+        ..Default::default()
     };
     let mut n = vec![];
     let shas = finish(&p, &BTreeMap::new(), &mut n);
@@ -924,7 +924,7 @@ fn cm_pending(root: &Path, rel: &str, strength: f64) -> PendingCm {
             rel.into(),
             to_text(&obj(json!({ "specular_strength": strength }))),
         )],
-        notes: vec![],
+        ..Default::default()
     }
 }
 

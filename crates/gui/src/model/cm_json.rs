@@ -316,6 +316,9 @@ pub struct PendingCm {
     pub files: Vec<(String, String)>,
     /// Refused files and left-out keys, for the export report.
     pub notes: Vec<String>,
+    /// Note FC14: a ticked set writes no file this time (its complex `_m` is undecided, or a path is refused), so
+    /// the stale JSON rows leave this kind out.
+    pub partial: bool,
 }
 
 /// Design §6: one file per complex `_m` of every set whose export is ticked, on every target (D2). `Some` even when
@@ -343,6 +346,7 @@ pub fn prepare(m: &AppModel) -> Option<PendingCm> {
         }
         let mine: Vec<&CmTarget> = ts.iter().filter(|t| same_id(&t.set, &e.id)).collect();
         if mine.is_empty() {
+            p.partial = true;
             p.notes.push(format!(
                 "set {}: no complex _m; complex material JSON not written",
                 e.id
@@ -363,10 +367,13 @@ pub fn prepare(m: &AppModel) -> Option<PendingCm> {
         for t in mine {
             match &t.rel {
                 Ok(r) => p.files.push((r.clone(), text.clone())),
-                Err(why) => p.notes.push(format!(
-                    "{}: complex material JSON not written: {why}",
-                    t.name
-                )),
+                Err(why) => {
+                    p.partial = true;
+                    p.notes.push(format!(
+                        "{}: complex material JSON not written: {why}",
+                        t.name
+                    ));
+                }
             }
         }
     }
