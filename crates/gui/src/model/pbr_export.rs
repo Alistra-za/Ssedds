@@ -349,7 +349,7 @@ fn build_blocks(m: &AppModel) -> Vec<ExportIssue> {
         // to focus, else it keeps Go to set.
         let fix_path = |e: &str| {
             let field = e.split_once(':').map_or(e, |(f, _)| f);
-            // `rename` and `match1`-`match8` have boxes in the Advanced group's Match block.
+            // `rename` has its box in the Advanced group, `match1`-`match8` theirs in the main panel's Matching group.
             crate::pgp::prefix::is_path_key(field)
                 .then(|| Fix::FixPath(v.key.clone(), field.to_string()))
         };

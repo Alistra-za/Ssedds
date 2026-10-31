@@ -263,9 +263,9 @@ pub fn panel_main(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
 pub fn panel_advanced(ui: &mut egui::Ui, model: &mut AppModel, set: &str) {
     let c = context(model, set);
     let mut edits: Vec<Edit> = vec![];
-    // Note FC3 (P13): `Fix path` on a field in here opens the group (only while the one-shot request lives).
-    let asked = focus_request(ui.ctx())
-        .is_some_and(|(s, k)| s == c.set && crate::pgp::prefix::is_path_key(&k));
+    // Note FC3 (P13): `Fix path` on a field in here opens the group (only while the one-shot request lives). Of the
+    // path keys only `rename` is in here; `match1`-`match8` are in the main panel's Matching group (Note FC14).
+    let asked = focus_request(ui.ctx()).is_some_and(|(s, k)| s == c.set && k == "rename");
     super::group::group_with(
         ui,
         ("pgp-advanced", &c.set),
