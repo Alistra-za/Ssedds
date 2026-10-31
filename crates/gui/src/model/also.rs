@@ -336,7 +336,10 @@ impl AppModel {
         let Some(failure) = self.also_tail.take() else {
             return;
         };
-        self.export.running = None;
+        // Note GF8: a cancel in this phase abandons the queued NIF export, as one during the conversion does.
+        if self.export.running.take().is_some_and(|c| c.is_cancelled()) {
+            self.nif_export_queued = false;
+        }
         self.export.notes.extend(s.notes.iter().cloned());
         for z in &s.zips {
             self.export
@@ -551,6 +554,30 @@ mod tests {
         m.also_zipped(s);
         assert!(m.export.running.is_some(), "another export's token stays");
         assert!(!m.export.notes.contains(&"late".to_string()));
+    }
+
+    /// Note GF8: a cancel while the zips and report run (the re-armed token) abandons the queued NIF export, as a
+    /// cancel during the conversion does; app.rs writes NIF edits only on `take_nif_export_due`.
+    #[test]
+    fn a_cancel_while_zipping_makes_no_nif_export_due() {
+        let mut m = bare_model();
+        m.also_pass = true;
+        m.export.running = Some(Default::default());
+        m.export.running.as_ref().unwrap().cancel();
+        m.also_tail = Some(None);
+        m.nif_export_queued = true;
+        m.also_zipped(summary(None));
+        assert!(m.export.running.is_none());
+        assert!(
+            !m.take_nif_export_due(),
+            "a cancelled run writes no NIF edits"
+        );
+        // An uncancelled zip phase still hands the NIF export over.
+        m.export.running = Some(Default::default());
+        m.also_tail = Some(None);
+        m.nif_export_queued = true;
+        m.also_zipped(summary(None));
+        assert!(m.take_nif_export_due());
     }
 
     /// The worker tags its panic "export": an Also export's panic ends the export, so Export works again.
