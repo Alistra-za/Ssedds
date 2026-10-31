@@ -340,6 +340,20 @@ fn a_selected_set_the_filter_hides_is_named_with_a_clear_filter_button() {
     assert_eq!(h.state().selected_sets(), [leaf], "the selection stayed");
 }
 
+/// Fix round 1: a hidden selected set and a filter that hides every set draw one Clear filter button, not two.
+#[test]
+fn the_column_never_draws_two_clear_filter_buttons() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, [_, leaf, _]) = rock_leaf_odd(d.path());
+    m.select_set(&leaf);
+    m.sets_filter.search = "zzz".into();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("landscape/leaf is hidden by the Sets filter");
+    h.get_by_label_contains("No sets match the filter");
+    assert_eq!(h.query_all_by_label("Clear filter").count(), 1);
+}
+
 /// Note FC13 (CD16, supersedes "a new set stays hidden"): a set made while a filter is on is shown until the filter
 /// changes, and the column says so.
 #[test]
@@ -362,12 +376,14 @@ fn a_set_made_under_a_filter_stays_shown_until_the_filter_changes() {
     h.get_by_label("1 new set shown");
     // The next filter change ends it.
     h.state_mut().sets_filter.search = "roc".into();
+    h.state_mut().poll();
     h.run();
     h.run();
     assert!(!visible_ids(h.state()).contains(&id));
     assert!(h.query_by_label("1 new set shown").is_none());
     // And the old filter coming back does not bring it back.
     h.state_mut().sets_filter.search = "rock".into();
+    h.state_mut().poll();
     h.run();
     assert!(!visible_ids(h.state()).contains(&id));
 }

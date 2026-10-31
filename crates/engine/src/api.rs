@@ -1400,6 +1400,13 @@ impl Engine {
             member_split(&stem, set, registry.alias_table())
         };
         let gras = &req.gras_diffuses;
+        // A sub-type a `[files]` entry or `--set` gave the file picks its hints; else the name's suffix does.
+        let hints_of = |ctx: &ResolveCtx, f: &InputFile, split: &SuffixSplit| {
+            match crate::policy::subtype_override(ctx, f) {
+                Some(st) => crate::checks::hints_for_subtype(st, cache.checks),
+                None => crate::checks::hints_for(split.suffix.as_deref(), cache.checks),
+            }
+        };
         let resolve_one =
             |&(set, f): &(&TextureSet, &InputFile),
              admitted: Admitted<'_>,
@@ -1414,7 +1421,7 @@ impl Engine {
                 let split = split_for((set, f));
                 // Taken before the read, so a change made while it is loaded is seen as a change too.
                 let source = SourceStamp::of(&f.path);
-                let hints = crate::checks::hints_for(split.suffix.as_deref(), cache.checks);
+                let hints = hints_of(&ctx, f, &split);
                 let (a, info) = match source.and_then(|s| cache.file(&f.path, s, hints)) {
                     Some(hit) => {
                         drop(admitted);
@@ -1477,8 +1484,7 @@ impl Engine {
                 // DECISIONS AV4: a cache hit loads nothing, so it is admitted at 0 without reading its header.
                 // shortcut: a file changed between this check and its Load loads unadmitted; the next plan admits it.
                 let path = &item.1.path;
-                let hints =
-                    crate::checks::hints_for(split_for(*item).suffix.as_deref(), cache.checks);
+                let hints = hints_of(&ctx, item.1, &split_for(*item));
                 let cached =
                     SourceStamp::of(path).is_some_and(|s| cache.file(path, s, hints).is_some());
                 let est = if cached { 0 } else { estimated_bytes(path) };

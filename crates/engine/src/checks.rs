@@ -122,8 +122,7 @@ pub fn luma_code(r: u8, g: u8, b: u8) -> u8 {
 }
 
 /// What to measure for a texture whose canonical suffix is `suffix`; nothing when `checks` is off (the CLI).
-// shortcut: the hints follow the suffix the file had when first analysed, and the file cache is keyed by path and
-// stamp, so retyping a file does not re-measure it; key the cache by hints too if a retyped file must show its stats.
+// The file cache is keyed by path, stamp and these hints (Note DZ), so a different suffix measures again.
 pub fn hints_for(suffix: Option<&str>, checks: bool) -> AnalyseHints {
     if !checks {
         return AnalyseHints::default();
@@ -137,6 +136,18 @@ pub fn hints_for(suffix: Option<&str>, checks: bool) -> AnalyseHints {
             _ => None,
         },
     }
+}
+
+/// `hints_for` for a sub-type a `[files]` entry or `--set` gave a file (Note FC13, CL1/CL2): the suffix that
+/// sub-type would carry. A sub-type with no checked suffix measures the bands only.
+pub fn hints_for_subtype(subtype: Subtype, checks: bool) -> AnalyseHints {
+    let suffix = match subtype {
+        Subtype::Normal | Subtype::LandscapeNormal | Subtype::PbrNormal => Some("n"),
+        Subtype::Height => Some("p"),
+        Subtype::ComplexMaterial | Subtype::Envmask => Some("m"),
+        _ => None,
+    };
+    hints_for(suffix, checks)
 }
 
 /// Mean squared curl `∂q/∂x − ∂p/∂y` (central differences over interior texels only, so a map that does not tile

@@ -322,6 +322,11 @@ pub fn reencode_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {
         })
         .is_some_and(|o| o.value == Value::Bool(true))
 }
+/// The sub-type the highest-precedence `[files]` entry or `--set` gives this input, if any (Note FC13: the analysis
+/// hints follow it).
+pub fn subtype_override(ctx: &ResolveCtx, input: &InputFile) -> Option<crate::config::Subtype> {
+    selector_value(ctx, input, "subtype").and_then(|v| serde_json::from_value(v.clone()).ok())
+}
 /// Whether a `[files]` entry or file-scoped `--set` names this input's sub-type (any value). Trace-debug 2026-10-16
 /// #4: a raw map given one is an ordinary file (spec §4.4) and names no packing role.
 pub fn subtype_requested(ctx: &ResolveCtx, input: &InputFile) -> bool {

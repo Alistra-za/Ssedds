@@ -1,4 +1,6 @@
 //! Task 14b (DECISIONS AG121-AG125): per-key drag speed and display precision for the PGPatcher numbers.
+mod support;
+use egui_kittest::kittest::Queryable;
 use sdc_gui::pgp::schema::{spec, KeyKind, KEYS};
 use sdc_gui::pgp::settings::GLINT_DEFAULTS;
 
@@ -103,6 +105,39 @@ fn a_rounded_value_shows_its_stored_value_on_hover() {
     // A whole-number display rounds too.
     assert_eq!(drag("alphaprop_thresh").format(4.525), "5");
     assert!(drag("alphaprop_thresh").stored_hover(4.525).is_some());
+}
+
+/// Fix round 1: through the card, the box shows the rounded value and the hover gives the stored one.
+#[test]
+fn the_card_shows_the_rounded_value_and_hovers_the_stored_one() {
+    const SET: &str = "landscape/rock01";
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened(d.path());
+    let key = m
+        .sets
+        .iter()
+        .find(|s| s.key.ends_with(SET))
+        .unwrap()
+        .key
+        .clone();
+    m.select_set(&key);
+    m.set_json_value(SET, "roughness_scale", Some(serde_json::json!(0.123_456)));
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(eframe::egui::vec2(700.0, 1100.0))
+        .build_ui_state(
+            |ui, m: &mut sdc_gui::model::AppModel| sdc_gui::ui::pgp_fields::panel(ui, m, SET),
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    h.get_by_value("0.12").hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("Stored value: 0.123456");
 }
 
 /// DECISIONS AG123: no GUI default sits outside the observed p1-p99 band (pgp-numeric-stats.csv).

@@ -463,16 +463,15 @@ fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
 }
 
 /// Note FC13: one line when the filter hides the selected set (CD13), one when a set made under it is shown (CD16).
-fn filter_strips(ui: &mut egui::Ui, model: &mut AppModel, views: &[crate::model::sets::SetView]) {
-    // A changed filter ends the exception for good: the old filter coming back does not revive it.
-    if model
-        .new_sets
-        .as_ref()
-        .is_some_and(|(f, _)| *f != model.sets_filter)
-    {
-        model.new_sets = None;
-    }
+/// Returns whether its own **Clear filter** button is drawn, so the "No sets match" line adds no second one.
+fn filter_strips(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    views: &[crate::model::sets::SetView],
+) -> bool {
+    let mut button = false;
     if let Some(id) = model.selected_set_hidden_by_filter() {
+        button = true;
         let text = format!("{id} is hidden by the Sets filter");
         let clear = egui::Sides::new()
             .shrink_left()
@@ -497,6 +496,7 @@ fn filter_strips(ui: &mut egui::Ui, model: &mut AppModel, views: &[crate::model:
         ui.weak(format!("{n} new set{s} shown"))
             .on_hover_text("A set made while a filter is on stays shown until the filter changes");
     }
+    button
 }
 
 pub fn draw(
@@ -529,12 +529,13 @@ pub fn draw(
     };
     let views = crate::model::sets::views(model);
     let visible = model.visible_sets();
-    filter_strips(ui, model, &views);
+    let has_clear = filter_strips(ui, model, &views);
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
     } else if visible.is_empty() && filtering && !views.is_empty() {
         ui.label(format!("No sets match the filter ({} hidden)", views.len()));
-        if ui.button("Clear filter").clicked() {
+        // One Clear filter in the column (ui-rules 8.4): the strip above already has it.
+        if !has_clear && ui.button("Clear filter").clicked() {
             model.clear_sets_filter();
         }
     }

@@ -1356,6 +1356,14 @@ impl AppModel {
     /// Drain worker messages. True when anything changed (the UI repaints).
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        // Note FC13 (CD16): a changed filter ends the "new set stays shown" record for good.
+        if self
+            .new_sets
+            .as_ref()
+            .is_some_and(|(f, _)| *f != self.sets_filter)
+        {
+            self.new_sets = None;
+        }
         // Note FC5 (GD2): the NIF footer's `Review…` only sets the flag; the next poll opens Review.
         if std::mem::take(&mut self.open_review_request) {
             self.open_review();

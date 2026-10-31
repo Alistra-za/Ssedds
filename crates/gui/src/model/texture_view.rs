@@ -95,7 +95,7 @@ impl ColumnPrefs {
     pub const TILE_RANGE: (f32, f32) = (64.0, 192.0);
     pub const TILE_DEFAULT: f32 = 96.0;
     /// The thumbnail's long side in pixels (`session::THUMB_MAX`, AV2).
-    pub const THUMB_PX: f32 = 128.0;
+    pub const THUMB_PX: f32 = engine::session::THUMB_MAX as f32;
 
     /// Note FC13 (AV2): the largest tile the buttons step to. Past it the thumbnail is drawn bigger than its pixels,
     /// so it is 128 points at 100 % and `128 / pixels_per_point` on a scaled screen, never below the default tile.

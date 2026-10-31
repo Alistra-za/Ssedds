@@ -378,6 +378,25 @@ fn in_split_the_overlay_is_laid_out_on_the_viewport_and_clipped_to_the_source_si
     );
 }
 
+/// Note FC13 (CL28): a texture with no per-texel range warning has a greyed Range toggle that says why on hover.
+#[test]
+fn a_greyed_range_toggle_says_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_wall(d.path(), PLAIN, CLEAN_RMAOS);
+    m.expand("test/wall.png");
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = harness(m);
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    h.get_by_label("Range overlay").hover();
+    h.run();
+    h.run();
+    h.get_by_label_contains("no value-range warning");
+}
+
 /// Review M3: while a pin is compared the source pane is the pin, so the toggle is disabled and says why.
 #[test]
 fn the_range_toggle_is_disabled_while_comparing_a_pin() {
