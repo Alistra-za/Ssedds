@@ -167,7 +167,11 @@ A cube DDS goes through the same size, filter, blur and format settings as any o
 
 ![Six one-pixel faces. +X holds a colour with roughness in alpha; +Y and every other face is black.](../img/cube-marker.svg)
 
-Community Shaders (and ENB) read a 1×1 cube whose +Y is black as an instruction to reflect the live scene, not as a picture. The +X pixel then sets the reflection's colour (RGB) and roughness (alpha). Write one on purpose:
+Community Shaders (and ENB) read a 1×1 cube whose +Y is black as an instruction to reflect the live scene, not a picture, this is a dynamic cubemap. 
+For Community Shaders only, The +X pixel then sets the reflection's colour (RGB) and roughness (alpha). 
+For ENB PG Patcher already applies a dynamic cubemap with all features ENB supports.
+
+Cli write command:
 
 ```text
 sdc cubemap-marker --color 200,200,210 --roughness 0.3 -o textures\cubemaps\steel_e.dds
