@@ -2,7 +2,7 @@
 //! levels, offered only for a texture with a per-texel CHK-RANGE warning, and polled through `v2_jobs_pending()`.
 mod support;
 use eframe::egui;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use engine::codes::Code;
 use engine::image::Rgba32F;
@@ -79,19 +79,23 @@ fn range_toggle_shown(albedo: u8, rmaos: [u8; 3]) -> (bool, Vec<String>) {
     let offered = m.range_overlay_offered("test/wall.png");
     let mut h = harness(m);
     h.run();
-    let shown = h.query_by_label("Range overlay").is_some();
+    // Note FC13 (CL28): the toggle is drawn for every texture; it is enabled only when a range rule applies.
+    let node = h
+        .query_by_label("Range overlay")
+        .expect("the Range toggle is drawn for every texture");
+    let shown = !node.accesskit_node().is_disabled();
     assert_eq!(shown, offered, "the toggle follows range_overlay_offered");
     (shown, rules)
 }
 
 #[test]
-fn the_range_button_shows_only_for_textures_with_a_range_warning() {
+fn the_range_button_is_drawn_for_every_texture_and_enabled_only_with_a_range_warning() {
     let (shown, rules) = range_toggle_shown(DARK, CLEAN_RMAOS);
     assert_eq!(rules, ["albedo_luma"]);
     assert!(shown, "a dark albedo offers the overlay");
     let (shown, rules) = range_toggle_shown(PLAIN, CLEAN_RMAOS);
     assert!(rules.is_empty());
-    assert!(!shown, "a plain albedo has no Range button");
+    assert!(!shown, "a plain albedo's Range button is greyed");
     let (shown, rules) = range_toggle_shown(100, METAL_RMAOS);
     assert_eq!(rules, ["dark_metal"]);
     assert!(!shown, "dark metal is not a per-texel rule");

@@ -296,8 +296,12 @@ fn blended_preview(ui: &mut egui::Ui, model: &mut AppModel, key: &str) {
         ui.add(
             egui::Image::new(&tex).fit_to_exact_size(egui::vec2(t.width as f32, t.height as f32)),
         );
-    } else if model.rnm_preview_failed(key) {
-        ui.weak("Preview unavailable: a layer could not be read.");
+    } else if let Some(why) = model.rnm_preview_failed(key) {
+        ui.add(
+            egui::Label::new(egui::WidgetText::from(format!("Preview unavailable: {why}")).weak())
+                .truncate(),
+        )
+        .on_hover_text(format!("Preview unavailable: {why}"));
     } else {
         ui.weak("Blending…");
     }

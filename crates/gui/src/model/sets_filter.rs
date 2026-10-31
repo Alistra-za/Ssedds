@@ -48,6 +48,7 @@ impl PartialEq for CountsKey {
 struct ListKey {
     of: CountsKey,
     filter: SetsFilter,
+    new_sets: Vec<String>,
 }
 
 /// Whether the set writes a JSON: a complex-material export (A8), or a PBR Landscape set's CS records or PGPatcher
@@ -84,6 +85,7 @@ impl AppModel {
         let key = ListKey {
             of: self.sets_counts_key(),
             filter: self.sets_filter.clone(),
+            new_sets: self.new_sets_shown().to_vec(),
         };
         if let Some((k, l)) = &self.sets_filter_cache.borrow().list {
             if *k == key {
@@ -105,14 +107,16 @@ impl AppModel {
                 .iter()
                 .enumerate()
                 .filter(|(_, v)| {
-                    // A created set with no key passes only an empty filter.
-                    !v.key.is_empty()
-                        && (q.is_empty() || engine::sets::fold_id(&v.id).contains(&q))
-                        && (!f.attention || !bottom::set_ready_in(&flagged, v))
-                        && (!f.ready || bottom::set_ready_in(&flagged, v))
-                        && (!f.no_json || !writes_json_in(self, &entries, v))
-                        && f.shader
-                            .is_none_or(|s| v.shader.as_ref().map(|p| p.shader) == Some(s))
+                    // A created set with no key passes only an empty filter, and a set created under this filter
+                    // stays shown until the filter changes (Note FC13, CD16).
+                    key.new_sets.contains(&v.id)
+                        || !v.key.is_empty()
+                            && (q.is_empty() || engine::sets::fold_id(&v.id).contains(&q))
+                            && (!f.attention || !bottom::set_ready_in(&flagged, v))
+                            && (!f.ready || bottom::set_ready_in(&flagged, v))
+                            && (!f.no_json || !writes_json_in(self, &entries, v))
+                            && f.shader
+                                .is_none_or(|s| v.shader.as_ref().map(|p| p.shader) == Some(s))
                 })
                 .map(|(n, _)| n)
                 .collect()
@@ -151,6 +155,33 @@ impl AppModel {
     pub fn sets_filter_active(&self) -> bool {
         let f = &self.sets_filter;
         f.attention || f.ready || f.no_json || f.shader.is_some() || !f.search.trim().is_empty()
+    }
+
+    /// Note FC13 (CD16): remember a set created while the filter is on; it stays shown until the filter changes.
+    pub(super) fn note_new_set(&mut self, id: &str) {
+        if !self.sets_filter_active() {
+            return;
+        }
+        match &mut self.new_sets {
+            Some((f, ids)) if *f == self.sets_filter => ids.push(id.to_string()),
+            n => *n = Some((self.sets_filter.clone(), vec![id.to_string()])),
+        }
+    }
+
+    /// The ids of sets created under the filter now on (empty once the filter has changed).
+    pub fn new_sets_shown(&self) -> &[String] {
+        match &self.new_sets {
+            Some((f, ids)) if *f == self.sets_filter && self.sets_filter_active() => ids,
+            _ => &[],
+        }
+    }
+
+    /// Note FC13 (CD13): the id of the one selected set when the filter hides it ("Go to set" leaves the filter on).
+    pub fn selected_set_hidden_by_filter(&self) -> Option<String> {
+        let [key] = self.selected_sets().try_into().ok()?;
+        let views = sets::views(self);
+        let i = views.iter().position(|v| v.key == key)?;
+        (!self.visible_sets().contains(&i)).then(|| views[i].id.clone())
     }
 
     /// "Clear filter": the pills, the shader and the search.

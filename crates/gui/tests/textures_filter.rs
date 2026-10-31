@@ -404,7 +404,10 @@ fn the_filter_popup_holds_the_combos_and_the_tile_buttons_step_by_16() {
     h.run();
     assert_eq!(h.state().prefs.tile, ColumnPrefs::TILE_DEFAULT);
     // Each button is disabled at its end of the range.
-    let (lo, hi) = ColumnPrefs::TILE_RANGE;
+    // Note FC13 (AV2): the Larger button stops at the thumbnail's pixels, 128 points at 100 %.
+    let lo = ColumnPrefs::TILE_RANGE.0;
+    let hi = ColumnPrefs::tile_cap(1.0);
+    assert_eq!(hi, 128.0);
     h.state_mut().prefs.tile = hi;
     h.run();
     assert!(h
@@ -427,11 +430,24 @@ fn the_filter_popup_holds_the_combos_and_the_tile_buttons_step_by_16() {
     h.get_by_label("Larger tiles").click();
     h.run();
     assert_eq!(h.state().prefs.tile, 116.0);
-    h.state_mut().prefs.tile = 185.0;
+    h.state_mut().prefs.tile = 120.0;
     h.run();
     h.get_by_label("Larger tiles").click();
     h.run();
     assert_eq!(h.state().prefs.tile, hi);
+    // A saved size over the cap loads as it is; Larger is off and Smaller steps down from there.
+    h.state_mut().prefs.tile = 185.0;
+    h.run();
+    assert!(h
+        .get_by_label("Larger tiles")
+        .accesskit_node()
+        .is_disabled());
+    h.get_by_label("Smaller tiles").click();
+    h.run();
+    assert_eq!(h.state().prefs.tile, 169.0);
+    // A scaled screen caps lower, never below the default tile.
+    assert_eq!(ColumnPrefs::tile_cap(1.5), ColumnPrefs::TILE_DEFAULT);
+    assert_eq!(ColumnPrefs::tile_cap(0.75), 170.0);
 }
 
 #[test]

@@ -129,7 +129,7 @@ fn a_result_for_settings_that_changed_meanwhile_is_dropped() {
         m.rnm_preview_image(N).is_none(),
         "the stale result is not shown"
     );
-    assert!(!m.rnm_preview_failed(N));
+    assert!(m.rnm_preview_failed(N).is_none());
     m.rnm_preview_frame(N);
     assert!(
         m.rnm_preview_pending(),
@@ -138,6 +138,31 @@ fn a_result_for_settings_that_changed_meanwhile_is_dropped() {
     settle(&mut m);
     assert!(m.rnm_preview_image(N).is_some());
     assert_eq!(m.rnm_preview.started, 2);
+}
+
+/// Note FC13 (AG116): "Preview unavailable" names the reason.
+#[test]
+fn a_failed_preview_says_why() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path());
+    std::fs::remove_file(d.path().join("m/iron_n.png")).unwrap();
+    m.rnm_preview_frame(N);
+    settle(&mut m);
+    let why = m.rnm_preview_failed(N).expect("the blend failed");
+    assert!(!why.trim().is_empty(), "a reason");
+    m.select_item(N);
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| {
+                model.poll();
+                sdc_gui::ui::draw(ui, model)
+            },
+            m,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(6);
+    h.get_by_label(&format!("Preview unavailable: {why}"));
 }
 
 #[test]

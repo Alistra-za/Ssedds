@@ -133,6 +133,11 @@ impl DragSpec {
         let p = 10f64.powi(self.decimals as i32);
         format!("{:?}", (v * p).round() / p)
     }
+
+    /// Note FC13 (AG121): the full stored value for the box's hover, only when `format` rounds it.
+    pub fn stored_hover(self, v: f64) -> Option<String> {
+        (self.format(v).parse::<f64>() != Ok(v)).then(|| format!("Stored value: {v:?}"))
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KeySpec {

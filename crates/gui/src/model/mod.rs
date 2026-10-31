@@ -343,6 +343,9 @@ pub struct AppModel {
     pub scan_store_unsettled: bool,
     /// What `scan_store_unsettled` was when the running scan started (Note CW2: an error raised before `begin_scan` restores it).
     unsettled_before_scan: bool,
+    /// Note FC13 (CL32 M6): a Meshes scan is running now, between `scan_started` and `scan_finished`; with
+    /// `scan_store_unsettled` and no run, the last scan was stopped. Read by the UV coverage reasons.
+    pub scan_running: bool,
     /// `scan_db`'s stamp, taken once per frame in `poll` (REPORT #9: `view_key` does not stat it per call).
     scan_stamp: cs_pbr::Stamp,
     /// The last scan-database read error logged (audit GM-5: each distinct error once).
@@ -434,6 +437,8 @@ pub struct AppModel {
     pub search: String,
     /// The Sets column's search and filters (layout v2, R17).
     pub sets_filter: sets_filter::SetsFilter,
+    /// Note FC13 (CD16): the filter that was on when sets were created, and their ids; shown until it changes.
+    pub(crate) new_sets: Option<(sets_filter::SetsFilter, Vec<String>)>,
     pub(crate) sets_filter_cache: std::cell::RefCell<sets_filter::SetsFilterCache>,
     pub status_line: String,
     /// Item 20: the toasts and the Messages log (DECISIONS AG112-AG114); every status-line note also lands here.
@@ -674,6 +679,7 @@ impl AppModel {
             scan_db: None,
             scan_store_unsettled: false,
             unsettled_before_scan: false,
+            scan_running: false,
             scan_stamp: None,
             scan_db_error: None,
             mesh_votes: Default::default(),
@@ -722,6 +728,7 @@ impl AppModel {
             texture_cache: Default::default(),
             search: String::new(),
             sets_filter: Default::default(),
+            new_sets: None,
             sets_filter_cache: Default::default(),
             status_line: String::new(),
             messages: Default::default(),
@@ -1115,6 +1122,7 @@ impl AppModel {
     pub fn scan_started(&mut self) {
         self.unsettled_before_scan = self.scan_store_unsettled;
         self.scan_store_unsettled = true;
+        self.scan_running = true;
         // A read in flight may see the disabled origins: the same read again lands the kept evidence at once and
         // makes the worker's answer stale (it keeps its `after_plan` tail).
         if let Some((_, after_plan)) = self.votes_pending {
@@ -1125,6 +1133,7 @@ impl AppModel {
     /// The scan ended. `completed`: it finished; `store_untouched`: it stopped before `begin_scan` because PGPatcher
     /// is running, so the store still holds what it held before (not Busy: another scan is mid-flight; Note CW2).
     pub fn scan_finished(&mut self, completed: bool, store_untouched: bool) {
+        self.scan_running = false;
         self.scan_store_unsettled = if store_untouched {
             self.unsettled_before_scan
         } else {

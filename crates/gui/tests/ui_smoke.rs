@@ -661,7 +661,7 @@ fn toolbar_node(h: &Harness<'static, AppModel>, label: &str, contains: bool) -> 
 }
 
 /// K9/K10: the toolbar's controls in reading order (row, then x).
-const TOOLBAR_ORDER: [(&str, bool); 23] = [
+const TOOLBAR_ORDER: [(&str, bool); 24] = [
     ("Channels", false),
     ("RGBA", false),
     ("R", false),
@@ -676,7 +676,8 @@ const TOOLBAR_ORDER: [(&str, bool); 23] = [
     ("Heatmap", false),
     ("Lens", false),
     ("Tile 3×3", false),
-    // K7: drawn for every texture, enabled or not (Task 8).
+    // K7: both overlay toggles are drawn for every texture, enabled or not (Task 8; Note FC13 for Range).
+    ("Range overlay", false),
     ("UV coverage overlay", false),
     ("Fit", false),
     ("1:1", false),
@@ -719,8 +720,8 @@ fn expanded_at(width: f32, advanced: bool) -> (Harness<'static, AppModel>, tempf
     (h, d)
 }
 
-/// `extra`: conditional controls drawn after "Tile 3×3" and before "UV coverage overlay" (K7: the Range overlay
-/// toggle), by AccessKit name.
+/// `extra`: conditional controls drawn after "Tile 3×3" and before the overlay toggles, by AccessKit name (none now:
+/// Note FC13 draws the Range toggle for every texture, so it is in `TOOLBAR_ORDER`).
 fn assert_toolbar_layout(h: &Harness<'static, AppModel>, extra: &[&str]) {
     let bar = toolbar_rect(h);
     let tile = TOOLBAR_ORDER
@@ -804,7 +805,7 @@ fn the_toolbar_pin_holds_with_the_range_toggle() {
             );
         sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
         h.run();
-        assert_toolbar_layout(&h, &["Range overlay"]);
+        assert_toolbar_layout(&h, &[]);
     }
 }
 
@@ -847,7 +848,7 @@ fn the_toolbar_pin_holds_with_the_uv_toggle() {
                     .is_disabled(),
                 !scan
             );
-            assert_toolbar_layout(&h, &["Range overlay"]);
+            assert_toolbar_layout(&h, &[]);
         }
     }
 }

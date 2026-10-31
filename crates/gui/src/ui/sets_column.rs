@@ -462,6 +462,43 @@ fn filter_rows(ui: &mut egui::Ui, model: &mut AppModel) {
     });
 }
 
+/// Note FC13: one line when the filter hides the selected set (CD13), one when a set made under it is shown (CD16).
+fn filter_strips(ui: &mut egui::Ui, model: &mut AppModel, views: &[crate::model::sets::SetView]) {
+    // A changed filter ends the exception for good: the old filter coming back does not revive it.
+    if model
+        .new_sets
+        .as_ref()
+        .is_some_and(|(f, _)| *f != model.sets_filter)
+    {
+        model.new_sets = None;
+    }
+    if let Some(id) = model.selected_set_hidden_by_filter() {
+        let text = format!("{id} is hidden by the Sets filter");
+        let clear = egui::Sides::new()
+            .shrink_left()
+            .truncate()
+            .show(
+                ui,
+                |ui| {
+                    ui.add(egui::Label::new(&text).truncate())
+                        .on_hover_text(&text);
+                },
+                |ui| ui.button("Clear filter").clicked(),
+            )
+            .1;
+        if clear {
+            model.clear_sets_filter();
+        }
+    }
+    let new = model.new_sets_shown();
+    let n = views.iter().filter(|v| new.contains(&v.id)).count();
+    if n > 0 {
+        let s = if n == 1 { "" } else { "s" };
+        ui.weak(format!("{n} new set{s} shown"))
+            .on_hover_text("A set made while a filter is on stays shown until the filter changes");
+    }
+}
+
 pub fn draw(
     ui: &mut egui::Ui,
     model: &mut AppModel,
@@ -492,6 +529,7 @@ pub fn draw(
     };
     let views = crate::model::sets::views(model);
     let visible = model.visible_sets();
+    filter_strips(ui, model, &views);
     if views.is_empty() && model.root.is_some() && !model.busy() {
         ui.weak("No sets.");
     } else if visible.is_empty() && filtering && !views.is_empty() {

@@ -25,8 +25,8 @@ pub struct RnmPreview {
     running: Option<(u64, String)>,
     /// The item whose section was drawn last; its current settings are what a landing result must match.
     item: Option<String>,
-    /// On show: (item key, the key it was made for, the picture; `None` = the blend failed).
-    shown: Option<(String, String, Option<Arc<RnmThumb>>)>,
+    /// On show: (item key, the key it was made for, the picture or why the blend failed).
+    shown: Option<(String, String, Result<Arc<RnmThumb>, String>)>,
     /// The key of the item last asked about, by plan revision.
     key_cache: Option<(u64, String, Option<String>)>,
     /// Jobs started so far (tests).
@@ -121,14 +121,17 @@ impl AppModel {
             // A panic is this job's "no picture" (trace-debug #26), so its key is not retried every frame.
             let image = or_send(
                 tx,
-                || render(&job).ok().map(Arc::new),
-                |_| WorkerMsg::RnmPreview { id, image: None },
+                || render(&job).map(Arc::new),
+                |why| WorkerMsg::RnmPreview {
+                    id,
+                    image: Err(why),
+                },
             );
             let _ = tx.send(WorkerMsg::RnmPreview { id, image });
         });
     }
 
-    pub(super) fn rnm_preview_landed(&mut self, id: u64, image: Option<Arc<RnmThumb>>) {
+    pub(super) fn rnm_preview_landed(&mut self, id: u64, image: Result<Arc<RnmThumb>, String>) {
         let now = self.rnm_preview.item.clone().and_then(|it| {
             let job = self.item(&it)?.job.as_ref()?;
             key_of(&it, job)
@@ -152,14 +155,12 @@ impl AppModel {
     /// The picture on show for `item_key` (made for its settings of a moment ago while a newer one is in flight).
     pub fn rnm_preview_image(&self, item_key: &str) -> Option<Arc<RnmThumb>> {
         let (item, _, image) = self.rnm_preview.shown.as_ref()?;
-        (item == item_key).then(|| image.clone()).flatten()
+        (item == item_key).then(|| image.clone().ok()).flatten()
     }
 
-    /// The blend failed for the settings on show (the section says so).
-    pub fn rnm_preview_failed(&self, item_key: &str) -> bool {
-        self.rnm_preview
-            .shown
-            .as_ref()
-            .is_some_and(|(item, _, image)| item == item_key && image.is_none())
+    /// Why the blend failed for the settings on show (the section says so; Note FC13, AG116).
+    pub fn rnm_preview_failed(&self, item_key: &str) -> Option<String> {
+        let (item, _, image) = self.rnm_preview.shown.as_ref()?;
+        image.as_ref().err().filter(|_| item == item_key).cloned()
     }
 }

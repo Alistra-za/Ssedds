@@ -716,6 +716,10 @@ pub(crate) fn control(
             let r = ui
                 .horizontal(|ui| {
                     let r = ui.add(drag);
+                    let r = match stored.and_then(|s| k.drag.stored_hover(s)) {
+                        Some(t) => r.on_hover_text(t),
+                        None => r,
+                    };
                     let stored_outside = stored.is_some_and(|s| range.clamp(s) != s);
                     // `Any` has no note and never clamps.
                     if (typed_outside.get() || stored_outside) && !range.note().is_empty() {

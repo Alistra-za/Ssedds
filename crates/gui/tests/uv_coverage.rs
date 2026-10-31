@@ -564,8 +564,9 @@ use std::time::Duration;
 
 const SCAN_FIRST: &str = "Scan your MO2 instance in the Meshes view first";
 const COLOUR_ONLY: &str = "Only colour textures on meshes have UV coverage";
-const UNSETTLED: &str =
-    "A Meshes scan is running or was stopped: wait for it to finish, or scan again";
+// Note FC13 (CL32 M6): a running scan and a stopped one read differently.
+const RUNNING: &str = "Wait for the Meshes scan to finish";
+const STOPPED: &str = "The Meshes scan was stopped: scan again to check UV coverage";
 const WALL: &str = "a/wall.png";
 
 /// A scan DB whose one winning NIF (the nif crate's skinned fixture) names `TEX` in every shape with UVs.
@@ -721,7 +722,14 @@ fn uv_is_not_offered_while_a_meshes_scan_is_unsettled() {
     m.scan_db = Some(db.clone());
     m.open_folder(d.path().join("textures"));
     assert!(m.wait_idle(Duration::from_secs(60)));
-    assert_eq!(m.uv_offered(WALL), Err(UNSETTLED));
+    assert_eq!(m.uv_offered(WALL), Err(STOPPED), "unsettled, not running");
+    // Note FC13: the same store while a scan runs reads "wait"; a scan that ends without completing reads "stopped".
+    m.scan_started();
+    assert_eq!(m.uv_offered(WALL), Err(RUNNING));
+    assert_eq!(m.uv_check_all_offered(), Err(RUNNING));
+    m.scan_finished(false, false);
+    assert_eq!(m.uv_offered(WALL), Err(STOPPED));
+    assert_eq!(m.uv_check_all_offered(), Err(STOPPED));
     assert!(m.uv_coverage(WALL).is_none());
     assert!(!m.v2_jobs_pending());
     // A running scan changes the stamp: no probe starts while unsettled.

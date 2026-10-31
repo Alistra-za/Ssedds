@@ -295,6 +295,49 @@ fn the_match_selector_is_per_project() {
     );
 }
 
+/// Note FC13 (FC12 extra): the "All slots" tick is per project too, so it does not carry to another folder's set with
+/// the same id.
+#[test]
+fn the_all_slots_tick_is_per_project() {
+    use egui_kittest::kittest::NodeT;
+    let (_d, mut h) = harness();
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+    h.run();
+    h.get_by_label(sdc_gui::ui::input_name::ALL_SLOTS).click();
+    h.run();
+    assert_eq!(
+        h.get_by_label(sdc_gui::ui::input_name::ALL_SLOTS)
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::True)
+    );
+    let d2 = tempfile::tempdir().unwrap();
+    let mut m2 = pbr_opened(d2.path());
+    let key = json_entries(&m2)
+        .into_iter()
+        .find(|(v, _)| v.id == ROCK_SET)
+        .unwrap()
+        .0
+        .key;
+    m2.select_set(&key);
+    h.state_mut().0 = m2;
+    h.run();
+    // The list may still be open from before the swap.
+    if h.query_by_label(sdc_gui::ui::input_name::ALL_SLOTS)
+        .is_none()
+    {
+        h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+        h.run();
+    }
+    assert_eq!(
+        h.get_by_label(sdc_gui::ui::input_name::ALL_SLOTS)
+            .accesskit_node()
+            .toggled(),
+        Some(egui::accesskit::Toggled::False),
+        "the other folder starts unticked"
+    );
+}
+
 #[test]
 fn tab_accepts_the_ghost_and_with_no_ghost_moves_focus() {
     let (_d, mut h) = harness();

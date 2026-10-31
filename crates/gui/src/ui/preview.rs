@@ -23,6 +23,7 @@ pub const PREVIEW_MIN: f32 = 480.0;
 pub const WIDE_WINDOW: f32 = 1280.0;
 /// Why Heatmap and Tile 3×3 are off for a cube (the cross is 4×3 faces, with no source image of that shape).
 const NOT_FOR_CUBES: &str = "Not for cubes";
+const NO_RANGE_WARNING: &str = "This texture has no value-range warning to paint";
 const GAP: f32 = 6.0;
 const DIVIDER_GRAB: f32 = 10.0;
 const PANE_BG: Color32 = Color32::from_gray(38);
@@ -356,21 +357,25 @@ fn view_cluster(ui: &mut egui::Ui, model: &mut AppModel, info: &Info, requests: 
             model.view.face_labels = !on;
         }
     }
-    // Only for a texture with a per-texel value-range warning (owner, spec "Value-range overlay").
-    if model
-        .expanded
-        .as_deref()
-        .is_some_and(|k| model.range_overlay_offered(k))
+    // Drawn for every texture and greyed with the reason, as UV coverage is (Note FC13, CL28 supersedes the "only
+    // with a per-texel value-range warning" rule).
     {
-        let on = model.view.overlay == Some(OverlayKind::Range);
+        let offered = model
+            .expanded
+            .as_deref()
+            .is_some_and(|k| model.range_overlay_offered(k));
+        let on = offered && model.view.overlay == Some(OverlayKind::Range);
         // Review M3: the overlay is drawn on the source pane, which a compared pin replaces.
+        let comparing = model.comparing_pin();
+        let why = if !offered {
+            NO_RANGE_WARNING
+        } else {
+            "Hidden while comparing"
+        };
         let r = ui
-            .add_enabled(
-                !model.comparing_pin(),
-                egui::Button::selectable(on, "Range"),
-            )
+            .add_enabled(offered && !comparing, egui::Button::selectable(on, "Range"))
             .on_hover_text("Paint the source texels outside the expected value range in magenta")
-            .on_disabled_hover_text("Hidden while comparing");
+            .on_disabled_hover_text(why);
         // ui-rules 8.4: distinct from any other "Range".
         r.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::Button, r.enabled(), on, "Range overlay")

@@ -105,10 +105,10 @@ pub enum WorkerMsg {
         stamp: crate::model::cs_pbr::Stamp,
         rows: bool,
     },
-    /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); `None` when the blend failed.
+    /// The RNM blended thumbnail of job `id` (`AppModel::rnm_preview_frame`); the reason when the blend failed.
     RnmPreview {
         id: u64,
-        image: Option<Arc<crate::model::rnm_preview::RnmThumb>>,
+        image: Result<Arc<crate::model::rnm_preview::RnmThumb>, String>,
     },
     /// A Generate-from-normal job `id` ended (`AppModel::gen_frame` previews, `gen_generate` writes); a stale id is
     /// dropped on landing.

@@ -313,6 +313,65 @@ fn the_selection_summary_counts_the_hidden_sets() {
     );
 }
 
+/// Note FC13 (CD13): "Go to set" on a set the filter hides keeps the filter and says so in one line, with the way back.
+#[test]
+fn a_selected_set_the_filter_hides_is_named_with_a_clear_filter_button() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, [rock, leaf, _]) = rock_leaf_odd(d.path());
+    m.sets_filter.search = "rock".into();
+    assert_eq!(m.selected_set_hidden_by_filter(), None, "nothing selected");
+    m.select_set(&rock);
+    assert_eq!(m.selected_set_hidden_by_filter(), None, "a shown set");
+    m.select_set(&leaf);
+    assert_eq!(
+        m.selected_set_hidden_by_filter().as_deref(),
+        Some("landscape/leaf")
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("landscape/leaf is hidden by the Sets filter");
+    h.get_by_label("Clear filter").click();
+    h.run();
+    h.run();
+    assert!(!h.state().sets_filter_active());
+    assert!(h
+        .query_by_label_contains("is hidden by the Sets filter")
+        .is_none());
+    assert_eq!(h.state().selected_sets(), [leaf], "the selection stayed");
+}
+
+/// Note FC13 (CD16, supersedes "a new set stays hidden"): a set made while a filter is on is shown until the filter
+/// changes, and the column says so.
+#[test]
+fn a_set_made_under_a_filter_stays_shown_until_the_filter_changes() {
+    let d = tempfile::tempdir().unwrap();
+    let (mut m, _) = rock_leaf_odd(d.path());
+    m.sets_filter.search = "rock".into();
+    let odd = m
+        .items
+        .iter()
+        .find(|i| i.name == "odd.png")
+        .unwrap()
+        .key
+        .clone();
+    let id = m.drop_new_set(&odd).unwrap();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(visible_ids(&m).contains(&id), "{id} shown under the filter");
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("1 new set shown");
+    // The next filter change ends it.
+    h.state_mut().sets_filter.search = "roc".into();
+    h.run();
+    h.run();
+    assert!(!visible_ids(h.state()).contains(&id));
+    assert!(h.query_by_label("1 new set shown").is_none());
+    // And the old filter coming back does not bring it back.
+    h.state_mut().sets_filter.search = "rock".into();
+    h.run();
+    assert!(!visible_ids(h.state()).contains(&id));
+}
+
 #[test]
 fn the_pills_and_shader_persist_and_the_search_does_not() {
     let d = tempfile::tempdir().unwrap();

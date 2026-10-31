@@ -460,7 +460,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         let json = matching && is_json_set(v, model.target);
         // Per project too: another folder's set with the same id starts from its own gui.toml value.
         let slot_id = id.with(("match-slot", model.root.as_deref()));
-        let all_id = id.with("all-slots");
+        let all_id = id.with(("all-slots", model.root.as_deref()));
         let mut slot: u8 = if json {
             ui.data(|d| d.get_temp(slot_id))
                 .unwrap_or_else(|| model.match_slot_start(v))

@@ -853,9 +853,9 @@ pub(super) fn colour(st: engine::config::Subtype) -> bool {
     matches!(st, Diffuse | PbrAlbedo | SkinAlbedo)
 }
 
-// Review M6: one text for a running and a stopped scan; the model cannot tell them apart without an app.rs line.
-const SCAN_UNSETTLED: &str =
-    "A Meshes scan is running or was stopped: wait for it to finish, or scan again";
+// Note FC13 (CL32 M6): `scan_running` tells a running scan from a stopped one without an app.rs line.
+const SCAN_RUNNING: &str = "Wait for the Meshes scan to finish";
+const SCAN_STOPPED: &str = "The Meshes scan was stopped: scan again to check UV coverage";
 const SCAN_FIRST: &str = "Scan your MO2 instance in the Meshes view first";
 const COLOUR_ONLY: &str = "Only colour textures on meshes have UV coverage";
 const SWITCH_OFF: &str = "Turn on UV coverage check first";
@@ -889,7 +889,11 @@ impl super::AppModel {
     /// re-check C12), or there is no scan with rows (no DB, no file, an empty or old-schema DB, or no answer yet).
     fn uv_scan_reason(&self) -> Result<(), &'static str> {
         if self.scan_store_unsettled {
-            return Err(SCAN_UNSETTLED);
+            return Err(if self.scan_running {
+                SCAN_RUNNING
+            } else {
+                SCAN_STOPPED
+            });
         }
         let rows = self
             .uv

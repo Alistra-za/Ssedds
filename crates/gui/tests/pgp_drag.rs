@@ -89,6 +89,22 @@ fn decimals_are_as_displayed() {
     );
 }
 
+/// Note FC13 (AG121): a stored value the box rounds keeps its full value on hover; an exact one needs none.
+#[test]
+fn a_rounded_value_shows_its_stored_value_on_hover() {
+    let d = drag("glint.density_randomization");
+    assert_eq!(d.format(4.525_123), "4.525");
+    assert_eq!(
+        d.stored_hover(4.525_123).as_deref(),
+        Some("Stored value: 4.525123")
+    );
+    assert_eq!(d.stored_hover(4.525), None);
+    assert_eq!(d.stored_hover(300.0), None);
+    // A whole-number display rounds too.
+    assert_eq!(drag("alphaprop_thresh").format(4.525), "5");
+    assert!(drag("alphaprop_thresh").stored_hover(4.525).is_some());
+}
+
 /// DECISIONS AG123: no GUI default sits outside the observed p1-p99 band (pgp-numeric-stats.csv).
 #[test]
 fn glint_defaults_sit_inside_the_observed_band() {

@@ -1449,6 +1449,7 @@ impl AppModel {
             s.create_set(&i);
             s.add_member(&i, &it);
         });
+        self.note_new_set(&id);
         Ok(id)
     }
 

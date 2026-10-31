@@ -12,7 +12,7 @@ use std::sync::Arc;
 pub(super) use super::status::{AMBER, RED};
 /// Width of a collapsed column.
 pub const STRIP_WIDTH: f32 = 24.0;
-/// The tile size a fresh install starts at (the slider runs 64 to 192); the narrowest column is sized for it.
+/// The tile size a fresh install starts at (the buttons run 64 up to `ColumnPrefs::tile_cap`, 128 at 100 %; Note FC13); the narrowest column is sized for it.
 const TILE: f32 = crate::model::texture_view::ColumnPrefs::TILE_DEFAULT;
 const MEMBER: f32 = 32.0;
 const TILE_MARGIN: f32 = 4.0;
@@ -753,7 +753,8 @@ fn filter_row(ui: &mut egui::Ui, model: &mut AppModel) {
             format!("Filter ({k}) ▾")
         };
         combo_menu(ui, &text, |ui| filter_popup(ui, model));
-        let (lo, hi) = ColumnPrefs::TILE_RANGE;
+        let lo = ColumnPrefs::TILE_RANGE.0;
+        let hi = ColumnPrefs::tile_cap(ui.ctx().pixels_per_point());
         let tile = model.prefs.tile;
         // R16: a saved size off the 16 grid loads as it is and steps from there.
         for (glyph, name, hover, to, enabled) in [
