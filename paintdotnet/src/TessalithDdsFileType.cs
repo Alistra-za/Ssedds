@@ -1,7 +1,6 @@
 // Tessalith DDS for Paint.NET. Copyright (c) 2026 Alistraza. GPL-3.0-or-later with the additional permission in paintdotnet/COPYING.
 using System;
 using System.IO;
-using System.Windows.Forms;
 using PaintDotNet;
 using PaintDotNet.Rendering;
 
@@ -35,27 +34,13 @@ public sealed unsafe class TessalithDdsFileType : FileType<TessalithDdsToken, Te
     /// suffices: this is the one instance per process, and the host builds the widget from it and previews through it.</summary>
     internal event Action<bool, bool>? HasAlphaMeasured;
 
-    // Note FC6 (DI9): a missing or wrong-ABI psdds.dll shows one plain message box with the path and the expected ABI
-    // when the options dialog would open, instead of the host's raw exception; the dialog then does not open.
-    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() =>
-        new() { Raw = Compatible() ? Psdds.Defaults(Psdds.Colour) : default }; // the widget says why
+    // Note FC6.5 (DI9): a missing or wrong-ABI psdds.dll never throws while the options dialog is built: that throw would
+    // escape Paint.NET's save catch (DocumentWorkspace.GetSaveConfigToken runs before it) to the crash handler. The dialog
+    // opens with its options greyed, and the preview's OnSaveT throws the plain PsddsException (path and expected ABI),
+    // which the dialog's preview shows once in Paint.NET's own error box.
+    protected override TessalithDdsToken OnCreateDefaultSaveConfigTokenT() => new() { Raw = Psdds.ColourDefaults };
 
-    protected override TessalithDdsWidget OnCreateSaveConfigWidgetT()
-    {
-        try { Psdds.EnsureCompatible(); }
-        catch (PsddsException e)
-        {
-            MessageBox.Show(e.Message + ".", "Tessalith DDS", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            throw;
-        }
-        return new(this);
-    }
-
-    static bool Compatible()
-    {
-        try { Psdds.EnsureCompatible(); return true; }
-        catch (PsddsException) { return false; }
-    }
+    protected override TessalithDdsWidget OnCreateSaveConfigWidgetT() => new(this);
 
     protected override object GetSerializablePortionOfSaveConfigToken(TessalithDdsToken token) => DialogModel.ToPortion(token.Raw);
 

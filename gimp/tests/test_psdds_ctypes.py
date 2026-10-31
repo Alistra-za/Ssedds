@@ -462,7 +462,8 @@ class T(unittest.TestCase):
 
     def test_alpha_254_only(self):  # FC6: the pixels DC23/DD6 write opaque although alpha is below 255
         def only(alpha):
-            return DLL.alpha_254_only(rgba_floats([(0, 0, 0, 1.0)] * 3 + [(0, 0, 0, alpha)]), 2, 2)
+            rgba = rgba_floats([(0, 0, 0, 1.0)] * 3 + [(0, 0, 0, alpha)])
+            return DLL.alpha_254_only(rgba, 2, 2, DLL.alpha_used(rgba, 2, 2))
         self.assertFalse(only(1.0))
         self.assertTrue(only(254 / 255))
         self.assertFalse(only(253 / 255))  # kept: nothing to say

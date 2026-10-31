@@ -243,6 +243,26 @@ void delete_preset(HWND dlg, Context &ctx) {
     fill_presets(dlg, ctx);
 }
 
+// Note FC6: when no status line can show in this save, its row collapses: OK and Cancel move up into it and the
+// dialog shrinks by the same height.
+void collapse_note(HWND dlg) {
+    auto client_rect = [&](int id) {
+        RECT rc;
+        GetWindowRect(GetDlgItem(dlg, id), &rc);
+        MapWindowPoints(nullptr, dlg, reinterpret_cast<POINT *>(&rc), 2);
+        return rc;
+    };
+    const int dy = client_rect(IDOK).top - client_rect(IDC_NOTE).top;
+    ShowWindow(GetDlgItem(dlg, IDC_NOTE), SW_HIDE);
+    for (int id : {IDOK, IDCANCEL}) {
+        const RECT rc = client_rect(id);
+        SetWindowPos(GetDlgItem(dlg, id), nullptr, rc.left, rc.top - dy, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    }
+    RECT w;
+    GetWindowRect(dlg, &w);
+    SetWindowPos(dlg, nullptr, 0, 0, w.right - w.left, w.bottom - w.top - dy, SWP_NOMOVE | SWP_NOZORDER);
+}
+
 INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
     Context *ctx = reinterpret_cast<Context *>(GetWindowLongPtrW(dlg, DWLP_USER));
     switch (msg) {
@@ -254,6 +274,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
         widen_format_dropdown(dlg);
         fill_presets(dlg, *ctx);
         refresh(dlg, *ctx, 0);
+        if (!ctx->note && !ctx->alpha_254_only) collapse_note(dlg);
         return TRUE; // focus goes to the first tab stop (Preset)
     case WM_COMMAND: {
         const int id = LOWORD(wp);

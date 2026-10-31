@@ -25,7 +25,7 @@ public static unsafe class DdsSave
             for (int y = 0; y < height; y++)
                 Pixels.BgraRowToRgbaFloats(bgra + y * stride, width, buf + (nuint)y * w * 4);
             bool m = Psdds.AlphaUsed(buf, pixels);
-            measured?.Invoke(m, !m && raw.DiscardAlpha == 0 && Psdds.Alpha254Only(buf, pixels));
+            measured?.Invoke(m, !m && raw.DiscardAlpha == 0 && Psdds.Alpha254Only(buf, pixels, m));
             bytes = Psdds.Encode(buf, w, h, raw.DiscardAlpha == 0 && m, raw);
         }
         finally { NativeMemory.Free(buf); }

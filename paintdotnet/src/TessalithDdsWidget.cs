@@ -30,12 +30,12 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     // Never use the FileType property: the SaveConfigWidget(FileType) base ctor does not store it, so it is always null
     // and its getter throws (Paint.NET 5.1 IL; Note DI36).
     readonly TessalithDdsFileType _fileType;
-    PsddsSettings _raw = Psdds.Defaults(Psdds.Colour);
+    PsddsSettings _raw = Psdds.ColourDefaults;
     bool _refreshing;
 
     public TessalithDdsWidget(TessalithDdsFileType fileType) : base(fileType)
     {
-        _presets = _dir is null ? new PresetFile([], true, []) : PresetStore.Load(_dir);
+        _presets = _dir is null || !Psdds.Compatible() ? new PresetFile([], true, []) : PresetStore.Load(_dir);
         _save.Enabled = _dir is not null; // no %APPDATA%: presets cannot be stored
         BuildLayout();
         foreach (var c in DialogLists.Types) _type.Items.Add(c);
@@ -185,6 +185,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
     /// the Type list rebuilds Format; Type or Format refills Quality. Named Sync: Control.Refresh() repaints.</summary>
     void Sync(Control? changed)
     {
+        if (!Psdds.Compatible()) { _table.Enabled = false; return; } // Note FC6.5: the preview's error box says why, once
         bool hasAlpha = _alpha.Value ?? false; // unknown until the first preview pass: shown as opaque, filter not greyed for alpha
         if (DialogModel.Refresh(_raw, hasAlpha) is not { } s) return; // unreachable: the controls offer only valid values
         _refreshing = true;
@@ -208,7 +209,7 @@ public sealed class TessalithDdsWidget : SaveConfigWidget<TessalithDdsFileType, 
             _filter.Enabled = s.FilterEnabled;
             _quality.Enabled = s.QualityEnabled;
             _delete.Enabled = _selection.CanDelete;
-            _note.Visible = _alpha.Note;
+            _note.Visible = _alpha.Note && _raw.DiscardAlpha == 0; // clears on the Discard tick, before the preview re-save
         }
         finally { _refreshing = false; }
     }

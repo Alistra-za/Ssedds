@@ -200,7 +200,8 @@ struct DialogUser {
     bool dropdown_ok = false; // the Format drop-down fits the longest label
     bool layout_ok = false; // DC43: Discard under sRGB, Type and Format combos equally wide, the label fits
     wchar_t note[160] = {}, note_after[160] = {}; // Note FC6: the status line at start and at the end
-    bool note_layout_ok = false; // the status line sits under Quality, above OK, as wide as the controls
+    bool note_layout_ok = false; // the status line sits under Quality, above OK, as wide as the controls, or collapses
+    bool note_row = true;        // the status line's row is shown (false: collapsed, no line can show in this save)
 };
 
 static BOOL CALLBACK find_dialog(HWND w, LPARAM out) {
@@ -283,11 +284,20 @@ static DWORD WINAPI play_dialog(void *arg) {
                                  GetWindow(d, GW_HWNDNEXT) == a && GetWindow(a, GW_HWNDNEXT) == GetDlgItem(dlg, IDC_MIPS) &&
                                  (GetWindowLongW(a, GWL_STYLE) & WS_TABSTOP) != 0;
         }
-        { // Note FC6: the status line is under Quality and above OK, from the left edge to the Quality list's right
-            const RECT n = box(IDC_NOTE), q = box(IDC_QUALITY), ok = box(IDOK), mips = box(IDC_MIPS);
+        { // Note FC6: the status line is under Quality and above OK, from the left edge to the Quality list's right;
+          // with no line to show in this save its row collapses: OK moves up into it and the dialog shrinks
+            const RECT n = box(IDC_NOTE), q = box(IDC_QUALITY), ok = box(IDOK), cancel = box(IDCANCEL), mips = box(IDC_MIPS);
+            RECT client;
+            GetClientRect(dlg, &client);
+            HWND nw = GetDlgItem(dlg, IDC_NOTE);
+            u->note_row = nw && (GetWindowLongW(nw, GWL_STYLE) & WS_VISIBLE) != 0;
+            const bool bottom = client.bottom - ok.bottom > 0 && client.bottom - ok.bottom < ok.bottom - ok.top &&
+                                cancel.top == ok.top;
             // dialog units round separately for x and width, so the right edges may differ by a pixel
-            u->note_layout_ok = GetDlgItem(dlg, IDC_NOTE) != nullptr && n.top >= q.bottom && n.bottom <= ok.top &&
-                                abs(n.right - q.right) <= 1 && n.left == mips.left && n.bottom - n.top > 0;
+            u->note_layout_ok = nw && bottom && ok.top >= q.bottom &&
+                                (u->note_row ? n.top >= q.bottom && n.bottom <= ok.top && abs(n.right - q.right) <= 1 &&
+                                                   n.left == mips.left && n.bottom - n.top > 0
+                                             : ok.top <= n.top);
         }
     }
     GetDlgItemTextW(dlg, IDC_NOTE, u->note, 160);
@@ -383,6 +393,9 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
                       : "alpha 254/255 counts as opaque: filter editable, Box picked");
         expect(wcscmp(u.note, i == 0 ? L"" : kAlpha254Note) == 0,
                i == 0 ? "opaque layer: no status line" : "alpha 254/255: the status line says it is written opaque (FC6)");
+        expect(u.note_layout_ok && u.note_row == (i == 1),
+               i == 0 ? "layout: no status line can show, so its row collapses and OK moves up (FC6)"
+                      : "layout: the status line under Quality, above OK, full width (FC6)");
     }
     { // FC6: Discard transparency is the user's own opaque choice, so the 254 line goes
         write_file(path, original);
@@ -453,7 +466,7 @@ static int dialog_after_pixels(Entry entry, const wchar_t *path) {
         expect(u.dropdown_ok, "Format drop-down is wide enough for RGBA16F (uncompressed) at this DPI and font");
         expect(result == 0 && u.seen && u.layout_ok, "layout: Discard transparency under sRGB, Type and Format equally wide (DC43)");
         expect(u.alpha_layout_ok, "layout: Alpha is transparency under Discard, mnemonic A, label fits, tab order (Note DH)");
-        expect(u.note_layout_ok, "layout: the status line under Quality, above OK, full width (FC6)");
+        expect(u.note_layout_ok && !u.note_row, "layout: an opaque save collapses the status line's row (FC6)");
     }
 
     // Cancel at the end: userCanceledErr and the file untouched.
@@ -616,6 +629,7 @@ static unsigned checks8(int c, int x, int y) { return c == 3 ? 255 : ((x / 4 + y
 static unsigned checks16(int c, int x, int y) { return c == 3 ? 32768 : ((x / 4 + y / 4 + c) % 2) * 32768; }
 static unsigned with_alpha8(int c, int x, int y) { return c == 3 ? (x < 32 ? 255 : 100) : gradient8(c, x, y); }
 static unsigned with_alt8(int c, int x, int y) { return c == 3 ? (x < 16 ? 255 : 50) : gradient8(c, x, y); } // alt_alpha8 as the alpha
+static unsigned floor_alpha8(int c, int x, int y) { return c == 3 ? (x < 32 ? 255 : 254) : gradient8(c, x, y); } // FC6
 
 static int merged_composite_save(Entry entry, const wchar_t *path) {
     int bad = 0;
@@ -732,6 +746,18 @@ static int save_notes(Entry entry, const wchar_t *path) {
         DialogUser u;
         const int16 result = layered_dialog_save(entry, path, &two, &u);
         expect(result == 0 && u.seen && wcscmp(u.note, kFirstAlphaNote) == 0, "two alpha channels (DC44)", u.note);
+    }
+    { // both lines: two alpha channels, the first holding only 254 and 255
+        MergedDoc two(8, floor_alpha8, AlphaSource::None);
+        two.ch[3].channelType = two.ch[5].channelType = ctSelectionMask;
+        two.ch[3].next = &two.ch[5];
+        two.ch[5].next = nullptr;
+        two.doc.alphaChannels = &two.ch[3];
+        DialogUser u;
+        const int16 result = layered_dialog_save(entry, path, &two, &u);
+        const std::wstring both = std::wstring(kFirstAlphaNote) + L"\n" + kAlpha254Note;
+        expect(result == 0 && u.seen && both == u.note && u.note_row && u.note_layout_ok,
+               "two alpha channels, the first 254/255 only: both lines, one per row (DC44, FC6)", u.note);
     }
     {
         MergedDoc one(8, with_alpha8, AlphaSource::Merged);

@@ -19,6 +19,23 @@ internal struct PsddsBuf { public nint Data; public nuint Len; }
 /// <summary>Text shown in Paint.NET's error details.</summary>
 public sealed class PsddsException(string message) : Exception(message);
 
+/// <summary>The ABI check, run once. The first failure's text is replayed, so later calls fail the same way without probing
+/// again; it is the PsddsException Paint.NET's save catch shows (Note FC6.5).</summary>
+internal sealed class AbiGate(Func<uint> abiVersion)
+{
+    volatile bool _compatible;
+    string? _failure;
+
+    public void Ensure()
+    {
+        if (_compatible) return;
+        if (_failure != null) throw new PsddsException(_failure);
+        try { Psdds.Check(abiVersion); }
+        catch (PsddsException e) { _failure = e.Message; throw; }
+        _compatible = true;
+    }
+}
+
 /// <summary>Safe wrappers over psdds.dll (photoshop/psdds.h). Holds no rule: every decision is psdds's.</summary>
 public static unsafe partial class Psdds
 {
@@ -26,7 +43,6 @@ public static unsafe partial class Psdds
     public const uint Colour = 0, Normal = 1, LinearMask = 2; // enum values from psdds.h, not rules
 
     const int ErrCap = 512;
-    static volatile bool _compatible;
 
     [LibraryImport("psdds")] private static partial uint psdds_abi_version();
     [LibraryImport("psdds")] private static partial PsddsSettings psdds_defaults(uint textureType);
@@ -42,8 +58,6 @@ public static unsafe partial class Psdds
     [LibraryImport("psdds")] private static partial int psdds_check_size(uint width, uint height, byte* err, nuint errCap);
     [LibraryImport("psdds")] private static partial int psdds_alpha_used(float* rgba, nuint pixels);
     [LibraryImport("psdds")] private static partial void psdds_free(PsddsBuf buf);
-
-    static string? _failure; // the first failure's text, replayed so later calls fail the same way without probing again
 
     // Load psdds.dll only from beside this assembly, never from PATH or the working directory.
     static Psdds()
@@ -63,14 +77,19 @@ public static unsafe partial class Psdds
     public const string Alpha254Note = "alpha 254–255 only: written opaque";
 
     /// <summary>Refuses any psdds.dll whose ABI version is not the one this plugin was written for. Runs once; a failure is remembered.</summary>
-    public static void EnsureCompatible()
+    public static void EnsureCompatible() => Gate.Ensure();
+
+    static readonly AbiGate Gate = new(psdds_abi_version);
+
+    public static bool Compatible()
     {
-        if (_compatible) return;
-        if (_failure != null) throw new PsddsException(_failure);
-        try { Check(psdds_abi_version); }
-        catch (PsddsException e) { _failure = e.Message; throw; }
-        _compatible = true;
+        try { EnsureCompatible(); return true; }
+        catch (PsddsException) { return false; }
     }
+
+    /// <summary>shortcut: a copy of psdds_defaults(Colour) (BC7), so the default token and a new widget need no psdds.dll
+    /// (Note FC6.5); a test pins it to psdds's. Upgrade if psdds's defaults start to depend on anything.</summary>
+    public static readonly PsddsSettings ColourDefaults = new() { Format = 4, TextureType = Colour, Mips = 1, Quality = 4 };
 
     internal static void Check(Func<uint> abiVersion)
     {
@@ -190,10 +209,11 @@ public static unsafe partial class Psdds
         return psdds_alpha_used(rgba, pixels) != 0;
     }
 
-    /// <summary>Note FC6: no alpha below 254/255 (psdds writes it opaque) yet some alpha below 1.</summary>
-    internal static bool Alpha254Only(float* rgba, nuint pixels)
+    /// <summary>Note FC6: no alpha below 254/255 (hasAlpha is the caller's AlphaUsed, so psdds writes it opaque) yet some
+    /// alpha below 1.</summary>
+    internal static bool Alpha254Only(float* rgba, nuint pixels, bool hasAlpha)
     {
-        if (AlphaUsed(rgba, pixels)) return false;
+        if (hasAlpha) return false;
         for (nuint i = 0; i < pixels; i++)
             if (rgba[i * 4 + 3] < 1f) return true;
         return false;

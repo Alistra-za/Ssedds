@@ -228,9 +228,11 @@ class Psdds:
     def alpha_used(self, rgba, w, h):
         return bool(self._dll.psdds_alpha_used(self._floats(rgba, w, h), w * h))
 
-    def alpha_254_only(self, rgba, w, h):
-        """Note FC6: no alpha below 254/255 (so psdds writes it opaque, DC23/DD6) yet some alpha below 1.0."""
-        if self.alpha_used(rgba, w, h):
+    @staticmethod
+    def alpha_254_only(rgba, w, h, has_alpha):
+        """Note FC6: no alpha below 254/255 (has_alpha is the caller's alpha_used, so psdds writes it opaque,
+        DC23/DD6) yet some alpha below 1.0."""
+        if has_alpha:
             return False
         n = w * h  # byte-wise compare against float 1.0 (00 00 80 3f): C speed, no per-pixel Python loop
         return any(rgba[12 + i::16] != bytes([b]) * n for i, b in enumerate(b"\x00\x00\x80\x3f"))

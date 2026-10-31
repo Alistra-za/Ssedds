@@ -153,7 +153,7 @@ int16 finish_save(FormatRecord *r, intptr_t *data, SaveState *s, int channels, c
         HWND owner = platform ? reinterpret_cast<HWND>(platform->hwnd) : nullptr;
         // Note FC6: what the save drops is said in the dialog (supersedes DC40's silent opaque, DC44's dropped warning).
         const wchar_t *note = r->layerData > 0 && channels == 3 ? kNoAlphaNote
-                              : alpha_channels(r) > 1           ? kFirstAlphaNote
+                              : channels == 4 && alpha_channels(r) > 1 ? kFirstAlphaNote // only a saved alpha plane drops the rest
                                                                 : nullptr;
         const bool alpha_254 = channels == 4 && !has_alpha && alpha_below_one(s->rgba.data(), s->rgba.size() / 4);
         const DialogResult shown = ShowSaveDialog(owner, has_alpha, uint32_t(r->depth), note, alpha_254, &g->settings);

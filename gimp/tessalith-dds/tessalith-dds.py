@@ -36,6 +36,21 @@ TOO_LARGE = "This file is too large to be a DDS this plug-in can open."
 NOT_LOCAL = "Tessalith DDS can open only files on a local disk."
 NO_FILE_DDS = ("GIMP's own DDS plug-in is needed for this file (HDR, cube map or texture array), "
                "and it is not installed.")
+# shortcut: copies of psdds's Colour defaults, top quality index and preset count, used only to register Export when
+# psdds.dll fails (Note FC6.5); test_plugin checks them against psdds. Upgrade if psdds gains an ABI call for them.
+FALLBACK = Settings(BC7, COLOUR, 0, BOX, 1, 4, 0, 0)
+FALLBACK_TOP_Q = 18
+FALLBACK_PRESETS = 5
+
+
+def registration_values():
+    """(Colour defaults, top quality index, preset count) from psdds, or the fixed copies when psdds.dll fails."""
+    try:
+        psdds = Psdds()
+    except PsddsError:
+        return FALLBACK, FALLBACK_TOP_Q, FALLBACK_PRESETS
+    return (psdds.defaults(COLOUR), max(len(psdds.quality_labels(f)) for _, f, _ in FORMATS) - 1,
+            len(psdds.presets()))
 
 
 def error(procedure, msg):
@@ -325,7 +340,7 @@ def export_dds(procedure, run_mode, image, file, options, metadata, config, data
             rgba = read_pixels(layer, chosen)
         # The pixels' has_alpha as the dialog resolved it; psdds applies Discard itself (DC36).
         out = psdds.encode(rgba, w, h, has_alpha, s, depth)
-        note = not s.discard_alpha and psdds.alpha_254_only(rgba, w, h)
+        note = not s.discard_alpha and psdds.alpha_254_only(rgba, w, h, has_alpha)
         del rgba
         _write_atomic(path, out)
         if ask and opened is not None:
@@ -356,12 +371,11 @@ def _nick(items, cid):
 class TessalithDds(Gimp.PlugIn):
     def do_query_procedures(self):
         try:
-            Psdds()  # the export's defaults and quality range come from psdds
+            Psdds()
         except PsddsError as e:
-            # GIMP caches this list until the .py file's mtime changes, so the user must reinstall.
-            print(f"Tessalith DDS: export is not registered: {e}. Fix psdds.dll, then reinstall the plug-in.",
-                  file=sys.stderr)
-            return [LOAD_PROC]
+            # Note FC6.5: both procedures still register (GIMP caches this list until the .py mtime changes), and
+            # running either returns this message as its error.
+            print(f"Tessalith DDS: {e}", file=sys.stderr)
         return [LOAD_PROC, EXPORT_PROC]
 
     def do_set_i18n(self, name):
@@ -377,9 +391,7 @@ class TessalithDds(Gimp.PlugIn):
         return proc
 
     def _export_procedure(self, name):
-        psdds = Psdds()
-        d = psdds.defaults(COLOUR)
-        top_q = max(len(psdds.quality_labels(f)) for _, f, _ in FORMATS) - 1
+        d, top_q, presets = registration_values()
         proc = Gimp.ExportProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, False, export_dds, None)
         proc.set_image_types("*")
         proc.set_capabilities(Gimp.ExportCapabilities.CAN_HANDLE_RGB | Gimp.ExportCapabilities.CAN_HANDLE_ALPHA,
@@ -399,7 +411,7 @@ class TessalithDds(Gimp.PlugIn):
         # Dialog state (aux, never passed to the encode): the shown-* widgets show psdds's effective values
         # while the raw arguments above keep the user's picks (DC19).
         proc.add_int_aux_argument("preset", "Preset", "0 = Custom, then the psdds seeds", 0,
-                                  len(psdds.presets()), 0, rw)
+                                  presets, 0, rw)
         proc.add_int_aux_argument("shown-format", "Format", "Shown format", 0, max(f for _, f, _ in FORMATS),
                                   d.format, rw)
         proc.add_boolean_aux_argument("shown-srgb", "sRGB", "Shown sRGB", bool(d.srgb), rw)
