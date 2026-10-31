@@ -389,6 +389,31 @@ fn a_refused_or_closed_export_after_the_half_size_write_undoes_it() {
     }
 }
 
+/// Note FC14 (final review, minor): the save that starts the export fails (`sdc.toml` was marked read-only after the
+/// half size was written): the *Half size* step is taken back, so nothing stays written.
+#[test]
+fn a_failed_save_after_the_half_size_write_undoes_it() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path(), true);
+    export(&mut m);
+    let path = m.root.clone().unwrap().join("sdc.toml");
+    m.export_clicked();
+    m.answer_half_size("up.png", HalfAnswer::Half);
+    m.answer_half_size("up2.png", HalfAnswer::Full);
+    m.export_from_review();
+    assert_eq!(drop_top_mip(&m, "up.png"), Some(serde_json::json!(true)));
+    assert!(m.export_queued(), "the export waits for the plan");
+    set_read_only(&path, true);
+    let idle = m.wait_idle(WAIT);
+    set_read_only(&path, false);
+    assert!(idle);
+    m.dialog = None;
+    assert!(m.export.running.is_none());
+    assert!(!toml(&m).contains("drop_top_mip"));
+    assert_eq!(drop_top_mip(&m, "up.png"), None);
+    assert_ne!(m.undo_label(), Some("Half size"));
+}
+
 /// Finding r1 #5: "Cancel and close" during an export stops it at the next file and then closes.
 #[test]
 fn cancel_and_close_stops_the_export_at_the_next_file() {

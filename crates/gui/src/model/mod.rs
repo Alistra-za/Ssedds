@@ -2023,7 +2023,12 @@ impl AppModel {
     /// Save first (the CLI command and the next session read `sdc.toml`), then run the export on a worker. One pass:
     /// the half-size answers were written before it, on the settled plan (Note FC2).
     fn start_export_pass(&mut self) {
-        if self.export.running.is_some() || self.save().is_err() {
+        if self.export.running.is_some() {
+            return;
+        }
+        // Note FC14: a failed save starts no export, so Review's *Half size* step for it is taken back.
+        if self.save().is_err() {
+            self.undo_half_step();
             return;
         }
         let (Some(session), Some(mut req)) = (self.session.clone(), self.request()) else {
