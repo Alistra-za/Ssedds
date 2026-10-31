@@ -31,6 +31,7 @@ fn main() {
         "1" => Bc6hLevel::Fast,
         "2" => Bc6hLevel::Basic,
         "3" => Bc6hLevel::Slow,
+        "5" => Bc6hLevel::VeryslowPeak,
         _ => Bc6hLevel::Veryslow,
     };
     let (w, h) = (img.width as usize, img.height as usize);
