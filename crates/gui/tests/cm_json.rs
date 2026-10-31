@@ -83,7 +83,8 @@ fn a_read_only_document_takes_no_cm_edit() {
     assert!(s.read_only());
     s.set_cm_value("a/one", "glossiness", Some(json!(1.0)));
     s.set_cm_export("a/one", true);
-    s.set_cm_json_shas(&BTreeMap::from([("x.json".to_string(), "00".to_string())]));
+    s.set_cm_json_shas(&BTreeMap::from([("x.json".to_string(), "00".to_string())]))
+        .unwrap();
     assert!(!s.is_dirty());
     assert!(s.entries().is_empty() || s.entries()[0].cm.is_none());
     // Note FC11: the hash record goes to `_sdc/generated.json`, not into the broken document.
@@ -98,7 +99,7 @@ fn the_hash_record_round_trips_and_survives_undo() {
     let before = s.text();
     s.set_cm_value("a/one", "glossiness", Some(json!(50.0)));
     let shas = BTreeMap::from([("m/iron_m.json".to_string(), "ab12".to_string())]);
-    s.set_cm_json_shas(&shas);
+    s.set_cm_json_shas(&shas).unwrap();
     assert_eq!(s.cm_json_shas(), shas);
     assert!(s.text().contains("cm_json_sha256"));
     s.restore_keeping_json_sha(&before);
@@ -108,7 +109,7 @@ fn the_hash_record_round_trips_and_survives_undo() {
         json!(80),
         "undo took the value back"
     );
-    s.set_cm_json_shas(&BTreeMap::new());
+    s.set_cm_json_shas(&BTreeMap::new()).unwrap();
     assert!(!s.text().contains("cm_json_sha256"));
 }
 
@@ -711,6 +712,31 @@ fn a_read_only_document_records_the_hash_in_the_sidecar() {
     assert_eq!(text, "[[sets]\nbroken", "the broken file is not touched");
     let reopened = SetsDoc::open(b.path());
     assert!(!reopened.cm_json_shas().is_empty(), "the sidecar holds it");
+}
+
+/// Note FC14 (final review I4): on a read-only document a sidecar that cannot be written (here `_sdc` is a file)
+/// records nothing, so the note says the hash was not recorded instead of claiming the sidecar holds it.
+#[test]
+fn an_unwritable_sidecar_on_a_read_only_document_says_the_hash_was_not_recorded() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fixture(d.path(), Target::Cs);
+    let iron = set_id(&m, "m/iron");
+    m.set_cm_export(&iron, true);
+    export_and_wait(&mut m);
+    let p = prepare(&m).unwrap();
+    std::fs::remove_file(out(&m, "m/iron_m.json")).unwrap();
+    let (b, broken) = doc("[[sets]\nbroken");
+    std::fs::write(b.path().join("_sdc"), b"not a folder").unwrap();
+    m.sets_doc = Some(broken);
+    m.finish_cm_json(Some(p));
+    assert!(out(&m, "m/iron_m.json").is_file(), "{}", notes(&m));
+    assert!(
+        !notes(&m).contains(sdc_gui::model::SIDECAR_ONLY),
+        "{}",
+        notes(&m)
+    );
+    assert!(notes(&m).contains("hash not recorded: "), "{}", notes(&m));
+    assert!(SetsDoc::open(b.path()).cm_json_shas().is_empty());
 }
 
 /// Fix round 1 (1), amended by Note BV3: a file with exactly the bytes sdc would write is adopted and recorded, so

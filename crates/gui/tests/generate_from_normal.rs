@@ -248,7 +248,8 @@ fn a_generated_height_without_provenance_is_unrecorded_and_a_recorded_one_regene
         )
     );
     let doc = m.sets_doc.as_mut().unwrap();
-    doc.set_generated(key, Some(&serde_json::to_value(provenance()).unwrap()));
+    doc.set_generated(key, Some(&serde_json::to_value(provenance()).unwrap()))
+        .unwrap();
     assert_eq!(height(&m, ROCK_SET), Ok(()));
     assert_eq!(
         m.generated_items(ROCK_SET),
@@ -604,7 +605,7 @@ fn the_generated_table_round_trips_and_older_files_load() {
     );
     let v = serde_json::to_value(provenance()).unwrap();
     let key = "landscape/rock01_p_generated.png";
-    doc.set_generated(key, Some(&v));
+    doc.set_generated(key, Some(&v)).unwrap();
     doc.save(false).unwrap();
     let text = std::fs::read_to_string(d.path().join("sdc-project.toml")).unwrap();
     assert!(text.contains("[generated]"), "{text}");
@@ -622,10 +623,11 @@ fn the_generated_table_round_trips_and_older_files_load() {
     // Keys match by Unicode lowercase; `None` removes.
     let mut w = v.clone();
     w["sha256"] = json!("ee".repeat(32));
-    doc.set_generated("Landscape/ROCK01_P_GENERATED.png", Some(&w));
+    doc.set_generated("Landscape/ROCK01_P_GENERATED.png", Some(&w))
+        .unwrap();
     assert_eq!(doc.generated().len(), 1);
     assert_eq!(doc.generated().values().next(), Some(&w));
-    doc.set_generated(key, None);
+    doc.set_generated(key, None).unwrap();
     assert!(doc.generated().is_empty());
 }
 
@@ -1053,7 +1055,11 @@ fn a_dds_normal_generates_with_green_detected() {
     // A flat DDS proves nothing about detection (spec-S7).
     let flat = vec![[0.0, 0.0, 1.0]; 128 * 128];
     std::fs::remove_file(land(d.path()).join("rock01_p_generated.png")).unwrap();
-    m.sets_doc.as_mut().unwrap().set_generated(P_KEY, None);
+    m.sets_doc
+        .as_mut()
+        .unwrap()
+        .set_generated(P_KEY, None)
+        .unwrap();
     normal_dds(&dds, &flat, 128, false);
     reopen(&mut m, d.path());
     m.open_gen(ROCK_SET, Some(GenMap::Height));
@@ -2144,7 +2150,11 @@ fn a_real_height_added_later_replaces_the_generated_one_and_delete_is_offered() 
             std::fs::write(&p, b).unwrap();
             "Delete rock01_p_generated.png? It was generated from rock01_normal.png. It was edited since."
         } else {
-            m.sets_doc.as_mut().unwrap().set_generated(P_KEY, None);
+            m.sets_doc
+                .as_mut()
+                .unwrap()
+                .set_generated(P_KEY, None)
+                .unwrap();
             "Delete rock01_p_generated.png? Tessalith has no record of generating it."
         };
         add_real_p(&mut m, d.path());

@@ -268,17 +268,17 @@ impl SetsDoc {
     }
 
     /// Note FC11: record `v` under `key` in the sidecar and write it. A failed write leaves the document's copy, which
-    /// the next Save writes, as before the sidecar.
-    fn put_side(&mut self, key: &str, v: Json) {
+    /// the next Save writes, as before the sidecar; Note FC14: the error is returned, since a read-only document has
+    /// no such copy.
+    fn put_side(&mut self, key: &str, v: Json) -> std::io::Result<()> {
         if self.side.get(key) == Some(&v) {
-            return;
+            return Ok(());
         }
         self.side.insert(key.to_string(), v);
         // The getters read the sidecar first: a cache keyed on `rev` must see the change, even in a read-only document.
         self.f.rev = next_rev();
-        if let Ok(b) = serde_json::to_vec_pretty(&self.side) {
-            let _ = engine::dds::write_atomic(&self.sidecar_path(), &b);
-        }
+        let b = serde_json::to_vec_pretty(&self.side).map_err(std::io::Error::other)?;
+        engine::dds::write_atomic(&self.sidecar_path(), &b)
     }
 
     /// Changes on every edit, restore and reload (the set-view cache key).
@@ -447,8 +447,8 @@ impl SetsDoc {
     }
 
     /// Record (`Some`) or remove (`None`) the provenance of item `key`, matched by Unicode lowercase (Note BF). Not
-    /// through `set_project`: `[generated]` is a table of its own (P15).
-    pub fn set_generated(&mut self, key: &str, v: Option<&Json>) {
+    /// through `set_project`: `[generated]` is a table of its own (P15). Err: the sidecar was not written (Note FC14).
+    pub fn set_generated(&mut self, key: &str, v: Option<&Json>) -> std::io::Result<()> {
         let fold = key.to_lowercase();
         // Note FC11: the sidecar first, as the document would hold it (no `null` members), so a reopen compares equal.
         let mut all = self.generated();
@@ -459,7 +459,7 @@ impl SetsDoc {
         {
             all.insert(key.to_string(), x);
         }
-        self.put_side(GENERATED, Json::Object(all.into_iter().collect()));
+        let side = self.put_side(GENERATED, Json::Object(all.into_iter().collect()));
         let now = self.doc_generated();
         let same: Vec<&String> = now.keys().filter(|k| k.to_lowercase() == fold).collect();
         let unchanged = match v {
@@ -467,13 +467,13 @@ impl SetsDoc {
             Some(v) => same.len() == 1 && same[0] == key && now.get(key) == Some(v),
         };
         if self.read_only() || unchanged {
-            return;
+            return side;
         }
         let value = v.and_then(json_to_toml_deep);
         let Some(t) = sub_table(self.f.doc.as_table_mut(), GENERATED, || {
             Item::Table(Table::new())
         }) else {
-            return;
+            return side;
         };
         for k in same {
             t.remove(k);
@@ -485,6 +485,7 @@ impl SetsDoc {
             self.f.doc.remove(GENERATED);
         }
         self.f.touch();
+        side
     }
 
     /// Note FC11: make the document's `[generated]` equal `all` (reconcile on open); no edit when it already is.
@@ -531,9 +532,9 @@ impl SetsDoc {
             None => self.project_str(LAST_SHA),
         }
     }
-    pub fn set_last_json_sha256(&mut self, sha: &str) {
+    pub fn set_last_json_sha256(&mut self, sha: &str) -> std::io::Result<()> {
         self.set_project(LAST_SHA, Some(Value::from(sha)));
-        self.put_side(LAST_SHA, Json::from(sha));
+        self.put_side(LAST_SHA, Json::from(sha))
     }
 
     /// A hash table: the sidecar's copy when it has one (Note FC11), else the document's.
@@ -569,20 +570,21 @@ impl SetsDoc {
         self.set_project(key, (!shas.is_empty()).then_some(Value::InlineTable(t)));
     }
 
-    /// A hash record made now: the document's copy (if writable) and the sidecar (Note FC11).
-    fn record_shas(&mut self, key: &str, shas: &BTreeMap<String, String>) {
+    /// A hash record made now: the document's copy (if writable) and the sidecar (Note FC11). Err: the sidecar was not
+    /// written (Note FC14).
+    fn record_shas(&mut self, key: &str, shas: &BTreeMap<String, String>) -> std::io::Result<()> {
         self.set_shas(key, shas);
         let m = shas
             .iter()
             .map(|(k, v)| (k.clone(), Json::from(v.as_str())));
-        self.put_side(key, Json::Object(m.collect()));
+        self.put_side(key, Json::Object(m.collect()))
     }
 
     pub fn cs_pbr_shas(&self) -> BTreeMap<String, String> {
         self.shas(CS_SHA)
     }
 
-    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) {
+    pub fn set_cs_pbr_shas(&mut self, shas: &BTreeMap<String, String>) -> std::io::Result<()> {
         self.record_shas(CS_SHA, shas)
     }
 
@@ -590,7 +592,7 @@ impl SetsDoc {
         self.shas(PGP_SHA)
     }
 
-    pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+    pub fn set_pgp_json_shas(&mut self, shas: &BTreeMap<String, String>) -> std::io::Result<()> {
         self.record_shas(PGP_SHA, shas)
     }
 
@@ -598,7 +600,7 @@ impl SetsDoc {
         self.shas(CM_SHA)
     }
 
-    pub fn set_cm_json_shas(&mut self, shas: &BTreeMap<String, String>) {
+    pub fn set_cm_json_shas(&mut self, shas: &BTreeMap<String, String>) -> std::io::Result<()> {
         self.record_shas(CM_SHA, shas)
     }
 
@@ -606,7 +608,7 @@ impl SetsDoc {
         self.shas(COPY_SHA)
     }
 
-    pub fn set_copy_shas(&mut self, shas: &BTreeMap<String, String>) {
+    pub fn set_copy_shas(&mut self, shas: &BTreeMap<String, String>) -> std::io::Result<()> {
         self.record_shas(COPY_SHA, shas)
     }
 
@@ -1418,9 +1420,9 @@ mod tests {
         let mut s = SetsDoc::open(d.path());
         let shas = s.cs_pbr_shas();
         assert_eq!(shas.len(), 1);
-        s.set_cs_pbr_shas(&shas);
+        s.set_cs_pbr_shas(&shas).unwrap();
         assert!(!s.is_dirty(), "an equal map is no edit");
-        s.set_cs_pbr_shas(&BTreeMap::new());
+        s.set_cs_pbr_shas(&BTreeMap::new()).unwrap();
         assert!(s.cs_pbr_shas().is_empty(), "the table is removed");
         assert!(s.is_dirty());
     }

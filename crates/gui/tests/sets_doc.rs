@@ -530,7 +530,7 @@ fn restore_keeping_json_sha_back_to_the_saved_text_is_clean() {
     s.set_shader("a/one", Some(engine::shader::Shader::Parallax));
     let step = s.text();
     s.save(false).unwrap();
-    s.set_last_json_sha256("aa");
+    s.set_last_json_sha256("aa").unwrap();
     s.save(false).unwrap();
     assert!(!s.is_dirty());
     s.set_shader("a/one", Some(engine::shader::Shader::Pbr));

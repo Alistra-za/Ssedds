@@ -79,6 +79,14 @@ use std::time::{Duration, Instant};
 pub const SIDECAR_ONLY: &str =
     "hash recorded in _sdc/generated.json only: sdc-project.toml is read-only";
 
+/// Note FC14: the note for a hash recorded while `sdc-project.toml` is read-only, from the sidecar write's result.
+fn sidecar_only_note(written: &std::io::Result<()>) -> String {
+    match written {
+        Ok(()) => SIDECAR_ONLY.into(),
+        Err(e) => format!("hash not recorded: {e}"),
+    }
+}
+
 /// How long the "Undid/Redid" note stays in the status line (AG15).
 const UNDO_NOTE_FOR: Duration = Duration::from_secs(5);
 
@@ -2183,9 +2191,9 @@ impl AppModel {
             return;
         };
         let was_dirty = d.is_dirty();
-        d.set_copy_shas(&shas);
+        let side = d.set_copy_shas(&shas);
         if d.read_only() {
-            self.export.notes.push(SIDECAR_ONLY.into());
+            self.export.notes.push(sidecar_only_note(&side));
             return;
         }
         self.save_hash_record(was_dirty);
@@ -2215,11 +2223,10 @@ impl AppModel {
         // #43: one record per name; audit 08c-1: keyed by `record_key`, and kept when its file is gone.
         let mut shas = history::records_at(&d.pgp_json_shas(), &root);
         shas.insert(key.to_string(), sha.to_string());
-        d.set_last_json_sha256(sha);
-        d.set_pgp_json_shas(&shas);
+        let side = d.set_last_json_sha256(sha).and(d.set_pgp_json_shas(&shas));
         // Note FC11 (supersedes P21's next-export ask): a read-only document still gets the sidecar's record.
         if d.read_only() {
-            self.export.notes.push(SIDECAR_ONLY.into());
+            self.export.notes.push(sidecar_only_note(&side));
             return;
         }
         self.save_hash_record(was_dirty);

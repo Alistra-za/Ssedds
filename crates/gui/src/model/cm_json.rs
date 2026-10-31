@@ -480,9 +480,9 @@ impl AppModel {
             return;
         };
         let was_dirty = d.is_dirty();
-        d.set_cm_json_shas(&shas);
+        let side = d.set_cm_json_shas(&shas);
         if d.read_only() {
-            self.export.notes.push(super::SIDECAR_ONLY.into());
+            self.export.notes.push(super::sidecar_only_note(&side));
             return;
         }
         self.save_hash_record(was_dirty);

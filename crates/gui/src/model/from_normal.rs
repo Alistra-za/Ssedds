@@ -1739,7 +1739,9 @@ impl AppModel {
                 opts: opts.clone(),
             };
             if let Ok(v) = serde_json::to_value(p) {
-                d.set_generated(key, Some(&v));
+                // shortcut: a failed sidecar write is dropped; the document's copy (saved next) covers a writable
+                // `sdc-project.toml` only. Say so in a note if a read-only project ever loses provenance this way.
+                let _ = d.set_generated(key, Some(&v));
             }
         }
         if self.save_record(was_dirty) {
@@ -2105,7 +2107,8 @@ impl AppModel {
         let k = &r.key;
         if let Some(d) = self.sets_doc.as_mut() {
             let was_dirty = d.is_dirty();
-            d.set_generated(k, None);
+            // As at write time: a failed sidecar write is dropped (the `shortcut:` there).
+            let _ = d.set_generated(k, None);
             // Review M4: a file moved in with its normal leaves the set's `add` too (no SET-EDIT-STALE).
             for e in d
                 .entries()

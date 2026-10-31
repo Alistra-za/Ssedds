@@ -492,7 +492,7 @@ fn a_relative_record_is_read_under_the_export_folder() {
         "PBRTextureSets/LandscapeRock01.json".to_string(),
         sha,
     )]);
-    m.sets_doc.as_mut().unwrap().set_cs_pbr_shas(&old);
+    m.sets_doc.as_mut().unwrap().set_cs_pbr_shas(&old).unwrap();
     m.set_cs_value(ROCK, Kind::Txst, "specularLevel", Some(json!(0.05)));
     export_and_wait(&mut m);
     let text = std::fs::read_to_string(&f).unwrap();
