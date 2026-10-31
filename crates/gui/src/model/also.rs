@@ -338,7 +338,7 @@ impl AppModel {
         };
         // Note GF8: a cancel in this phase abandons the queued NIF export, as one during the conversion does.
         if self.export.running.take().is_some_and(|c| c.is_cancelled()) {
-            self.nif_export_queued = false;
+            self.abandon_nif_export();
         }
         self.export.notes.extend(s.notes.iter().cloned());
         for z in &s.zips {
@@ -571,6 +571,10 @@ mod tests {
         assert!(
             !m.take_nif_export_due(),
             "a cancelled run writes no NIF edits"
+        );
+        assert!(
+            m.nif_clear_answers_request,
+            "and drops its Review answers (GF9)"
         );
         // An uncancelled zip phase still hands the NIF export over.
         m.export.running = Some(Default::default());

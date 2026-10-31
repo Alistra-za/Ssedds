@@ -1569,7 +1569,7 @@ impl AppModel {
         let cancelled = token.as_ref().is_some_and(|c| c.is_cancelled());
         // Note FC5: a cancelled export writes no NIF edits either (as `finish_json` writes no JSON).
         if cancelled || result.as_ref().is_ok_and(|s| !s.cancelled.is_empty()) {
-            self.nif_export_queued = false;
+            self.abandon_nif_export();
         }
         if self.also_reply.is_some() {
             self.also_cancel = token;
@@ -1640,6 +1640,14 @@ impl AppModel {
             }
         }
         self.after_export(failure);
+    }
+
+    /// Note GF9: a cancelled run drops the NIF export it queued and the Review answers given for it (GD29), so the
+    /// next Review asks again; `app.rs` calls `clear_nif_answers`.
+    pub(super) fn abandon_nif_export(&mut self) {
+        if std::mem::take(&mut self.nif_export_queued) {
+            self.nif_clear_answers_request = true;
+        }
     }
 
     /// The end of an export: what was asked while it ran (close, or open another folder), else its error as a dialog.

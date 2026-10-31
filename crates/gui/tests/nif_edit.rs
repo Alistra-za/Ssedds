@@ -10768,3 +10768,52 @@ fn the_footers_review_opens_review() {
         "the footer's Review… opens Review"
     );
 }
+
+/// Note GF9: a cancelled run takes its Overwrite answer with it: the reopened Review asks again, and an Export
+/// without a new answer leaves the foreign file as it is.
+#[test]
+fn a_cancelled_export_drops_the_overwrite_answer() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, _) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    let theirs = h.state().meshes.edit.as_ref().unwrap().source.to_vec();
+    std::fs::write(&out_path, &theirs).unwrap();
+    h.run_steps(4);
+    h.state_mut().model.export_clicked();
+    h.state_mut().model.acknowledge_all_asks();
+    h.run_steps(4);
+    h.get_by_label("Overwrite it").click();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().model.nif_review_rows()[0].answer,
+        Some(GuardChoice::Overwrite)
+    );
+    h.state_mut().model.export_from_review();
+    h.state_mut().model.cancel_export();
+    let start = Instant::now();
+    while h.state().model.export.running.is_some() {
+        assert!(start.elapsed() < Duration::from_secs(120));
+        h.run_steps(1);
+    }
+    h.run_steps(4);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        theirs,
+        "the cancel wrote nothing"
+    );
+    // Reopened, the row asks again.
+    h.state_mut().model.export_clicked();
+    h.state_mut().model.acknowledge_all_asks();
+    h.run_steps(4);
+    let rows = h.state().model.nif_review_rows().to_vec();
+    assert_eq!(rows[0].answer, None, "{rows:?}");
+    assert!(h.state().model.review_gate().is_err());
+    h.get_by_label(&format!("{path} was not written by Tessalith"));
+    h.state_mut().model.export_from_review();
+    h.run_steps(8);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        theirs,
+        "no Export without a new answer"
+    );
+}
