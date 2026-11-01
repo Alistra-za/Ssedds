@@ -2823,7 +2823,7 @@ namespace rgbcx
 					return;
 				const double a = (av * bb - bv * ab) / det;
 				const double c = (bv * aa - av * ab) / det;
-				// |a|, |c| stay far inside int range (det >= 1e-9); the clamp only keeps the cast defined.
+				// The clamp keeps the cast defined; clampi(x +- 1) below gives the same pair as the reference's saturating cast.
 				const int ai = (int)std::max(-1000.0, std::min(1256.0, ::round(a)));
 				const int ci = (int)std::max(-1000.0, std::min(1256.0, ::round(c)));
 				const uint32_t before = b.err;

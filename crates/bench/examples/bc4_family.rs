@@ -144,7 +144,7 @@ struct ImgOut {
     /// patched C++ (`cxx`) blocks that differ from v4 (v5 for BC3)
     mismatch_cxx_ref: u64,
     blocks: u64,
-    /// (variant, ms for the whole image) for the shipped FFI encoder and v4
+    /// (variant, ms for the whole image) for `ffi` (the upstream rgbcx mode loop), v4 and `cxx` (the patched C++)
     ms: Vec<(String, f64)>,
 }
 

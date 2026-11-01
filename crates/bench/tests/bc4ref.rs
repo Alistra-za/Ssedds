@@ -1,4 +1,5 @@
-//! Pins the BC4 reference search (docs/research/bc4-family.md) to the upstream rgbcx path and to its never-worse rule.
+//! Pins the BC4 reference search (docs/research/bc4-family.md): `shipped` to the upstream rgbcx path, `search` to its
+//! never-worse rule, to the patched C++ (BC3/BC4/BC5 entry points) and to the engine's encode path.
 use encoders_sys::{
     bc3_encode_block, bc4_encode_block, bc5_encode_block, gather_blocks, RGBCX_MAX_LEVEL,
 };
@@ -228,15 +229,15 @@ fn engine_bc4_bytes_equal_reference() {
     }
 }
 
-/// Every BC4 block of the bench's BC3 alpha, BC4 and BC5 sets (rounds 1-2), at each radius.
+/// Every BC4 block of the bench's BC3 alpha, BC4 and BC5 sets (rounds 1-2), at each radius; BC5 also through
+/// `bc5_encode_block`. Panics when run without `SDC_BENCH_ROOT`, so a mis-set environment never passes for the proof.
 #[test]
 #[ignore = "needs SDC_BENCH_ROOT"]
 fn ffi_equals_reference_on_corpus() {
-    let Some(root) = sdc_bench::corpus::corpus_root() else {
-        return;
-    };
-    let mut checked = 0u64;
-    let mut bad = 0u64;
+    let root = sdc_bench::corpus::corpus_root().expect(
+        "SDC_BENCH_ROOT must point at the bench corpus (e.g. F:\\ai\\dds\\bench) to run this test",
+    );
+    let (mut checked, mut bad, mut bc5_checked, mut bc5_bad) = (0u64, 0u64, 0u64, 0u64);
     for (dir, set, chans, bc3) in [
         ("images2", "mask_real", &[0usize][..], false),
         ("images2", "normal_real", &[0, 1][..], false),
@@ -261,10 +262,27 @@ fn ffi_equals_reference_on_corpus() {
                         bad += (got != search(&v, r, bc3)) as u64;
                     }
                 }
+                // BC5 through its own entry point: R and G halves
+                if set == "normal_real" {
+                    for r in [4, 5, 10] {
+                        let e = bc5_encode_block(src, r);
+                        for (k, ch) in [0usize, 1].into_iter().enumerate() {
+                            let v: [u8; 16] = std::array::from_fn(|t| src[t][ch]);
+                            bc5_checked += 1;
+                            bc5_bad += (e[8 * k..8 * k + 8] != search(&v, r, false)) as u64;
+                        }
+                    }
+                }
             }
         }
     }
-    eprintln!("corpus: {checked} block-channel-radius checks, {bad} mismatches");
-    assert!(checked > 0);
-    assert_eq!(bad, 0, "{bad} of {checked} mismatched");
+    eprintln!(
+        "corpus: {checked} block-channel-radius checks, {bad} mismatches; bc5_encode_block: {bc5_checked} half-radius checks, {bc5_bad} mismatches"
+    );
+    assert!(checked > 0 && bc5_checked > 0);
+    assert_eq!(
+        (bad, bc5_bad),
+        (0, 0),
+        "{bad} of {checked}, bc5 {bc5_bad} of {bc5_checked} mismatched"
+    );
 }
