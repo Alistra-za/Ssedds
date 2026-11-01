@@ -1,12 +1,15 @@
 //! Note FB1 (review C2, amendment B): a project never inherits another project's export folder from `gui.toml`; the
-//! header's `Export to:` chip is drawn only once a folder is chosen, and its Export button reads `Review {n} files`
-//! until Review would write without skipping anything.
+//! header's `Export to:` chip says `not chosen` until one is, and its Export button reads `Review {n} files` until
+//! Review would write without skipping anything (Note F?5 amended FB1's "chip only when chosen").
 mod support;
-use egui_kittest::kittest::Queryable;
+use eframe::egui::accesskit::Role;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
+use sdc_gui::model::meshes::MeshesModel;
 use sdc_gui::model::picker::{PickerBackend, PickerSpec};
 use sdc_gui::model::AppModel;
-use sdc_gui::settings::GuiSettings;
+use sdc_gui::settings::{GuiSettings, MeshesSettings};
+use sdc_gui::ui::meshes::UndoTarget;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -155,19 +158,94 @@ fn harness(m: AppModel) -> Harness<'static, AppModel> {
     h
 }
 
+/// Note F?5 (O2; supersedes FB1's "chip only when chosen"): a project is open and none is chosen, so the header says so.
 #[test]
-fn the_header_has_no_export_to_chip_until_a_folder_is_chosen() {
+fn the_header_says_the_folder_is_not_chosen() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(fresh(d.path()));
     h.run();
-    assert_eq!(h.query_all_by_label_contains("Export to:").count(), 0);
-    assert_eq!(h.query_all_by_label_contains("not set").count(), 0);
-    // The one choice: Review leads with it.
+    h.get_by_role_and_label(Role::Button, "Export to: not chosen");
+    assert_eq!(h.query_all_by_label("More export options").count(), 0);
+    // Once chosen it names the folder.
     let m = h.state_mut();
     m.set_export_folder(d.path().join("out"));
     idle(m);
     h.run();
     assert_eq!(h.query_all_by_label_contains("Export to:").count(), 1);
+    assert_eq!(h.query_all_by_label("Export to: not chosen").count(), 0);
+}
+
+/// Note F?5 (A4, Important 7): with no project the `gui.toml` folder is not shown (it vanishes when one opens), so the
+/// menu is `More`; a project with no choice of its own then reads `Export to: not chosen`.
+#[test]
+fn the_start_screen_shows_more_even_with_a_gui_toml_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let m = AppModel::new(
+        GuiSettings {
+            export_folder: Some(d.path().join("out")),
+            ..GuiSettings::default()
+        },
+        None,
+        session(),
+    );
+    assert!(m.export_folder_chosen().is_some());
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "More export options");
+    assert_eq!(h.query_all_by_label_contains("Export to:").count(), 0);
+    let root = mod_folder(d.path());
+    h.state_mut().open_folder(root);
+    idle(h.state_mut());
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Export to: not chosen");
+    assert_eq!(h.query_all_by_label("More export options").count(), 0);
+}
+
+type UndoH = Harness<'static, (AppModel, MeshesModel, Option<String>)>;
+
+/// The header with the Undo target stubbed: `None` is the Textures history (`Undo`), `Some(step)` a NIF edit whose next
+/// undo step is `step` (`Undo NIF edit: {step}`).
+fn undo_harness(dir: &std::path::Path) -> UndoH {
+    let mut meshes = MeshesModel::new(None, MeshesSettings::default());
+    meshes.procs = sdc_gui::model::meshes::no_procs;
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, (m, me, step): &mut (AppModel, MeshesModel, Option<String>)| {
+                sdc_gui::ui::header::set_meshes_view(ui.ctx(), step.is_some());
+                let target = step.as_ref().map(|s| UndoTarget {
+                    can_undo: true,
+                    can_redo: false,
+                    undo_label: Some(s.clone()),
+                    redo_label: None,
+                });
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(eframe::egui::Id::new("nif-undo-target"), target));
+                sdc_gui::ui::header::draw(ui, m, Some(&mut *me));
+            },
+            (fresh(dir), meshes, None),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// Note F?5 (A19): the Undo slot has a fixed width, so a long NIF step label does not move `MO2…` and the rest of the row.
+#[test]
+fn undo_text_does_not_move_the_header() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = undo_harness(d.path());
+    h.run_steps(4);
+    let (mo2, undo) = (h.get_by_label("MO2…").rect(), h.get_by_label("Undo").rect());
+    let long = "Add alpha to every shape";
+    h.state_mut().2 = Some(long.to_string());
+    h.run_steps(4);
+    let b = h.get_by_label("Undo (NIF edit history)");
+    assert_eq!(b.rect(), undo, "the slot");
+    assert_eq!(h.get_by_label("MO2…").rect().min.x, mo2.min.x);
+    // The text is cut in the slot; the whole step is on hover.
+    b.hover();
+    h.run();
+    h.get_by_label_contains(&format!("Undo NIF edit: {long}"));
 }
 
 /// The picker backend that records where the dialog was asked to start.
@@ -194,6 +272,14 @@ fn review_lists_the_blocker_and_its_choose_button_picks_the_folder() {
     assert!(h.query_all_by_label(NO_FOLDER).count() >= 1);
     // The missing folder counts in the heading, because the gate enforces it (Note FB4).
     h.get_by_label("Blockers (1)");
+    // Rule 5.4: the button draws its own name, and Review has no bare `Choose…`.
+    h.get_by_role_and_label(Role::Button, "Choose the export folder…");
+    assert_eq!(
+        h.query_all_by_role(Role::Button)
+            .filter(|n| n.accesskit_node().label().as_deref() == Some("Choose…"))
+            .count(),
+        0
+    );
     h.get_by_label("Choose the export folder…").click();
     h.run();
     let end = std::time::Instant::now() + Duration::from_secs(10);
@@ -212,6 +298,89 @@ fn review_lists_the_blocker_and_its_choose_button_picks_the_folder() {
     h.run();
     assert_eq!(h.query_all_by_label(NO_FOLDER).count(), 0);
     h.get_by_label("Blockers (0)");
+}
+
+/// Note F?5 (O4): the stacked layout draws the export folder row too, under `Blockers (1)`. A guard: it held before.
+#[test]
+fn the_export_folder_row_shows_in_the_stacked_review() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fresh(d.path());
+    m.open_review();
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1000.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h.get_by_label("Blockers (1)");
+    assert!(h.query_all_by_label(NO_FOLDER).count() >= 1);
+    h.get_by_role_and_label(Role::Button, "Choose the export folder…");
+}
+
+/// Note F?5 (A5, O4): with no folder chosen nothing in the window shows a `sdc-out` path. The Also column is headed
+/// `Also folders go in`, its location says the export folder is not chosen yet, and JSON lines are relative to it.
+#[test]
+fn no_sdc_out_path_is_shown_before_a_folder_is_chosen() {
+    use engine::config::{GreenConvention, Subtype};
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = fresh(d.path());
+    m.decide("landscape/rock01.png", Answer::Subtype(Subtype::PbrAlbedo));
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::PbrNormal),
+    );
+    m.decide(
+        "landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
+    idle(&mut m);
+    m.set_also_tick(engine::presets::AlsoTarget::Vanilla, true);
+    idle(&mut m);
+    assert!(m.also_on() && m.export_folder_chosen().is_none());
+    m.open_review();
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 1400.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    // Every label and value in the window, then the hover of the two Choose buttons.
+    let all = |h: &Harness<'static, AppModel>| -> Vec<String> {
+        h.query_all(egui_kittest::kittest::by().predicate(|_| true))
+            .flat_map(|n| {
+                let a = n.accesskit_node();
+                [a.label(), a.value()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    assert!(
+        !all(&h).iter().any(|t| t.contains("sdc-out")),
+        "{:?}",
+        all(&h)
+    );
+    h.get_by_label("Also folders go in");
+    assert_eq!(h.query_all_by_label_contains("Export location").count(), 0);
+    h.get_by_label_contains("Also folders go in: the export folder (not chosen yet)");
+    h.get_by_role_and_label(Role::Button, "Choose where the Also folders go…")
+        .hover();
+    h.run();
+    assert!(!all(&h).iter().any(|t| t.contains("sdc-out")));
+    h.get_by_role_and_label(Role::Button, "Choose the export folder…")
+        .hover();
+    h.run();
+    assert!(!all(&h).iter().any(|t| t.contains("sdc-out")));
+    // The JSON line, if it is drawn (the footer scrolls): it is relative to the export folder.
+    let json: Vec<String> = all(&h)
+        .into_iter()
+        .filter(|t| t.contains(".json"))
+        .collect();
+    assert!(
+        json.iter().all(|t| t.starts_with("‹export folder›\\")),
+        "{json:?}"
+    );
+    assert!(!json.is_empty(), "the JSON line is drawn");
 }
 
 /// A clean project with no folder chosen does not write into `sdc-out`: the click opens Review instead.

@@ -272,6 +272,39 @@ fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
     h.get_by_label(&full);
 }
 
+/// Note F?5: at 1100, 1280 and 1600 px the export chip (`not chosen`, or a long folder cut in the middle) stays on the
+/// row, before Save and inside the window, and nothing overlaps (the capture check of the plan's Task 5, as a test).
+#[test]
+fn the_export_chip_holds_at_three_widths() {
+    let d = tempfile::tempdir().unwrap();
+    for w in [1100.0, 1280.0, 1600.0] {
+        for chosen in [false, true] {
+            let dir = d.path().join(format!("{w}-{chosen}"));
+            let mut m = opened_unchosen(&dir);
+            if chosen {
+                let mut deep = dir.clone();
+                for i in 0..8 {
+                    deep = deep.join(format!("a rather long folder name number {i}"));
+                }
+                choose_export(&mut m, deep.join("mods").join("My Mod"));
+            }
+            let h = harness(m, w, false);
+            assert_no_overlap(&h, "header", w);
+            let chip = h.get_by_label_contains("Export to: ").rect();
+            let save = h.get_by_label("Save").rect();
+            let export = h.get_by_label(&header_export_label(&h)).rect();
+            assert!(
+                chip.right() <= save.left() && export.right() <= w,
+                "at {w} (chosen {chosen}): {chip:?} {save:?} {export:?}"
+            );
+            assert!(
+                chip.min.y <= export.center().y && export.center().y <= chip.max.y,
+                "at {w}: the chip is off Export's row"
+            );
+        }
+    }
+}
+
 /// Note BH15: the columns' eye toggles keep their accessible names and say whether the column shows.
 #[test]
 fn the_column_toggles_are_eyes_named_for_their_columns() {

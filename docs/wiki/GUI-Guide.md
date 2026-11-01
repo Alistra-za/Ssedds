@@ -13,7 +13,7 @@ The picture shows the Textures view after a folder is open, with a small made-up
 1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](#header).
 2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project.
 3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns.
-4. **Export to ▾** (header, right; **More ▾** until a folder is chosen). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export](#export).
+4. **Export to ▾** (header, right; **More ▾** with no project open). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export](#export).
 5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same.
 6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](#export).
 7. **Texture filters** (top of the Textures column). Pills with counts (*Undecided*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures (left)](#textures-left).
@@ -37,7 +37,7 @@ The line under the header is the status line: the file and set counts, a VRAM es
 | **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
 | **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. Right after the view tabs, Textures view with a folder open only. |
-| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. It is not drawn until you choose a folder for the project (the folder you picked for another mod is not inherited); the menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab; the JSON's file name is its top field). |
+| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. Until you choose a folder for the project (the folder you picked for another mod is not inherited) it reads **Export to: not chosen ▾**, and Review lists "No export folder chosen" with a **Choose the export folder…** button. With no project open the menu is a plain **More ▾**. A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab; the JSON's file name is its top field). |
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Left of Export. |
 | **Export** | Convert the folder. The big button at the right edge. It reads **Review n files** while anything is undecided or blocked, **Export n files** (accent) once Review would write without skipping, and plain **Export** with no folder open. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
 
@@ -240,9 +240,9 @@ Generated maps' records and the hashes of the JSON files Tessalith writes are al
 
 In the cs mode one export can also write a vanilla and a complex-material (CM) version of a PBR mod.
 
-- **Switch it on** with **Export to ▾** (**More ▾** until a folder is chosen) **→ Also export as Vanilla** or **Also export as Complex material** (checkable, no dialog; "Open a folder first" without a project), or with the ticks in Review's **Also export as** column. The column shows in the cs mode or while a tick is on; its red reason line shows only while a tick is on.
+- **Switch it on** with **Export to ▾** (**More ▾** with no project open) **→ Also export as Vanilla** or **Also export as Complex material** (checkable, no dialog; "Open a folder first" without a project), or with the ticks in Review's **Also export as** column. The column shows in the cs mode or while a tick is on; its red reason line shows only while a tick is on.
 - **While a tick is on, Export always opens Review.** Review's Export writes three folders side by side: `<project> PBR` (the normal cs export, with its JSON), `<project> Vanilla` and `<project> CM`. Ticking only CM writes Vanilla too.
-- **Review's column** also holds the **Export location** (per project, `[project] also_location` in `sdc-project.toml`; by default the export folder), the three folder names, **Keep metal brightness** and its strength (CM), **Also write a zip of each folder** and **Skip these sets**.
+- **Review's column** also holds **Also folders go in** (**Choose where the Also folders go…**; per project, `[project] also_location` in `sdc-project.toml`; by default the export folder, shown as "the export folder (not chosen yet)" until one is chosen), the three folder names, **Keep metal brightness** and its strength (CM), **Also write a zip of each folder** and **Skip these sets**.
 - **Install** the PBR folder or the Vanilla folder. For CM, install the CM folder on top of the Vanilla folder. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
 - **Vanilla** gets a converted diffuse, a `_n` with the specular mask in alpha and, where the meshes use the environment-map shader, an env `_m`. That needs a Meshes scan; without one no env `_m` is written. A PBR Landscape set's `_p` goes into Vanilla too (Terrain Helper). Textures that are not PBR are copied from the PBR folder when they would be the same. **CM** gets one `_m` per PBR set.
 - **Skip a set** with Review's **Skip these sets**, or, in 2D, **Skip vanilla/CM for this set** in the set editor's Material tab.
@@ -332,7 +332,7 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ### The TruePBR JSON editor
 
-Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** until a folder is chosen) or from the **TruePBR JSON editor…** button in a set's Material tab. It opens as a tab of the centre column; **Pop out** moves it to a window of its own, titled "TruePBR JSON — Tessalith", and **Dock** brings it back (see [Presets](#presets)). Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
+Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** with no project open) or from the **TruePBR JSON editor…** button in a set's Material tab. It opens as a tab of the centre column; **Pop out** moves it to a window of its own, titled "TruePBR JSON — Tessalith", and **Dock** brings it back (see [Presets](#presets)). Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set and brings its editor to the front), then its keys as small pills with the same controls as the Material tab's groups.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
@@ -386,7 +386,7 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
   - A six-file set has six source buttons, +X to -Z, over the source side. Each shows the processed face (after turns, flips, sizing and mips), the same picture as its cell in the cross.
   - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
   - A set that cannot be built shows the engine's reason (for example `CUBE-FACES: faces differ in size`) in the encoded pane.
-- **Make marker cube…** in **Export to ▾** (**More ▾** until a folder is chosen) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
+- **Make marker cube…** in **Export to ▾** (**More ▾** with no project open) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
   - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
   - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
   - It never overwrites a file Tessalith did not write; it says it kept it and leaves the dialog open so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.

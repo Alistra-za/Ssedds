@@ -21,8 +21,10 @@ pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
     ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
 }
 
-/// What the export menu's button says while no export folder is chosen (Note FB1).
+/// What the export menu's button says with no project open (Note F?5, was Note FB1's "no folder chosen").
 const MORE_TEXT: &str = "More ▾";
+/// What it says with a project open and no export folder chosen for it (Note F?5).
+const NOT_CHOSEN_TEXT: &str = "Export to: not chosen ▾";
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
@@ -109,15 +111,22 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     let h = 2.0 * ui.spacing().interact_size.y;
     let save_w = button_width(ui, "Save");
     let glyph = button_width(ui, "0") - 2.0 * ui.spacing().button_padding.x;
-    // Note FB1: the Export to chip names the folder only once one is chosen for this project; until then the menu is
-    // a plain "More ▾" (it still holds the marker cube, the Also ticks and the JSON editor).
+    // Note F?5: with a project open the menu reads `Export to: {folder} ▾` or `Export to: not chosen ▾`; with none it
+    // is `More ▾` (the folder in `gui.toml` is not this project's, and nothing exports without a project).
     let full = model
-        .export_folder_chosen()
+        .root
+        .as_ref()
+        .and_then(|_| model.export_folder_chosen())
         .map(|p| p.display().to_string());
+    let fixed_text = match (&model.root, &full) {
+        (None, _) => Some(MORE_TEXT),
+        (Some(_), None) => Some(NOT_CHOSEN_TEXT),
+        _ => None,
+    };
     // K1: what Export to's path may take is the room left after the button's own text, Save and Export.
-    let (lead, min_path) = match full {
-        Some(_) => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph),
-        None => (MORE_TEXT, 0.0),
+    let (lead, min_path) = match fixed_text {
+        Some(t) => (t, 0.0),
+        None => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph),
     };
     let fixed = button_width(ui, lead) + gap + save_w + gap + EXPORT_WIDTH;
     fit(ui, fixed + min_path);
@@ -125,8 +134,11 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
         (((room(ui) - fixed - gap) / glyph).floor().max(0.0) as usize).max(PATH_MIN_CHARS);
     let others = gap + save_w + gap + EXPORT_WIDTH;
     let text = loop {
+        if let Some(t) = fixed_text {
+            break t.to_string();
+        }
         let Some(p) = &full else {
-            break MORE_TEXT.to_string();
+            unreachable!("a chip without fixed text has a folder");
         };
         let text = format!("Export to: {} ▾", elide_middle(p, chars));
         // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
@@ -579,6 +591,12 @@ pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>)
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     // A20: the NIF history while a NIF edit is open in the Meshes view.
     let nif = super::meshes::undo_target(ui.ctx());
+    // Note F?5 (A19): a fixed slot, so a long NIF step label never moves the controls after it. `Undo NIF edit` is the
+    // widest text without a step (the Textures view draws `Undo` / `Redo`), so every no-step text fits whole.
+    let slot = egui::vec2(
+        button_width(ui, "Undo NIF edit").max(button_width(ui, "Redo NIF edit")),
+        ui.spacing().interact_size.y,
+    );
     for undo in [true, false] {
         let textures = if undo {
             model.undo_label()
@@ -586,7 +604,12 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
             model.redo_label()
         };
         let b = undo_button(nif.as_ref(), undo, textures);
-        let r = ui.add_enabled(b.enabled, egui::Button::new(&b.text));
+        // The text truncates inside the slot; the hover holds the whole step and the name stays `b.name`.
+        let r = ui
+            .add_enabled_ui(b.enabled, |ui| {
+                ui.add_sized(slot, egui::Button::new(&b.text).truncate())
+            })
+            .inner;
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, b.enabled, &b.name));
         if r.on_hover_text(b.hover.clone())
             .on_disabled_hover_text(b.hover)
@@ -774,7 +797,7 @@ pub fn meshes_view_active(ctx: &egui::Context) -> bool {
 }
 
 /// Export to ▾ (A4): `text` shows the folder cut in the middle; the hover and the accessible name keep all of it (K8).
-/// Without a chosen folder (`full` None, Note FB1) it is "More ▾". Entries: Choose export folder…, Open export folder
+/// Without a chosen folder (`full` None) it is "Export to: not chosen ▾", or "More ▾" with no project (Note F?5). Entries: Choose export folder…, Open export folder
 /// and, in cs mode, the PGPatcher JSON editor (R14).
 fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: Option<String>) {
     let mut choose = false;
@@ -831,16 +854,21 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             ui.close();
         }
     });
-    let name = match &full {
-        Some(f) => format!("Export to: {f}"),
-        None => "More export options".to_string(),
+    let name = match (&full, model.root.is_some()) {
+        (Some(f), _) => format!("Export to: {f}"),
+        (None, true) => "Export to: not chosen".to_string(),
+        (None, false) => "More export options".to_string(),
     };
     let enabled = ui.is_enabled();
     r.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    let root_open = model.root.is_some();
     r.response.on_hover_text(match full {
         Some(f) => f,
-        None => "No export folder chosen yet: choose one here or in Review".to_string(),
+        None if root_open => {
+            "No export folder chosen yet: choose one here or in Review".to_string()
+        }
+        None => "Open a folder to choose where its textures are written".to_string(),
     });
     if choose {
         model.pick_export_folder(ui.ctx());

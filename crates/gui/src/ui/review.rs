@@ -17,6 +17,12 @@ use eframe::egui;
 use engine::config::{AlphaPolicy, CubeLayout, Subtype, Target};
 use engine::manifest::RecodeWhy;
 use engine::presets::{AlsoTarget, ExportConfig};
+use std::path::Path;
+
+/// Note F?5: what the Also location reads while no export folder is chosen (the fallback is never shown as a path).
+const NOT_CHOSEN_YET: &str = "the export folder (not chosen yet)";
+/// Note F?5: what a JSON line's path starts with while no export folder is chosen.
+const NOT_CHOSEN_ROOT: &str = "‹export folder›";
 
 /// What a click on an undecided row asks for.
 pub enum RowPick {
@@ -286,8 +292,12 @@ pub(super) fn plural(n: usize) -> &'static str {
 }
 
 /// R6: one line per JSON file under What will be written.
-fn json_line_text(l: &JsonLine) -> String {
-    let path = l.path.display();
+/// Note F?5: with `unchosen` (the export folder's fallback name) the path is shown under `‹export folder›`.
+fn json_line_text(l: &JsonLine, unchosen: Option<&Path>) -> String {
+    let path = match unchosen.and_then(|r| l.path.strip_prefix(r).ok()) {
+        Some(rel) => format!("{NOT_CHOSEN_ROOT}\\{}", rel.display()),
+        None => l.path.display().to_string(),
+    };
     match (l.state, l.kind) {
         (DiskState::New, _) => format!("{path}: will be written"),
         (DiskState::Ours, _) => format!("{path}: will be replaced (written by Tessalith)"),
@@ -550,8 +560,15 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                 }
             }
         });
-        ui.weak("Export location");
-        let loc = m.also_location().display().to_string();
+        ui.weak("Also folders go in");
+        // Note F?5: with no export folder chosen and no own location, the fallback is a name, never a `sdc-out` path.
+        let unchosen = m.export_folder_chosen().is_none()
+            && m.sets_doc.as_ref().and_then(|d| d.also_location()).is_none();
+        let loc = if unchosen {
+            NOT_CHOSEN_YET.to_string()
+        } else {
+            m.also_location().display().to_string()
+        };
         egui::Sides::new().shrink_left().truncate().show(
             ui,
             |ui| {
@@ -560,17 +577,20 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                 });
                 let chars = (ui.available_width() / glyph).floor().max(8.0) as usize;
                 let r = ui.add(egui::Label::new(super::header::elide_middle(&loc, chars)));
-                let name = format!("Export location: {loc}");
+                let name = format!("Also folders go in: {loc}");
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
                 r.on_hover_text(&loc);
             },
             |ui| {
-                let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                let r = ui.add_enabled(
+                    !m.picker.busy(),
+                    egui::Button::new("Choose where the Also folders go…"),
+                );
                 r.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
                         r.enabled(),
-                        "Choose the Also export location…",
+                        "Choose where the Also folders go…",
                     )
                 });
                 let r = r
@@ -798,7 +818,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     ui.label(format!("{files} DDS file{}", plural(*files)));
                                 }
                                 Footer::Json(l) => {
-                                    ui.label(json_line_text(l));
+                                    let fallback = (!folder_chosen).then(|| m.export_root());
+                                    ui.label(json_line_text(l, fallback.as_deref()));
                                 }
                             });
                         }
@@ -881,14 +902,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             if !folder_chosen {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(RED, NO_EXPORT_FOLDER);
-                    let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            r.enabled(),
-                            "Choose the export folder…",
-                        )
-                    });
+                    // Rule 5.4: the visible text is the accessible name.
+                    let r = ui.add_enabled(
+                        !m.picker.busy(),
+                        egui::Button::new("Choose the export folder…"),
+                    );
                     let r = r
                         .on_hover_text("Choose where converted textures are written")
                         .on_disabled_hover_text(picker::BUSY_HOVER);
