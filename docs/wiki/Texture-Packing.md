@@ -65,7 +65,7 @@ If a set has both a ready-made packed file (`iron_rmaos.png`) and raw maps for i
 
 ## Helper textures
 
-A **helper** is a source file that fills one channel of another output of its own set and is never written as its own DDS: the raw maps above, an opacity map, the RNM layers below, and fuzz or subsurface weight maps you mark by hand. The GUI lists every helper in a Helpers group under the tiles (see the [GUI guide](GUI-Guide.md#textures-left)); the CLI reads the same settings from `sdc.toml` ([Project config](Project-Config.md#files)), so both write the same bytes.
+A **helper** is a source file that fills one channel of another output of its own set and is never written as its own DDS: the raw maps above, an opacity map, the RNM layers below, and fuzz or subsurface weight maps you mark by hand. The GUI lists every helper in a Helpers group under the tiles (see [Helper textures in the GUI](GUI-Helpers-RNM-and-Cubemaps.md#helper-textures)); the CLI reads the same settings from `sdc.toml` ([Project config](Project-Config.md#files)), so both write the same bytes.
 
 | Role (`helper.role`) | Suggested target | Also offered |
 |---|---|---|

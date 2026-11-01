@@ -14,12 +14,12 @@ The picture shows the Textures view after a folder is open, with a small made-up
 4. **Export to ▾** (header, right; **More ▾** until a folder is chosen). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export to](GUI-Main-Window.md#export-to).
 5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same. See [Keyboard](GUI-Keyboard.md#keyboard).
 6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](GUI-Main-Window.md#export) and [Export](#export).
-7. **Texture filters** (top of the Textures column). Pills with counts (*Undecided*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures (left)](#textures-left).
-8. **Texture tiles** (Textures column). One tile per source file with its thumbnail, name and badges. An amber border means it still needs an answer; click a tile to select it, double-click for the preview. See [Deciding](#deciding).
-9. **Sets filters** (top of the Sets column). Pills for *Not ready*, *Ready* and *No JSON*, a **Filter ▾** and a search box for sets.
-10. **A set card** (Sets column). A set groups the textures of one material: its shader, a status dot, a warning count and a chip for each slot (D, N, P, RMAOS and so on). Drag a texture onto a card to move it there. See [Sets and the set editor](#sets-and-the-set-editor).
-11. **Settings of the selected texture** (centre). Output summary, then the groups Type, Colour, Alpha, Mipmaps and Compression, each value showing where it came from. A texture that needs an answer shows an *Undecided* box above them. Selecting a set shows its recipes instead. See [Centre](#centre).
-12. **Advanced** (right edge). The drawer with tool paths, encoder and interface settings. Click the strip to open it. See [Advanced drawer](#advanced-drawer).
+7. **Texture filters** (top of the Textures column). Pills with counts (*Undecided*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures column](GUI-Textures-Column.md#filters).
+8. **Texture tiles** (Textures column). One tile per source file with its thumbnail, name and badges. An amber border means it still needs an answer; click a tile to select it, double-click for the preview. See [Textures column](GUI-Textures-Column.md) and [Deciding](GUI-Texture-Panel.md#deciding).
+9. **Sets filters** (top of the Sets column). Pills for *Not ready*, *Ready* and *No JSON*, a **Filter ▾** and a search box for sets. See [Sets column](GUI-Sets-Column.md#filter).
+10. **A set card** (Sets column). A set groups the textures of one material: its shader, a status dot, a warning count and a chip for each slot (D, N, P, RMAOS and so on). Drag a texture onto a card to move it there. See [Sets column](GUI-Sets-Column.md#set-cards).
+11. **Settings of the selected texture** (centre). Output summary, then the groups Type, Colour, Alpha, Mipmaps and Compression, each value showing where it came from. A texture that needs an answer shows an *Undecided* box above them. Selecting a set shows its recipes instead. See [Texture settings panel](GUI-Texture-Panel.md#centre).
+12. **Advanced** (right edge). The drawer with tool paths, encoder and interface settings. Click the strip to open it. See [Advanced drawer](GUI-Advanced-Drawer.md).
 13. **Bottom panel tabs** (full width, bottom). **Problems** lists every warning with its fix as the row's own button (for example **Remove from set**, **Regenerate…**, **Rebuild Z**, **Open folder**, **Open report**, **Set layout ▾**, **Fix path**, **Undo this change**, and for what used to be done by hand **Open in editor** and **Reload** for an unreadable `sdc-project.toml`, **Clear read-only flag**, **Reset also.json**, **Tag as grass**, **Straight alpha**, **Remove match** and **Remove aliases from {id}**; buttons act only on their own click, never on Enter), in a sentence that says what to do (hover it for the engine's message and its code, such as `LOSS-ALPHA-DATA`; the codes are explained in [Troubleshooting](Troubleshooting.md)), **Messages** holds the notes of this session, **Files** shows an export's progress, and **Review** joins them while an export is being reviewed. Review opens at 40 % of the window's height (drag its top edge to change it; Review remembers its own height), and under 1200 points of window width its sections stack in one scrolling column. Click a tab to open or collapse the panel. A texture with a suggested type shows it as one button (**Set type: diffuse ✓**), with **▾** for the type picker (search box, suggestion on top); **Accept all suggestions (n)** at the top takes every suggestion, and **Enter** or **Space** on a focused row takes that row's. **Save** writes them.
 
 The line under the header is the [status line](GUI-Main-Window.md#status-line-and-banner).
@@ -29,6 +29,12 @@ The line under the header is the [status line](GUI-Main-Window.md#status-line-an
 - [Main window](GUI-Main-Window.md): opening a folder, the header, the columns, dialogs and the words the window uses.
 - [GUI settings and recovery](GUI-Settings.md): where settings live, what is remembered, crashes.
 - [Keyboard and command palette](GUI-Keyboard.md): every shortcut.
+- [Textures column](GUI-Textures-Column.md): tiles, filters, sort and tile size.
+- [Sets column](GUI-Sets-Column.md): set cards, the Sets filter, moving and reordering sets, slot menus.
+- [Bulk editing and renaming](GUI-Bulk-and-Rename.md): selecting several, editing them together, the rename dialog and the input name box.
+- [Texture settings panel](GUI-Texture-Panel.md): the settings of one texture, deciding, BC7 weighting, how edits are written.
+- [Advanced drawer](GUI-Advanced-Drawer.md): batch, NVTT, preview and interface settings.
+- [Helpers, RNM layers and cubemaps](GUI-Helpers-RNM-and-Cubemaps.md): the Helpers group and panel, RNM layers, the cube controls.
 
 The sections below have no page of their own yet.
 
@@ -38,149 +44,23 @@ Moved to [Main window](GUI-Main-Window.md#header).
 
 ## The three columns
 
-From left to right: Textures, Sets, then the centre. The right edge holds the Advanced drawer; with a set selected in 2D, Advanced is instead the last tab under the set editor's slot rows. Under all of them runs the bottom panel ([Main window](#main-window), item 13).
-
-### Textures (left)
-
-One tile per file, with a thumbnail, the name and badges. Above the search box is a row of pills with counts: *Undecided*, *Warnings*, *Failed* and *Not in a set*. **Filter ▾** opens a popup with combos for *Sub-type*, *Output format*, *Encoder*, *Set membership* and *Sort* (Name, Source size or Status), and stays open while you use it; it reads **Filter (k) ▾** while k of the four filter combos are set. The **−** / **+** buttons after it make the tiles smaller or larger (from 64 points up to the thumbnail's own size, 128 points at 100 % scaling, in steps of 16). Everything combines, and **Clear filters** resets the pills, the combos and the search (not the sort or the tile size). Helper files (raw AO, roughness, specular, opacity and other masks, RNM layers) are not tiles: they are compact rows in a **Helpers (n)** group under the tiles, each saying where it goes ("→ iron_rmaos R") or "not used", with an amber **✎** role chip when you set the role. Click the group's heading to collapse or open it (open by default). Click a row to set its role, its targets, the channel it is read from and Invert; see [Texture types](Texture-Packing.md#helper-textures). A tile whose name gives no helper term can be made one with the **Helper role** combo at the top of its settings. The **◀** on the heading collapses the column to a strip; **▶** expands it.
-
-### Centre
-
-The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, Compression. Each value shows where it came from, for example "from sdc.toml", "suggested", or "from the meshes that use this texture". Selecting a set shows its recipes instead.
-
-| Row | Choices |
-|---|---|
-| Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered, plus the texture's current sub-type. The list opens under the field with a search box and the suggested type on top, the same picker as the Problems tab's **Set type…**. |
-| Content | sRGB-encoded colour, or Linear data. |
-| DDS tag | _SRGB or UNORM (linear), limited to what the format and Mode allow. |
-| Alpha | Remove, Cutout, Blend, Cutout + Blend, Data. |
-| Threshold, Comparison | Slider 1 to 254; Greater than, or Greater than or equal. |
-| Coverage, Exact opaque alpha | Auto / On / Off; on or off. |
-| Normal handling, Normal base level | Renormalise or Renormalise and bake; Renormalise to unit length or Keep as authored. |
-| Mipmaps: Levels, Filter, Edge | Full chain or None (base level only); Box, Tent, Mitchell, Kaiser; Wrap or Clamp. |
-| Format, Effort, Encoder, BC7 weighting | The block formats plus RGBA8, R8, RG8 and (under `cs`) RGBA16F; bc7e effort; Built-in or NVTT Production; Linear, Perceptual, Alpha ×2, ×8 or ×16 (BC7 with the built-in encoder only). |
-
-Options a texture cannot use are greyed out, with the reason on hover. For example, Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting; HDR textures may use Box or Tent; Edge is locked while the filter is Box; Effort is locked for uncompressed formats; BC7 weighting shows only for BC7 with the built-in encoder, and its Perceptual option only for colour without data alpha; the Encoder row is locked for BC1 to BC5 and hidden for uncompressed formats.
-
-A texture's settings start with its output size ("Output: BC7 · 2048x2048 · 12 mips · 5.3 MiB"), and the status line adds a folder total (a VRAM estimate). After a mod scan, **Used by meshes (N)** lists the meshes that use the texture, with their mod and priority; **Show in Meshes** opens the Meshes view listing just those meshes. A complex `_m` has an **Enable parallax** box: ticked keeps its alpha as the height, unticked writes alpha 0.
-
-For an emissive, the Compression group shows the `FMT-HDR-SOURCE` reason (why it is BC6H or BC7 sRGB).
-
-A DDS file in the folder shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
-
-### BC7 weighting against BC3
-
-**BC7 weighting** sets how much the built-in BC7 encoder weighs alpha against colour: Linear (the default), Perceptual, or Alpha ×2, ×8 or ×16 (alpha error counts 2, 8 or 16 times). The chart compares each with BC3, as mean PSNR in dB, on three kinds of texture.
-
-![Grouped bar chart of mean RGB and alpha PSNR for BC3 and the BC7 weightings on three texture classes. On colour with smooth alpha, Alpha ×8 gives 51.40 dB alpha against 47.24 for BC3 and keeps 46.60 dB RGB against 41.00. On a normal map or packed rmaos with specular in alpha, BC3 keeps the highest alpha, and BC7 alpha rises with the weight.](../img/bc7-alpha-weights.svg)
-
-Takeaway: for colour with smooth alpha, Alpha ×8 beats BC3 on alpha and keeps 5.6 dB more RGB. For specular in the alpha of a normal map or an `_rmaos`, BC3 still has the highest alpha. BC7 closes the gap as the weight rises, and it keeps the better RGB or normals. The "w4" row was measured in the study but is not a dropdown option. Source: local study, 2026-10-21, and [DECISIONS Note CP](../DECISIONS.md). The full results (SSIM, max error, exact 0 and 255, per texture class) are in [Research](../research/bc7-alpha-weights.md).
-
-### Sets (between Textures and the centre)
-
-Textures grouped into material sets, with the status of each packed output (run, conflict, disabled, failed). See [Sets and the set editor](#sets-and-the-set-editor).
+Moved to [Textures column](GUI-Textures-Column.md), [Sets column](GUI-Sets-Column.md) and [Texture settings panel](GUI-Texture-Panel.md).
 
 ## Deciding
 
-A texture whose name follows the conventions decides itself: High-confidence suggestions are accepted. When the plan settles, those sub-types (and any alpha meaning taken from scanned meshes) are written to `sdc.toml` as one undo step, shown as one Problems row, "{n} types set automatically (High confidence)", with **Undo this change** and the list on hover. Save keeps them, so the command line reads the same types. A file you already set is never touched, and a written type is a project value like one you chose: a later scan does not change it, but while it is still the type Tessalith would pick, a set shader you pick (or Auto), PBR follow or a new preset alias re-types it. See [Texture types](Texture-Types.md) for the naming rules.
-
-A texture that still needs an answer has an amber border. The centre column then shows an *Undecided* box with the question:
-
-| Question | Controls |
-|---|---|
-| What kind of texture is this? | A sub-type dropdown and **Confirm**. |
-| What does the alpha channel mean? | *Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*. |
-| An info line "IN-GREEN-UNSTATED" on a plain `_normal` | The map is converted as DirectX. Press *Treat as OpenGL (flip green)* if it is an OpenGL map; an OpenGL file then shows *Green: OpenGL (flipped)* with a *Treat as DirectX* button that undoes it. |
-| A blocking warning | **Acknowledge for this texture**. For `DIM-NPOT` there is also **Resize to a power of two**, which writes `resize = "pot-down"`. |
-
-Every answer is written to `sdc.toml`, as a field value or as an `allow` code on the file's `[files]` entry. A choice you make always wins over a suggestion.
-
-### Alpha from the meshes
-
-After a mod scan (see [Mod scanning](Mod-Scanning.md)), a colour map whose alpha varies takes its alpha meaning from the meshes that use it, and the alpha question is not asked:
-
-| Meshes using the texture | Result |
-|---|---|
-| Any mesh with alpha blending | Blend |
-| Alpha testing | Cutout, at the strictest mesh threshold |
-| Both | Cutout + Blend |
-| No mesh with alpha | Remove |
-
-The Alpha row then reads "from the meshes that use this texture". Your own choice still wins. Right after a folder opens, the question may show until the scan has been read.
+Moved to [Texture settings panel](GUI-Texture-Panel.md#deciding).
 
 ## Editing
 
-Change any field in the centre column. The change goes into `sdc.toml` as a `[files."<path>"]` entry, keyed by the file's path relative to the folder that holds `sdc.toml`. Packed outputs are keyed without an extension, for example `landscape/rock01_rmaos`.
-
-The GUI writes only `target`, the `[files.*]` tables, `[inputs.*]` aliases and `defaults.packing.fill.*`. Comments, ordering, rules and every other table are left as they were.
-
-- Unsaved edits put a dot in the window title until you save. Tiles carry no mark. Export saves first.
-- If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it (**Reload from disk**) or overwrite it (**Overwrite with my changes**). Without unsaved edits, the GUI reloads it when the window regains focus or when you export.
-- Dialogs share one style: the button Enter presses is drawn filled (teal), a destructive button (Don't save, Discard, Delete, Reset, Overwrite, Stop the export) is outlined in red and needs a click (Enter or Space on it does nothing), and the footer reads plain, destructive, then the default. Closing the window or opening another folder with unsaved edits asks first (**Save**, **Don't save**, **Cancel**); Enter is Cancel there. During an export, the dialog offers **Stop the export and close** (or **Stop the export and open the folder**) or **Keep exporting**.
-- **Ctrl+Z** undoes and **Ctrl+Y** redoes, up to 200 steps.
-
-When a texture's sub-type changes (by a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set that the new type does not allow are reset to the new type's default. An info row in Problems says which, with **Undo this change**. Textures in pinned slots are left alone and named in that row. One undo restores both.
-
-**Resize** is in the Advanced drawer under *Advanced texture fields*: *None*, *Down to a power of two* (1000x600 becomes 512x512), or *Halve if larger than 512* (1024x512 becomes 512x256).
+Moved to [Texture settings panel](GUI-Texture-Panel.md#editing).
 
 ## Bulk editing
 
-### Selecting several
-
-In the Textures or Sets column:
-
-| Input | Effect |
-|---|---|
-| Ctrl+click | Add or remove one entry. |
-| Shift+click | Select the range from the last clicked entry, in the order shown. |
-| Ctrl+A | Select everything shown (in the Sets column, the visible sets only). With nothing shown it does nothing and keeps the selection. |
-| Esc | Closes a popup, the preview or a dialog. It never clears the selection. |
-
-Textures and sets are never selected together. The column heading counts the selection, for example "12 selected (4 hidden by filter)". Textures and sets hidden by the search or a filter stay selected and are edited too (sets: "2 selected (1 hidden by filter)").
-
-### Editing them together
-
-With two or more textures selected, the centre shows one panel for all of them:
-
-- A row whose values differ reads "mixed".
-- Picking a value writes it to every selected texture that can take it. Rows you do not touch are never written.
-- A row some textures cannot take says "applies to K of N". Hover it for the reasons.
-- After each change, a line reports how many textures were written and why any were skipped.
-- **↺** resets the field on all of them.
-
-With two or more sets selected, a row of chips picks which of their maps to edit: *All*, *Diffuse*, *Normal _n*, *RMAOS* and so on, each with a count.
-
-### Right-click menu
-
-Right-clicking a selected tile or set keeps the selection; right-clicking another one selects it alone. The menu offers:
-
-- *Edit settings for N selected*.
-- *Copy settings from <texture> to N selected…*: a checklist of the active texture's own settings. Untick what you want to keep. A saved half size is one of the ticks.
-- *Reset all settings for N selected…*: removes their `sdc.toml` entries after asking. Acknowledged warnings are kept.
-- For sets, *Select members of kind*, which turns the selection into those textures.
-
-Each bulk change is one undo step. A read-only `sdc.toml` takes no bulk change.
+Moved to [Bulk editing and renaming](GUI-Bulk-and-Rename.md#bulk-editing).
 
 ## Renaming
 
-Right-click a texture or a set, or press **F2**, for the rename dialog. It has two modes.
-
-| Mode | What it does |
-|---|---|
-| **Inputs** | Reads files under corrected names, for a source saved with the wrong name. Writes `[inputs."<file>"] as = "<new path>"` to `sdc.toml`. The file on disk is never renamed, and `sdc convert` reads the same alias. The tile shows "read as <name>". |
-| **Outputs** | Gives a set's outputs a new base name. Each output keeps its folder and suffix (`steel.dds`, `steel_n.dds`, `steel_rmaos.dds`). On a TruePBR set this writes the set's PGPatcher Rename; on other sets it is saved in `sdc-project.toml`. |
-
-The dialog changes only the base name (the part before `_n`, `_normal` and so on). Tools: *Find* and *Replace* (tick *Regex* for a pattern, `$1` for a group), *Prefix*, *Suffix* and *Case*. In Inputs mode, tick *Whole path* to run them over the folders too, which moves many files to another folder in one go. The map suffix and the extension still stay. Untick a row to leave it out.
-
-Apply is greyed out while any row is red: two names collide, a name Windows cannot use, a changed extension, or an output name ending in a map suffix. Amber rows are warnings: a file whose name now reads as another kind of map, or an output that scanned meshes still use under its old name.
-
-### Input name box
-
-On the set editor heading, the **input name** box shows the path the set's textures are read as, and you can type a new one. While you type, the best known texture path (every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths) shows in gray after the text: **Tab** takes it up to the next `/`, Tab again keeps going, and **Right arrow** at the end takes all of it. A list of up to 12 matching paths opens under the box as you type; **Up/Down** highlight a row, **Enter** uses the highlighted row (or what you typed when none is), and clicking a row uses it. The first **Esc** closes the list. **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step; **Esc** puts the old name back. The set's TruePBR settings, pins and borrows follow it. A name that cannot be used (outside the project's folder, a name another file already has, a pinned slot) gets a red outline, with the reason on hover, and is never applied.
-
-On a TruePBR set in the 2D view, the **Match** box beside the name box picks the slot the ▾ list works on. **Match 1 · diffuse** is the list above. **Match 2 · normal** to **Match 8 · backlight** list the textures the mod scan saw in that slot; a pick sets that slot's match in the PGPatcher JSON and does not rename anything. Tick **All slots** in the list to see every known texture; a pick still goes to the selected match. The box starts at the set's lowest unused match, or at the one you last chose for that set (remembered per project), and never moves by itself.
-
-The folder part of the name is locked: it is dimmed and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`; drag it (or press **Ctrl+Left / Ctrl+Right** in the box) to lock more or less of the path. The **▾** at the right lists the known paths under the locked part (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear); click one to use it.
+Moved to [Bulk editing and renaming](GUI-Bulk-and-Rename.md#renaming).
 
 ## The 2D preview
 
@@ -237,17 +117,7 @@ In the cs mode one export can also write a vanilla and a complex-material (CM) v
 
 ### Editing sets
 
-- **Drag a texture** from the Textures column onto a set to move it there, or onto empty space to start a new set. Dropping onto a filled slot asks **Replace** or **Cancel**.
-- **Share** lets a set borrow another set's finished output. **Duplicate** copies the source into the set. A shared `_rmaos` is never variance-baked.
-- The number at the left of a set is its place in the full order (1 to N). A filter does not renumber it.
-- **≡** drags a set to reorder (off while a Sets filter is on). A drag reaches only the cards on screen; for a long move use **Move to…**.
-- **Right-click** a set for its menu: a **Rename** submenu (**Rename…** for the set's name, **Rename outputs…** (F2), **Rename inputs…**), **Edit match…**, **Remove member**, **Delete set**, **Move up**, **Move down** and **Move to…**. **Move to…** opens a dialog: type a position (1 to N) or part of a set's name, pick a row with Up, Down and Enter, and the set moves there; it also works while a Sets filter is on. **Delete set** asks nothing: it is one undo step, and its toast has an **Undo** button. Only sets you created can be deleted; an automatic set would regroup from the file names at once. Right-clicking a member that fills a slot opens that slot's menu instead. A set whose files are all gone still shows, as missing, so you can delete its entry.
-- **Fill from names…** (set menu) lists files in the set's folder named like its diffuse plus a known suffix, and moves the ticked ones in as one undo step.
-- Dropping a file from Explorer on a slot row fills that slot when the file is a texture of the open folder and its sub-type fits; files are never copied.
-- Each set is a card: its name, a status pill with a dot (red blocks export, amber not ready, green ready) and what the set is ("vanilla", "PBR → JSON", "PBR Landscape", "skin"), the **shader** combo across the full width, and one lettered slot chip per slot (D, N, RMAOS, P and so on). A filled chip is the thumbnail and drags, selects and opens its slot menu; an empty one is a dim box; amber-outlined means borrowed from another set; a red **?** is a file no match was found for. "⚠ n" opens the set's problems. Hover the pill for the long text: a missing file, a blocking problem, and which JSON a set writes ("PBR Landscape → CS + PGPatcher JSON", "→ CS JSON", "→ PGPatcher JSON (no CS records yet)" or "PBR Landscape (no JSON yet)").
-- The Sets column has its own filter: a *Search sets* box, the pills *Not ready*, *Ready* and *No JSON* with counts, and **Filter ▾** for a shader. A filter only hides: the open set and a multi-selection stay selected and the editor stays open. With nothing matching, the column says "No sets match the filter" and offers **Clear filter**. Reordering is off while a filter is on, and a set you create while a filter is on stays shown until the filter changes (the column says "1 new set shown"). The pills and the shader are remembered; the search text is not.
-
-Set edits are saved in `sdc-project.toml` next to `sdc.toml`: set order, created sets, moves, borrows, shader choices, output names, slot pins and TruePBR settings. If that file cannot be parsed, sets and the JSON go read-only while `sdc.toml` editing carries on; a red Problems row names the line, with **Open in editor** and **Reload**.
+Moved to [Sets column](GUI-Sets-Column.md#editing-sets).
 
 ### The set editor
 
@@ -355,33 +225,11 @@ Notes:
 
 ## Cubemaps
 
-A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown) gets a **Cubemap** section in its settings panel and a cross in the preview. Everything the panel writes goes to `sdc.toml` as the matching `cubemap.*` key, so the GUI and the CLI make the same bytes (see [Cubemaps](Cubemaps.md) for what each setting does).
-
-- **In the Textures column.** A set of six face files is one item named `<output name> (6 faces)`. The size estimate counts all six faces and their mips. A six-file set's settings are written to all six face entries in `sdc.toml`, so the faces keep matching.
-- **Settings panel.** The section is drawn only when every selected texture is a cube, and has five groups: **Source** (layout, face size, and for a face, cross or strip source the per-face rotation and flip, plus *Turn -Z upright* on a vertical cross), **Orientation** (yaw, *Mirror east and west*), **Colour grade** (exposure, brightness, contrast, midtones, saturation, tint, highlight clamp), **Ground** (*Ground fill* and *Horizon*) and **Look** (style and blur).
-  - The layout box never offers six face files. A six-file set shows "Six face files" as read-only text.
-  - **Horizon** is disabled with "needs a ground fill" until a ground fill is set.
-  - A blur the engine fills in (a photo's 0.6, or the blur of a style or preset) cannot be unticked, so set 0 for no blur.
-  - A value in `sdc.toml` outside the engine's range is shown as it is, with the engine's message in red under the row. Tessalith never changes it; fix it in the box or in the file.
-  - Colours are raw 0 to 255 codes, not gamma-converted. A drag or colour pick writes once, when you let go.
-- **Unclear layout.** A single image Tessalith cannot place (a square one with no `cubemap.layout`, say) shows "This image could be several cube layouts: pick one" in the settings panel's *Undecided* box, once the sub-type is confirmed. Pick a layout there (360° panorama, mirror ball, angular map or single photo; a cross or strip would already have been recognised); it is written for that file only. In the Review tab its row has a *Set layout ▾* menu with the same layouts.
-- **Cube preview.** The encoded side draws all six faces of the mip on show as one cross (4 by 3 faces), sized like a 2D preview, so a big cube previews at a lower mip. *Face labels* (on by default) names each face. *Heatmap*, *Tile 3×3* and *Pin* are off for a cube ("Not for cubes"), and there is no texel readout.
-  - A six-file set has six source buttons, +X to -Z, over the source side. Each shows the processed face (after turns, flips, sizing and mips), the same picture as its cell in the cross.
-  - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
-  - A set that cannot be built shows the engine's reason (for example `CUBE-FACES: faces differ in size`) in the encoded pane.
-- **Make marker cube…** in **Export to ▾** (**More ▾** until a folder is chosen) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
-  - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked it starts at 0.5, unticked the alpha is 255. The alpha it will store is shown under the controls.
-  - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
-  - It never overwrites a file Tessalith did not write; it says it kept it and leaves the dialog open so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.
+Moved to [Helpers, RNM layers and cubemaps](GUI-Helpers-RNM-and-Cubemaps.md#cubemaps).
 
 ## RNM normal layers
 
-A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) blend into its `_n` (or `_cnr`) before the mips are made. They are not shown as tiles; select the normal to see them.
-
-- The normal's settings have an **RNM** section: a switch for the whole blend, a strength slider per layer, the layer order, and for `_bent` the AO options (*AO blend* or *Like a detail*, *AO power*, *use AO*).
-- When the set has both `_n` and `_cnr`, each layer has a target switch: *Normal*, *CNR* or *Both*. It is written as `rnm.target` on the layer file's `[files]` entry.
-- The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail. Supply normal AO (white = open); Tessalith inverts it.
-- Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
+Moved to [Helpers, RNM layers and cubemaps](GUI-Helpers-RNM-and-Cubemaps.md#rnm-normal-layers).
 
 ## Generate from normal map
 
@@ -397,20 +245,7 @@ Right-click the Height row (or open the set card's menu) and pick **Generate fro
 
 ## Advanced drawer
 
-The drawer at the right edge holds settings that are not per-texture, plus a few rarely used texture fields. With a set selected in 2D the same sections are the set editor's **Advanced** tab instead, and the open/closed choice is shared by the tab and the drawer. In 3D the drawer stays at the right edge.
-
-| Section | Contents |
-|---|---|
-| Preset inspector | The batch preset, the user presets that loaded (with their files), and how the selected texture's settings were resolved. *Show only differences* hides values equal to the base preset. Built-in presets are read-only. |
-| Batch | Worker threads, Memory budget (MiB), BC1 decoder (Ideal, Ideal (round 4), NVIDIA, AMD). The BC1 decoder is read at start, so a change shows "restart Tessalith to apply". |
-| NVTT | NVTT path, **Choose nvcompress.exe…**, **Automatic** (`PATH`, then the NVIDIA install folder). The status shows the version found and whether it is the tested 3.2.5, and is re-checked when the window regains focus. |
-| Project-wide fills (legacy) | One line, shown only while `sdc.toml` holds fills in `defaults.packing.fill.*`. **Clear** removes them; set fills on each packed output's card instead. |
-| Preview | Largest previewed side, Allow 16384 previews, Live encode. |
-| Mipmaps | Levels for the selected texture. |
-| Advanced texture fields | BC7 weighting, BC1 transparent black, BC4/BC5 search radius (Default, Maximum, Fast (preview)), rgbcx level, DDS header (Auto, DX10 extended header, Legacy FourCC), Resize, Half size. |
-| Checks | The switches for the artist checks, **Measure whether full size adds anything** and **Check all UV coverage**. See *Artist checks* below. |
-| Also export recipe | One box per `[export.legacy]` value of [Also export as Vanilla and CM](#also-export-as-vanilla-and-cm). Starts closed; Review's link opens it. |
-| Unmatched [files] entries | `[files]` entries that name no file under the current target, with **Remove**. |
+Moved to [Advanced drawer](GUI-Advanced-Drawer.md).
 
 ## Artist checks
 

@@ -62,7 +62,7 @@ BC7E for BC7, rgbcx for BC1–BC5, Intel ISPC for BC6H. The charts show the meas
 
 ‡ `max` is opt-in (`encoder.effort = "max"`). It was measured later, on a 150-texture Skyrim sample, not on the set above. It took 2.7× the time of u5 (`veryslow`) with the two run alternately per image, and 2.9× in separate runs, so about 0.6 s/Mpix on this scale. That matches the expected ~3×. Δ is against u6 on that sample: RGB on diffuse (images over 60 dB left out; +0.94 with all 60) and alpha PSNR on the 30 textures with alpha. Against u5 it gains +0.18 dB on diffuse, +0.037° on normal maps and +0.24 dB on alpha. A build ran during part of the alternating run (CPU about 14% busy before it, up to 6 rustc processes); the separate runs had the machine nearly idle. Details: [bc7e tuning](docs/research/bc7e-tuning.md).
 
-For BC7 data maps with alpha, see the [BC7 weighting](docs/wiki/GUI-Guide.md#bc7-weighting-against-bc3) chart.
+For BC7 data maps with alpha, see the [BC7 weighting](docs/wiki/GUI-Texture-Panel.md#bc7-weighting-against-bc3) chart.
 
 ### Other formats
 

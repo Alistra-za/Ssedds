@@ -45,7 +45,7 @@ The header is one row from about 1340 points of window width; in a narrower wind
 | Control | What it does |
 |---|---|
 | **Open** | A menu: **Open folder…** (pick a source folder), a separator, then your recent folders (the last ten), or a greyed "No recent folders". |
-| **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
+| **Undo** / **Redo** | Up to 200 steps (**Ctrl+Z**, **Ctrl+Y**); greyed out with nothing to undo; hover for the step ("Undo: Format"). The status line then says "Undid: Format." until your next edit, and the bulk panel's result line clears. Undoing back to the last save clears the unsaved dot. Redo of a **Duplicate** is refused, with the reason, when a file is at the copy's path. |
 | **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. Framed together with **Mode**. |
 | **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means. |
 | **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. The preset entries are greyed out until a folder is open. Its last entry, after a separator, is **Presets…**, which opens the preset creator (see [Presets](GUI-Guide.md#presets)). |
@@ -86,11 +86,11 @@ The window title shows the folder, with a dot when there are unsaved edits. The 
 
 From left to right: Textures, Sets, then the centre. The **Advanced** drawer is at the right edge, except with a set selected in 2D, where Advanced is the last tab under the set editor's slot rows. Under all of them runs the bottom panel.
 
-- **Textures** (first): one tile per file. Cube files are listed like any other texture; their settings and preview are in [Cubemaps](GUI-Guide.md#cubemaps). See [Textures (left)](GUI-Guide.md#textures-left).
-- **Sets** (second): one card per material set. See [Sets](GUI-Guide.md#sets-between-textures-and-the-centre).
-- **Centre**: the settings of the selected texture, or the set editor for a selected set. See [Centre](GUI-Guide.md#centre).
+- **Textures** (first): one tile per file. See [Textures column](GUI-Textures-Column.md).
+- **Sets** (second): one card per material set. See [Sets column](GUI-Sets-Column.md).
+- **Centre**: the settings of the selected texture, or the set editor for a selected set. See [Texture settings panel](GUI-Texture-Panel.md) and [Advanced drawer](GUI-Advanced-Drawer.md).
 
-The columns can be collapsed to thin strips (**Collapse columns**).
+Each column collapses to a thin strip with the **◀** on its heading (hover *Collapse the {name} column*); **▶** expands it.
 
 ## Dialogs
 

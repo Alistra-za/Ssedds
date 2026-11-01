@@ -18,6 +18,12 @@ GUI
 
 - [Main window](GUI-Main-Window.md)
 - [GUI settings](GUI-Settings.md)
+- [Textures column](GUI-Textures-Column.md)
+- [Sets column](GUI-Sets-Column.md)
+- [Bulk editing and renaming](GUI-Bulk-and-Rename.md)
+- [Texture settings](GUI-Texture-Panel.md)
+- [Advanced drawer](GUI-Advanced-Drawer.md)
+- [Helpers, RNM, cubemaps](GUI-Helpers-RNM-and-Cubemaps.md)
 - [Keyboard](GUI-Keyboard.md)
 
 Concepts

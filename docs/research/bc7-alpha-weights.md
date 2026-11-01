@@ -4,7 +4,7 @@ Written 2026-10-21 (commit dbf54808).
 
 Whether BC7 with a higher alpha error weight can replace BC3 for textures with delicate alpha. Moved from the wiki's [Research](../wiki/Research.md) page.
 
-Source: local study, 2026-10-21, and DECISIONS Note CP. It asks whether BC7 with a higher alpha error weight can replace BC3 for textures with delicate alpha, and keep BC7's better RGB. BC7 is the built-in bc7e at its default level (veryslow), with linear weights 1,1,1,w for w = 1, 2, 4, 8 and 16, and in a follow-up on 2026-10-22, 32 and 64. BC3 is the bundled rgbcx (level 18, `-r`). w1 is today's Linear. The dropdown offers Alpha ×2, ×8 and ×16, and Perceptual. The chart is in the [GUI guide](../wiki/GUI-Guide.md#bc7-weighting-against-bc3).
+Source: local study, 2026-10-21, and DECISIONS Note CP. It asks whether BC7 with a higher alpha error weight can replace BC3 for textures with delicate alpha, and keep BC7's better RGB. BC7 is the built-in bc7e at its default level (veryslow), with linear weights 1,1,1,w for w = 1, 2, 4, 8 and 16, and in a follow-up on 2026-10-22, 32 and 64. BC3 is the bundled rgbcx (level 18, `-r`). w1 is today's Linear. The dropdown offers Alpha ×2, ×8 and ×16, and Perceptual. The chart is in the [GUI guide](../wiki/GUI-Texture-Panel.md#bc7-weighting-against-bc3).
 
 These tables copy the study's values. They leave out the 95% confidence intervals and the per-image worst cases that the study also reports. PSNR is in dB, alpha SSIM is 0 to 1, alpha max error is in codes, and exact-0 and exact-255 are the share of source texels at 0 or 255 that decode exactly. Each *Means* table is the mean over the class. Each *Where BC7 beats BC3* table counts the images where the BC7 setting beats BC3.
 

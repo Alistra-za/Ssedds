@@ -8,7 +8,7 @@ Scanning is read-only and never changes your mods, your MO2 instance or your gam
 
 | Use | Where you see it |
 |---|---|
-| Alpha meaning of colour maps | A colour map whose alpha varies takes Blend, Cutout (at the strictest mesh threshold), Cutout + Blend or Remove from the meshes that use it. The Alpha row reads "from the meshes that use this texture". See [GUI guide](GUI-Guide.md#alpha-from-the-meshes). |
+| Alpha meaning of colour maps | A colour map whose alpha varies takes Blend, Cutout (at the strictest mesh threshold), Cutout + Blend or Remove from the meshes that use it. The Alpha row reads "from the meshes that use this texture". See [GUI guide](GUI-Texture-Panel.md#alpha-from-the-meshes). |
 | Set shader | When no map in the set decides it (PBR, Advanced skin, complex grass, complex `_m`, `_p`), the shader most of the scanned meshes use for the diffuse picks the set's shader. |
 | Complex grass | After a scan that included plugins, a texture that is the diffuse (slot 0) of a grass (GRAS) record's mesh gets a High-confidence `complex_grass` suggestion, which the GUI accepts, under either target. Only when nothing explicit (a rule, `--set`, `[files]` or a set shader) decided the sub-type, and the file passes the complex-grass shape tests (1:2, detection corner, unit normals). |
 | Path pickers | The input name box and its ▾ list, and the match pickers in the TruePBR JSON editor, list texture paths and mesh folders the scan found. |
