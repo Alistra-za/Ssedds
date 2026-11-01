@@ -8,6 +8,7 @@ pub mod cs_settings;
 pub mod debug;
 pub mod device;
 pub mod draw;
+pub mod glint_noise;
 pub mod golden;
 pub mod hdri;
 pub mod includes;
@@ -404,6 +405,8 @@ pub struct Renderer {
     projected_tex: Vec<(u32, Arc<[u8]>, textures::Texture)>,
     /// [`Renderer::projected_missing`].
     projected_missing: Vec<String>,
+    /// CS's glint noise map at t20 ([glint_noise]), uploaded on the first GLINT draw.
+    glint_noise: Option<ID3D11ShaderResourceView>,
 }
 
 impl Renderer {
@@ -512,6 +515,7 @@ impl Renderer {
             projected: None,
             projected_tex: vec![],
             projected_missing: vec![],
+            glint_noise: None,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -741,6 +745,18 @@ impl Renderer {
     /// (empty while the layer is off).
     pub fn projected_missing(&self) -> Vec<String> {
         self.projected_missing.clone()
+    }
+
+    /// The glint noise map, generated and uploaded once per device.
+    fn glint_noise_srv(&mut self) -> Result<ID3D11ShaderResourceView, String> {
+        if let Some(v) = &self.glint_noise {
+            return Ok(v.clone());
+        }
+        let s = glint_noise::SIZE;
+        let v = textures::rgba32f_srv(&self.gpu, s, s, &glint_noise::noise_map())
+            .map_err(|e| format!("glint noise map: {e}"))?;
+        self.glint_noise = Some(v.clone());
+        Ok(v)
     }
 
     /// The MATO layer's view at `reg` for a draw of `m`: its texture, else the register's fallback; `None` when the
@@ -1139,7 +1155,12 @@ impl Renderer {
             }
         }
         let mut srvs = vec![];
-        for (_, reg, kind) in &program.ps.reflection.srvs {
+        for (srv_name, reg, kind) in &program.ps.reflection.srvs {
+            // Every GLINT permutation reads it (Glints2023.hlsli:230); a 1×1 default would give no glints.
+            if *reg == 20 && *kind == SrvKind::Tex2D && srv_name.ends_with("Glint2023NoiseMap") {
+                srvs.push((20, self.glint_noise_srv()?));
+                continue;
+            }
             if let Some(v) = self.override_at(m, *reg, *kind) {
                 srvs.push((*reg, v));
                 continue;

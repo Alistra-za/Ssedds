@@ -424,11 +424,30 @@ fn render_projected_value_edit_is_cbuffer_only() {
     );
     // Glint on is a permutation (GLINT): a job, the old draw stays on screen.
     r.set_projected_layer(Some(snow()), &|_| None);
-    assert_eq!(r.take_jobs().len(), 1);
+    let jobs = r.take_jobs();
+    assert_eq!(jobs.len(), 1);
     assert_eq!(
         r.shapes()[0].status,
         ShapeStatus::Pending {
             showing_previous: true
         }
     );
+    // The snow program compiles and draws, with CS's glint noise map at t20 (128×128 RGBA32F, DXGI 2).
+    for j in jobs {
+        assert!(r.apply_compiled(render3d::run_job(j)));
+    }
+    assert_eq!(r.shapes()[0].status, ShapeStatus::Drawing);
+    let (ps, refl, srvs) = r.draw_diag(ShapeId(0)).unwrap();
+    assert!(ps.iter().any(|(k, _)| k == "GLINT"), "{ps:?}");
+    assert!(
+        refl.unwrap().srvs.iter().any(|s| s.1 == 20),
+        "the GLINT PS reads t20"
+    );
+    assert!(srvs.contains(&(20, 2)), "{srvs:?}");
+    assert_eq!(
+        r.draw_cb_floats(ShapeId(0), "SparkleParams"),
+        Some(vec![1.0, 27.0, 1.0, 5.0])
+    );
+    let px = r.render(&top_scene(), 64, 64).unwrap();
+    assert!(common::covered(&px) > 0, "the snow draw is on screen");
 }
