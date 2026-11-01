@@ -1,5 +1,7 @@
 # FAQ
 
+Short answers to common questions about Tessalith, for anyone using the GUI or `sdc`.
+
 ### What is Tessalith, and why is the command line called sdc?
 
 Tessalith is the product name. The GUI is `tessalith.exe` and its window says Tessalith. The command line, config files and folders kept the project's working name: `sdc.exe`, `sdc.toml`, `sdc-project.toml`, `%APPDATA%\sdc`, `%LOCALAPPDATA%\sdc` and the `SDC_*` environment variables. Those are what you type.

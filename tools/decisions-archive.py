@@ -127,8 +127,8 @@ ARC_HEAD = ["# DECISIONS archive", "",
             "Rulings here are **not in force**. They moved verbatim from DECISIONS.md under their original IDs "
             "(docs/DOCUMENTATION.md §7). Never cite one as a reason for current behaviour.", ""]
 RES_HEAD = ["# Early spikes and phase records (2026-10)", "",
-            "Moved verbatim from DECISIONS.md on 2026-10-31 (docs/DOCUMENTATION.md §7): measurement and process "
-            "records of 2026-10-08 to 2026-10-13, not rulings.", ""]
+            "Written 2026-10-31 (commit a48ed8cf): moved verbatim from DECISIONS.md (docs/DOCUMENTATION.md §7). "
+            "Measurement and process records of 2026-10-08 to 2026-10-13, not rulings.", ""]
 
 
 def add_block(doc, heading, block):
