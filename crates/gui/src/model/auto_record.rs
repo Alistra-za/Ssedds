@@ -23,6 +23,8 @@ pub(crate) struct AutoNote {
     pub lines: Vec<String>,
     /// The `history.pushes` the step left: the row offers Undo only while it is the top step.
     pub step: u64,
+    /// Note F?4: nothing prompted to be saved just before it, so while it is the top step nothing does.
+    pub clean_before: bool,
 }
 
 /// A written value as the row lists it: `normal`, `cutout`.
@@ -192,6 +194,7 @@ impl AppModel {
             });
             return self.history.pushes != pushes;
         }
+        let clean_before = !self.prompts_unsaved();
         let wrote = self.batch_edit(&label, |m| {
             m.edit("Set automatically", |p| {
                 for (k, f, v) in &writes {
@@ -204,6 +207,7 @@ impl AppModel {
                 text: format!("{n} {noun}{s} set automatically (High confidence)"),
                 lines,
                 step: self.history.pushes,
+                clean_before,
             });
             self.invalidate_views();
         }

@@ -146,7 +146,7 @@ pub enum Selection {
 pub use texture_view::Filter;
 
 /// (sdc.toml rev, dirty), (sdc-project.toml rev, dirty, read-only).
-type RecoveryKey = (Option<(u64, bool)>, Option<(u64, bool, bool)>);
+type RecoveryKey = (Option<(u64, bool, bool)>, Option<(u64, bool, bool)>);
 
 /// Which of the two project files a dialog or save error is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2012,11 +2012,11 @@ impl AppModel {
     /// one is flagged with it. Returns the number of items flagged.
     pub fn check_sources(&mut self) -> usize {
         // A hand edit of a clean `sdc.toml` is simply taken (nothing to lose): the next plan reads it. With unsaved
-        // edits the save dialog still asks (audit 2026-10-14 finding 3).
-        let hand_edited = self
-            .project
-            .as_ref()
-            .is_some_and(|p| !p.is_dirty() && p.changed_on_disk());
+        // edits the save dialog still asks (audit 2026-10-14 finding 3). Automatic types alone are recorded again
+        // (Note F?4).
+        let hand_edited = self.project.as_ref().is_some_and(|p| {
+            (!p.is_dirty() || self.only_automatic_unsaved()) && p.changed_on_disk()
+        });
         if hand_edited {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
@@ -3478,9 +3478,29 @@ impl AppModel {
                 .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
     }
 
+    /// Note F?4 (owner O1 (b)): the only unsaved change is FC1's automatic recording, still the top step. It neither
+    /// asks on close, open or reload nor marks the title; Save stays live and writes it.
+    /// shortcut: a user edit followed by its Undo leaves `pushes` advanced, so that state prompts although the text
+    /// equals the automatic state; compare the document with the recording's snapshot if users report it.
+    pub fn only_automatic_unsaved(&self) -> bool {
+        self.auto_note
+            .as_ref()
+            .is_some_and(|a| a.clean_before && a.step == self.history.pushes)
+            && !self
+                .sets_doc
+                .as_ref()
+                .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
+            && self.tentative_edits().is_none()
+    }
+
+    /// Unsaved changes the close, open and reload dialogs ask about: a user's, not only automatic ones (Note F?4).
+    pub fn prompts_unsaved(&self) -> bool {
+        self.is_dirty() && !self.only_automatic_unsaved()
+    }
+
     /// The unsaved `sdc.toml` edits stashed by a blame that is still tentative (the retry plan has not landed), so
     /// prompts and recovery still see them (review M1 of #9).
-    fn tentative_edits(&self) -> Option<String> {
+    pub(crate) fn tentative_edits(&self) -> Option<String> {
         self.project
             .as_ref()
             .filter(|_| self.ignored_by_plan)
@@ -3490,7 +3510,9 @@ impl AppModel {
     /// The unsaved documents as `(file, text)`, for the panic hook's recovery files (Note AR).
     pub fn recovery_snapshot(&self) -> Vec<(std::path::PathBuf, String)> {
         let mut out = vec![];
-        if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty()) {
+        // Note F?4: automatic types alone are recorded again on the next plan, so a restore never offers them.
+        let only_auto = self.only_automatic_unsaved();
+        if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty() && !only_auto) {
             out.push((p.path().to_path_buf(), p.text()));
         }
         if let (Some(p), Some(text)) = (self.project.as_ref(), self.tentative_edits()) {
@@ -3510,7 +3532,9 @@ impl AppModel {
     /// app refreshes the panic hook's copy only then).
     pub fn recovery_changed(&mut self) -> Option<Vec<(std::path::PathBuf, String)>> {
         let key = (
-            self.project.as_ref().map(|p| (p.rev(), p.is_dirty())),
+            self.project
+                .as_ref()
+                .map(|p| (p.rev(), p.is_dirty(), self.only_automatic_unsaved())),
             self.sets_doc
                 .as_ref()
                 .map(|s| (s.rev(), s.is_dirty(), s.read_only())),
@@ -3573,7 +3597,7 @@ impl AppModel {
         #[allow(clippy::permissions_set_readonly_false)]
         perm.set_readonly(false);
         std::fs::set_permissions(path, perm).map_err(fail)?;
-        if self.is_dirty() {
+        if self.prompts_unsaved() {
             self.status_line = "Read-only flag cleared: Save to write your changes".into();
             self.refresh_banner();
         } else {
@@ -3667,7 +3691,7 @@ impl AppModel {
     /// Reload both documents from disk (the banner's Reload), then plan once.
     /// The banner's Reload: at once when nothing is unsaved, else ask first (`Dialog::ReloadUnsaved`).
     pub fn request_reload(&mut self) {
-        if self.is_dirty() {
+        if self.prompts_unsaved() {
             self.dialog = Some(Dialog::ReloadUnsaved);
         } else {
             self.reload_documents();
@@ -3782,7 +3806,7 @@ impl AppModel {
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Open(root));
             false
-        } else if self.is_dirty() {
+        } else if self.prompts_unsaved() {
             self.dialog = Some(Dialog::OpenUnsaved(root));
             false
         } else {
@@ -3848,7 +3872,7 @@ impl AppModel {
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Close);
             false
-        } else if self.is_dirty() {
+        } else if self.prompts_unsaved() {
             self.dialog = Some(Dialog::CloseUnsaved);
             false
         } else {

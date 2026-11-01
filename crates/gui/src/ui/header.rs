@@ -50,7 +50,8 @@ pub fn window_title(model: &AppModel) -> String {
         Some(r) => format!("{} — {}", crate::PRODUCT_NAME, r.display()),
         None => crate::PRODUCT_NAME.to_string(),
     };
-    if model.is_dirty() {
+    // Note F?4: automatic types alone are not marked.
+    if model.prompts_unsaved() {
         t.push_str(" ●");
     }
     t
@@ -141,6 +142,13 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
         model.is_dirty() || super::actions::text_field_focused(ui.ctx()),
         egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
     );
+    let r = if model.only_automatic_unsaved() {
+        r.on_hover_text(
+            "Save the texture types Tessalith set automatically, so sdc.exe plans the same",
+        )
+    } else {
+        r
+    };
     // Note FC8 (supersedes BS7's refusal): the field commits first, then this click saves. That relies on the header
     // and the bottom panel drawing before the central fields (`blur_on_press` runs first); `after_commit` covers a
     // press and release in one frame.
