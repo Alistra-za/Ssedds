@@ -1629,7 +1629,7 @@ pub(crate) fn texture_path_op(
         .slots
         .get(*slot as usize)
         // Note GH7: slots count from 1 in every message the user reads.
-        .ok_or(format!("slot {} is past the set's {n} slots", slot + 1))?;
+        .ok_or_else(|| format!("slot {} is past the set's {n} slots", u64::from(*slot) + 1))?;
     // validate's decode: no BOM sniffing (Note GA3)
     let now = crate::text::lossy(old);
     if now != *base {

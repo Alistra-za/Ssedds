@@ -377,6 +377,26 @@ fn slot_past_the_count_is_refused() {
 }
 
 #[test]
+fn the_largest_slot_is_refused_without_overflow() {
+    let b = scenes::one_shape_set(&["textures\\a.dds", "textures\\a_n.dds"]);
+    let m = read_model(&b).unwrap();
+    let op = Op::SetTexturePath {
+        at: anchor_shape(&m, 0),
+        slot: u32::MAX,
+        path: "x".into(),
+        base: String::new(),
+    };
+    let r = apply(&b, &[op]).unwrap();
+    assert_eq!(
+        r.outcomes,
+        vec![Outcome::Refused(
+            "slot 4294967296 is past the set's 2 slots".into()
+        )]
+    );
+    assert_eq!(r.bytes, b);
+}
+
+#[test]
 fn stale_base_conflicts_and_unmappable_path_is_refused() {
     let b = scenes::one_shape_set(&["textures\\a.dds"]);
     let m = read_model(&b).unwrap();
