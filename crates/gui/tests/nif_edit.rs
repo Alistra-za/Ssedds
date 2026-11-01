@@ -11471,10 +11471,9 @@ fn the_meshes_side_gets_a_new_output_path_on_the_next_frame() {
     );
 }
 
-/// Note F?18 (2; HANDOFF owed item 2, GH6/N6): in the Meshes view with a NIF selected, the bottom panel stops at
-/// `available - 310` (at least 120), the NIF team's value as given. Pinned: a Review dragged to 600 px is cut down in
-/// the Meshes view and kept in the Textures view (NIF still selected); Review's 40 % default keeps the preview 160 px
-/// at 1536x864 (a guard: 40 % is under the cap there). The 310 does not keep 160 px past a ~400 px Review (F?18).
+/// Note F?18 (2; HANDOFF owed item 2, GH6/N6; ruling R3): in the Meshes view with a NIF selected, the bottom panel
+/// stops where the 3D frame keeps its 160 px (GH6). A Review dragged to 600 px at 1536x864 is cut down so the frame
+/// keeps 160 px, fully above the panel; in the Textures view (NIF still selected) it stays 600.
 #[test]
 fn the_bottom_panel_is_capped_only_in_the_meshes_view_with_a_nif() {
     use egui::containers::panel::PanelState;
@@ -11501,6 +11500,12 @@ fn the_bottom_panel_is_capped_only_in_the_meshes_view_with_a_nif() {
     tall(&mut h);
     let capped = review_height(&h);
     assert!(capped < 600.0, "Meshes view: Review {capped}");
+    let frame = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    let top = hgt - capped;
+    assert!(frame.height() >= 159.5, "600 px Review: preview {frame:?}");
+    assert!(frame.max.y <= top + 0.5, "{frame:?} under Review at {top}");
     // The Textures view, the NIF still selected: the panel is not capped.
     sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
     tall(&mut h);
@@ -11531,6 +11536,35 @@ fn reviews_default_height_obeys_the_meshes_cap() {
     let r = review_height(&h);
     assert!((120.0..239.0).contains(&r), "Review opened at {r}");
 }
+
+/// Note F?18 (2; review minor 1): the cap is the Meshes view's limit, not the user's height. A Review set to 600 px in
+/// the Textures view is capped for frames in the Meshes view and is 600 px again back in the Textures view (the
+/// panel state is written once, as a drag would, and not re-injected).
+#[test]
+fn the_meshes_cap_keeps_the_users_review_height() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    let r = egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+    });
+    h.run_steps(4);
+    assert_eq!(review_height(&h), 600.0, "Textures view: Review");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    assert!(review_height(&h) < 600.0, "Meshes view: capped");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    assert_eq!(review_height(&h), 600.0, "back in the Textures view");
+}
+
 /// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
 #[test]
 fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {

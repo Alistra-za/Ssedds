@@ -70,8 +70,9 @@ pub fn draw(
     } else {
         ("bottom", 240.0)
     };
-    // Note F?18 (GH6/N6 hand-off, the NIF team's 310): room for the 3D preview; Review's 40 % default obeys it too.
-    let cap = nif_preview.then(|| (ui.available_height() - 310.0).max(120.0));
+    // Note F?18 (GH6/N6, ruling R3): room for the 3D frame's 160 px; Review's 40 % default obeys it too.
+    let cap = nif_preview.then(|| (ui.available_height() - NIF_ROOM).max(120.0));
+    keep_users_height(ui.ctx(), egui::Id::new(id), cap);
     let mut panel = egui::Panel::bottom(id)
         .resizable(true)
         .default_size(cap.map_or(height, |c| height.min(c)));
@@ -100,9 +101,42 @@ pub fn draw(
             BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
         }
     });
+    if cap.is_some_and(|c| panel.response.rect.height() < c - 1.0) {
+        // Resized below the cap in the Meshes view: that is the user's height now.
+        ui.ctx()
+            .data_mut(|d| d.remove::<f32>(egui::Id::new(id).with("uncapped")));
+    }
     let (pass, top) = (ui.ctx().cumulative_pass_nr(), panel.response.rect.top());
     ui.ctx()
         .data_mut(|d| d.insert_temp(open_top_id(), (pass, top)));
+}
+
+/// The Meshes view's 3D frame minimum (GH6's `PREVIEW_MIN_H`, private to ui/meshes.rs) plus the lines, bars and
+/// spacing around it down to the bottom panel, measured at 1536x864 (Note F?18, ruling R3).
+const NIF_ROOM: f32 = 160.0 + 211.0;
+
+/// Note F?18: the cap is the view's limit, not the user's height. A taller height is kept aside while capped and
+/// given back once the cap no longer applies (the panel itself stores the clamped height).
+fn keep_users_height(ctx: &egui::Context, id: egui::Id, cap: Option<f32>) {
+    use egui::containers::panel::PanelState;
+    let (key, Some(state)) = (id.with("uncapped"), PanelState::load(ctx, id)) else {
+        return;
+    };
+    let rect = state.outer_rect;
+    match cap {
+        Some(c) if rect.height() > c + 0.5 => {
+            ctx.data_mut(|d| d.insert_persisted(key, rect.height()));
+        }
+        Some(_) => {}
+        None => {
+            if let Some(h) = ctx.data_mut(|d| d.get_persisted::<f32>(key)) {
+                ctx.data_mut(|d| d.remove::<f32>(key));
+                let outer_rect =
+                    egui::Rect::from_min_max(egui::pos2(rect.min.x, rect.max.y - h), rect.max);
+                ctx.data_mut(|d| d.insert_persisted(id, PanelState { outer_rect }));
+            }
+        }
+    }
 }
 
 fn open_top_id() -> egui::Id {
