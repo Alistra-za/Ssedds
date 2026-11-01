@@ -34,6 +34,7 @@ enum Action {
     PatchAsk,
     PatchDo,
     PatchCancel,
+    Reencode(bool),
 }
 
 /// The groups the compact strip keeps (Task 17's preview).
@@ -1033,8 +1034,20 @@ fn dds_header_panel(
     if v.issues.is_empty() && matches!(v.patch, Ok(None)) {
         ui.label("Header: valid");
     }
-    for i in &v.issues {
-        ui.label(egui::RichText::new(i).small());
+    // Note F?3 (A23): one plain line; the raw header fields are on hover (rule 4.5).
+    if !v.issues.is_empty() {
+        let patch = if matches!(v.patch, Ok(Some(_))) {
+            " Patch header… writes a copy with a fixed header."
+        } else {
+            ""
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "The DDS header has fields other tools may misread.{patch}"
+            ))
+            .small(),
+        )
+        .on_hover_text(v.issues.join("\n"));
     }
     ui.horizontal(|ui| {
         ui.label("Tag on patch:");
@@ -1172,6 +1185,17 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
     let last = model.dds_patch.last_for(key).map(str::to_string);
     let export_folder_chosen = model.export_folder_chosen().is_some();
+    // Note F?3: why the re-encode button is off (read-only first), and whether it would write over its source.
+    let reencode_off = toml_read_only
+        .clone()
+        .or_else(|| model.reencode_blocker(key));
+    let into_source = kind == ItemKind::Dds
+        && job.is_none()
+        && engine::dds::same_file(
+            &model.item(key).map(|i| i.input.clone()).unwrap_or_default(),
+            &model.output_root().join(&job_key),
+        );
+    let reencoding = model.reencode_on(key);
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -1183,6 +1207,24 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
+        // Note F?3: a DDS re-encoded by `sdc.toml` (it has a job, or failed at plan) offers the way back.
+        if reencoding {
+            let r = ui
+                .add_enabled(
+                    toml_read_only.is_none(),
+                    egui::Button::new("Stop re-encoding"),
+                )
+                .on_hover_text(
+                    "Leave the DDS file as it is again: it is not written to the export.",
+                );
+            let r = match &toml_read_only {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                actions.push(Action::Reencode(false));
+            }
+        }
         // Note DY17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
         let not_helper = model
             .project
@@ -1243,8 +1285,23 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             };
             if kind == ItemKind::Dds {
                 ui.label(
-                    "Already a DDS file; it is not converted (opt in with reencode in sdc.toml).",
+                    "Already a DDS file: it is left as it is and not written to the export.",
                 );
+                // Note F?3: the S6 `reencode` selector from a button, not a hand edit.
+                let mut hover = String::from("Decode it and encode it again with this project's settings. Block-compressed files lose some quality.");
+                if into_source {
+                    hover.push_str(" It cannot be written into the folder it comes from.");
+                }
+                let r = ui
+                    .add_enabled(reencode_off.is_none(), egui::Button::new("Re-encode this file"))
+                    .on_hover_text(hover);
+                let r = match &reencode_off {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                if r.clicked() {
+                    actions.push(Action::Reencode(true));
+                }
                 if let Some(v) = &header {
                     dds_header_panel(
                         ui,
@@ -1366,6 +1423,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             Action::PatchTag(t) => model.set_dds_patch_tag(key, t),
             Action::PatchAsk => model.dds_patch.confirming = Some(key.to_string()),
             Action::PatchCancel => model.dds_patch.confirming = None,
+            Action::Reencode(on) => model.set_reencode(&[key.to_string()], on),
             Action::PatchDo => {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);

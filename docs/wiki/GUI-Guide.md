@@ -81,7 +81,9 @@ A texture's settings start with its output size ("Output: BC7 · 2048x2048 · 12
 
 For an emissive, the Compression group shows the `FMT-HDR-SOURCE` reason (why it is BC6H or BC7 sRGB).
 
-A DDS file in the folder shows its header check, a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
+A DDS file in the folder is left as it is and not written to the export. **Re-encode this file** decodes it and encodes it again with the project's settings, at some quality cost for block-compressed files: it sets `reencode = true` on the file in `sdc.toml` (one undo step), and **Stop re-encoding** goes back. The button is off for a DDS that another file already writes (say `rock.png` beside `rock.dds`), and re-encoding into the folder the DDS comes from fails that file. With several textures selected, **Re-encode *n* DDS files** does the same for the selected DDS files.
+
+A DDS file also shows its header check (one line, the header fields on hover), a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
 
 ### BC7 weighting against BC3
 

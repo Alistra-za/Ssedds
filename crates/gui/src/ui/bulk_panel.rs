@@ -14,6 +14,43 @@ use serde_json::Value;
 enum Act {
     Kind(Option<SlotKind>),
     Edit(&'static str, RowEdit),
+    Reencode(Vec<String>),
+}
+
+/// Note F?3: re-encode the selection's skipped DDS files (the S6 `reencode` selector, a plan-time field, so not a
+/// `FIELDS` row). Files another input already writes are left out, with their names on hover.
+fn reencode_row(ui: &mut egui::Ui, model: &AppModel, keys: &[String], acts: &mut Vec<Act>) {
+    let (ok, blocked) = model.reencode_split(keys);
+    let (k, j) = (ok.len(), blocked.len());
+    if k == 0 && j == 0 {
+        return;
+    }
+    let read_only = model.toml_read_only_reason();
+    let left_out = format!("{j} left out: another file already writes them");
+    ui.horizontal(|ui| {
+        let (text, off) = if k == 0 {
+            ("Re-encode DDS files".to_string(), Some(left_out.clone()))
+        } else {
+            let s = if k == 1 { "" } else { "s" };
+            (format!("Re-encode {k} DDS file{s}"), read_only)
+        };
+        let r = ui
+            .add_enabled(off.is_none(), egui::Button::new(text))
+            .on_hover_text(
+                "Decode them and encode them again with this project's settings. Block-compressed files lose some quality.",
+            );
+        let r = match &off {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r,
+        };
+        if r.clicked() {
+            acts.push(Act::Reencode(ok.clone()));
+        }
+        if k > 0 && j > 0 {
+            ui.weak(format!("({left_out})"))
+                .on_hover_text(blocked.join("\n"));
+        }
+    });
 }
 
 pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
@@ -47,6 +84,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     if let Some(r) = &model.bulk.report {
         ui.weak(r);
     }
+    reencode_row(ui, model, keys, &mut acts);
     // Options come from the active texture's job, else the first target's (design §3.2).
     let active = match &model.selection {
         Selection::Item(k) => model.item(k).and_then(|i| i.job.clone()),
@@ -110,6 +148,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
     for a in acts {
         match a {
             Act::Kind(k) => model.bulk.kind = k,
+            Act::Reencode(ks) => model.set_reencode(&ks, true),
             Act::Edit(f, RowEdit::Set(v)) => model.apply_bulk_edit(keys, f, BulkOp::Set(v)),
             Act::Edit(f, RowEdit::Clear) => model.apply_bulk_edit(keys, f, BulkOp::Clear),
         }

@@ -38,6 +38,7 @@ pub mod plugin_refs;
 pub mod presets;
 pub mod preview;
 pub mod readout;
+mod reencode;
 pub mod rename;
 pub mod review;
 pub mod rnm;
