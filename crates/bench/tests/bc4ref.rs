@@ -102,15 +102,14 @@ fn shipped_port_equals_ffi() {
 #[test]
 fn search_never_worse() {
     for v in blocks(20_000) {
-        let s = shipped(&v, 5);
-        let a = search(&v, 5, false);
-        assert!(sse(&a, &v) <= sse(&s, &v), "{v:?}");
-        let g = search(&v, 5, true);
-        assert!(
-            sse(&g, &v) <= sse(&s, &v) || flips(&g, &v) <= flips(&s, &v),
-            "{v:?}"
-        );
-        assert!(flips(&g, &v) <= flips(&s, &v), "{v:?}");
+        for r in [4, 5, 10] {
+            let s = shipped(&v, r);
+            let a = search(&v, r, false);
+            assert!(sse(&a, &v) <= sse(&s, &v), "{v:?} r {r}");
+            let g = search(&v, r, true);
+            assert!(sse(&g, &v) <= sse(&s, &v), "{v:?} r {r} guard");
+            assert!(flips(&g, &v) <= flips(&s, &v), "{v:?} r {r} guard");
+        }
     }
 }
 

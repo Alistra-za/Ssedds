@@ -101,7 +101,7 @@ pub fn minmax(v: &[u8; 16]) -> (u8, u8) {
     (*v.iter().min().unwrap(), *v.iter().max().unwrap())
 }
 
-fn clampi(x: i32) -> u8 {
+pub fn clampi(x: i32) -> u8 {
     x.clamp(0, 255) as u8
 }
 

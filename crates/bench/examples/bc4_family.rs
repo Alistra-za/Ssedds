@@ -17,7 +17,9 @@
 // Research probe: index loops mirror the C++ it ports, and the per-encoder tuples stay local.
 #![allow(clippy::needless_range_loop, clippy::type_complexity)]
 use rayon::prelude::*;
-use sdc_bench::bc4ref::{flips, inner6, local, minmax, pal, refit_both, trimmed6, v0, Best};
+use sdc_bench::bc4ref::{
+    clampi, flips, inner6, local, minmax, pal, refit_both, trimmed6, v0, Best,
+};
 use sdc_bench::corpus::{bench_root, load_png_rgba8, set_files, stem};
 use sdc_bench::ddsraw::payload;
 use std::fmt::Write as _;
@@ -44,7 +46,8 @@ fn oracle(v: &[u8; 16], b: &mut Best) {
 }
 
 fn variant(k: usize, v: &[u8; 16], rad: i32) -> Best {
-    let mut b = v0(v, rad);
+    let base = v0(v, rad);
+    let mut b = base;
     if k >= 1 {
         inner6(v, &mut b, rad);
     }
@@ -58,14 +61,10 @@ fn variant(k: usize, v: &[u8; 16], rad: i32) -> Best {
         trimmed6(v, &mut b);
         local(v, &mut b);
     }
-    if k == 5 && flips(v, &b) > flips(v, &v0(v, rad)) {
-        b = v0(v, rad);
+    if k == 5 && flips(v, &b) > flips(v, &base) {
+        b = base;
     }
     b
-}
-
-fn clampi(x: i32) -> u8 {
-    x.clamp(0, 255) as u8
 }
 
 fn decode(b: &[u8]) -> [u8; 16] {

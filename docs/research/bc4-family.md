@@ -147,4 +147,4 @@ Time per image (Rust v4 against the FFI shipped encoder, 29 images, single threa
 | 5 | 284 / 2689 | 457 / 4573 |
 | 10 | 1026 / 7887 | 1318 / 10685 |
 
-The fast presets (radius 4) gain as much as the default (+1.05 dB BC3 alpha, +0.43 dB BC4) at about 2.2× the shipped time (v4 at radius 4 costs about what shipped costs at radius 5 plus 20 percent). Radius 10 gains less, since the shipped search already covers more. The v4 times are the Rust reference, not the C++ port.
+The fast presets (radius 4) gain as much as the default (+1.05 dB BC3 alpha, +0.43 dB BC4) at about 2.2× the shipped time (v4 at radius 4 costs about what shipped costs at radius 5 plus 20 percent). Radius 10 gains less, since the shipped search already covers more. The v4 times are the Rust reference, not the C++ port, so the C++ cost is measured in Task 2.
