@@ -30,6 +30,12 @@ GUI
 - [3D preview](GUI-Set-Preview-3D.md)
 - [PGPatcher JSON](GUI-PGPatcher-JSON.md)
 - [Set materials](GUI-Set-Materials.md)
+- [Bottom panel](GUI-Bottom-Tabs.md)
+- [Problems](GUI-Problems.md)
+- [Artist checks](GUI-Artist-Checks.md)
+- [Review and Export](GUI-Review-and-Export.md)
+- [Also export](GUI-Also-Export.md)
+- [Presets](GUI-Presets.md)
 - [Keyboard](GUI-Keyboard.md)
 
 Concepts

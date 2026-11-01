@@ -19,7 +19,7 @@ Three labelled clusters in one wrapping flow, with only **✕ Close** pinned to 
 | Cluster | Controls |
 |---|---|
 | **Channels** | RGBA, R, G, B, A and the alpha mask. |
-| **View** | *Side by side* or *Split*, *Pin this result* and its Compare controls, a *Heatmap* of the difference to the source, *Lens*, *Tile 3×3*, the *Range* and *UV coverage* overlays ([Artist checks](GUI-Guide.md#artist-checks)), *Fit*, *1:1*, and the exposure slider for HDR formats. |
+| **View** | *Side by side* or *Split*, *Pin this result* and its Compare controls, a *Heatmap* of the difference to the source, *Lens*, *Tile 3×3*, the *Range* and *UV coverage* overlays ([Artist checks](GUI-Artist-Checks.md#preview-overlays)), *Fit*, *1:1*, and the exposure slider for HDR formats. |
 | **Encode** | *Live encode* and **Encode now**. |
 
 After them come the sRGB / UNORM display and the mip slider. Both panes show the values the file stores, so a source and its encode look alike under either display. HDR formats are tone-mapped for display.

@@ -48,7 +48,7 @@ The header is one row from about 1340 points of window width; in a narrower wind
 | **Undo** / **Redo** | Up to 200 steps (**Ctrl+Z**, **Ctrl+Y**); greyed out with nothing to undo; hover for the step ("Undo: Format"). The status line then says "Undid: Format." until your next edit, and the bulk panel's result line clears. Undoing back to the last save clears the unsaved dot. Redo of a **Duplicate** is refused, with the reason, when a file is at the copy's path. |
 | **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. Framed together with **Mode**. |
 | **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means. |
-| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. The preset entries are greyed out until a folder is open. Its last entry, after a separator, is **Presets…**, which opens the preset creator (see [Presets](GUI-Guide.md#presets)). |
+| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. The preset entries are greyed out until a folder is open. Its last entry, after a separator, is **Presets…**, which opens the preset creator (see [Presets](GUI-Presets.md#presets)). |
 | **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it; hover says what a click does. Right after the view tabs, Textures view with a folder open only. |
 | **Export to ▾** | The export folder chosen for this project, saved in the project's `sdc-project.toml`, so each project keeps its own. See [Export to](#export-to). |
@@ -64,7 +64,7 @@ It is not drawn until a folder is chosen for the project: a project never takes 
 The menu holds:
 - **Choose export folder…**;
 - **Open export folder**, greyed out with the reason when the folder cannot be opened;
-- the two checkable items **Also export as Vanilla** and **Also export as Complex material** (see [Also export as Vanilla and CM](GUI-Guide.md#also-export-as-vanilla-and-cm));
+- the two checkable items **Also export as Vanilla** and **Also export as Complex material** (see [Also export as Vanilla and CM](GUI-Also-Export.md#also-export-as-vanilla-and-cm));
 - under cs with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab).
 
 ### Export

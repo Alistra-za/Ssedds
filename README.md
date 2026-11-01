@@ -19,7 +19,7 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - BC7 weighting dropdown (Linear, Perceptual, Alpha ×2, ×8, ×16).
 - Optional exact-opaque alpha 255 (forces BC7 mode 6's p-bit to 1; off by default).
 - Every encode is decoded and checked against Skyrim's rules. DDS files made by other tools can be validated too.
-- [Artist checks](docs/wiki/GUI-Guide.md#artist-checks): warnings for problems such as a weak or clipped height map, and missing uv coverage. They never block an export.
+- [Artist checks](docs/wiki/GUI-Artist-Checks.md#artist-checks): warnings for problems such as a weak or clipped height map, and missing uv coverage. They never block an export.
 
 **Maps and packing**
 - Inputs: PNG, TGA, TIFF, EXR, PSD/PSB, Krita, OpenRaster.
@@ -34,7 +34,7 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - Mod scan: meshes decide alpha meaning and set shader. Fast: 100,000 NIFs in 14 seconds, 1,500 plugins in under 3. See [Mod scanning](docs/wiki/Mod-Scanning.md).
 - TruePBR: PGPatcher JSON written per set, validated, with every option exposed, including recent ones. PGPatcher `_m` sidecar `.json`.
 - PBR Landscape: PBRTextureSets and PBRMaterialObjects JSONs built from the actual EDIDs in your load order.
-- [Also export as Vanilla and Complex material](docs/wiki/GUI-Guide.md#also-export-as-vanilla-and-cm): converts PBR sets to those two formats.
+- [Also export as Vanilla and Complex material](docs/wiki/GUI-Also-Export.md#also-export-as-vanilla-and-cm): converts PBR sets to those two formats.
 - Doesn't need to be launched from MO2, but can be. From MO2 it fills in your MO2 location the first time, It skips MO2's virtual file system either way.
 
 **GUI**

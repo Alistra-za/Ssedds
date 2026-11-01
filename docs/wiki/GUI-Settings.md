@@ -13,7 +13,7 @@ Where the GUI keeps its settings, what it remembers between sessions, and what h
 | `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |
 | `%LOCALAPPDATA%\sdc\scan.db` | The mod scan database. |
 
-The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. The header's **Preset** menu picks the project's preset (written to `sdc.toml` as `preset`), and **Presets…** makes and edits user presets (see [Presets](GUI-Guide.md#presets)).
+The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. The header's **Preset** menu picks the project's preset (written to `sdc.toml` as `preset`), and **Presets…** makes and edits user presets (see [Presets](GUI-Presets.md#presets)).
 
 ## What Tessalith remembers
 
