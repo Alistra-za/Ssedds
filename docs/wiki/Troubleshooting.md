@@ -101,7 +101,7 @@ If the file is not listed as a helper at all, its name has no term Tessalith kno
 
 ### The GUI does not start
 
-It needs the Windows system font Segoe UI (`segoeui.ttf`) and says so if it is missing. Segoe UI Symbol, Segoe UI Emoji and Consolas are optional and skipped without a message. The 2D preview and the 3D view need a GPU; without one, the preview is off and everything else works.
+It needs the Windows system font Segoe UI (`segoeui.ttf`) and says so if it is missing ([fonts](Installation.md#requirements)). The 2D preview and the 3D view need a GPU; without one, the preview is off and everything else works.
 
 ### The 3D preview shows plain textures
 

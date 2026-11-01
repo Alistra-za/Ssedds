@@ -14,7 +14,7 @@ Sometimes the graphics device is lost, and the app has to close. The cause is no
 - Unsaved edits to `sdc.toml` and `sdc-project.toml` are kept beside the original as `<file>.recovery`. The original is not touched.
 - The next time you open the folder, the edits come back by themselves as unsaved changes, and a toast says "Restored unsaved edits from the crash". The toast's Undo takes them back and deletes the `.recovery` file. Ctrl+Z takes them back but keeps the file. Clicking Save deletes it; the saves Tessalith makes on its own (an export folder, an export's JSON record) keep it.
 - If `sdc.toml` or `sdc-project.toml` does not parse, it is read-only and cannot take the edits. The `.recovery` file stays, a banner names it, and the edits come back when you fix the file and reload.
-- The crash log is in `%LOCALAPPDATA%\sdc\logs`, one `crash-<date>-<time>.log` per run. Attach it if you report the crash.
+- The crash log is in the logs folder ([where](Installation.md#where-tessalith-keeps-its-files)). Attach it if you report the crash.
 
 ## Speed
 
@@ -77,6 +77,6 @@ Open an issue on the Tessalith GitHub page. Please include:
 - The Tessalith version (the exe's file properties, or `sdc --version`).
 - Your GPU and driver.
 - Your Community Shaders and PGPatcher versions.
-- The crash log from `%LOCALAPPDATA%\sdc\logs`, if the app crashed.
+- The crash log, if the app crashed.
 - The project's `sdc.toml`.
 - What you did, what you expected and what happened.

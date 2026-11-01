@@ -37,7 +37,7 @@ How the target is chosen, highest first: `--target`, then `target` in the projec
 
 How the preset is chosen, highest first: `--preset`, then `preset` in the project `sdc.toml`, then `preset` in the user config, then the default for the target: `cs-quality` or `vanilla-quality`.
 
-The user config is `%APPDATA%\sdc\config.toml`. User presets in `%APPDATA%\sdc\presets\*.toml` are always loaded. See [Presets and targets](Presets-and-Targets.md).
+The user config and the user presets are always loaded ([where they are](Installation.md#where-tessalith-keeps-its-files)). See [Presets and targets](Presets-and-Targets.md).
 
 ### Why `--accept-suggestions high` matters
 

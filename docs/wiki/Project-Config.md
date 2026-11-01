@@ -59,7 +59,7 @@ as = "textures/armor/iron/iron_n.png"
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `schema_version` | integer, 1 or more | 1 | Format version of this file. A version newer than this build supports is an error: `<file>: config schema_version N is newer than this sdc supports (1)`. |
-| `preset` | string | the target's default | The preset to use, by id. A built-in id or one from `%APPDATA%\sdc\presets\*.toml`. See [Presets and targets](Presets-and-Targets.md). |
+| `preset` | string | the target's default | The preset to use, by id. A built-in id or a user preset's. See [Presets and targets](Presets-and-Targets.md). |
 | `target` | `"cs"`, `"vanilla"` (`"cpm"` is an error) | from the preset, else `"cs"` | The target. The GUI's Mode menu writes this. |
 | `[defaults]` | partial profile | none | Field values for every texture. |
 | `[subtypes.<id>]` | partial profile | none | Field values for one sub-type. |

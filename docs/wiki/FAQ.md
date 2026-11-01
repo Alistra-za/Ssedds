@@ -104,4 +104,4 @@ See the table in [GUI settings](GUI-Settings.md#where-settings-live).
 
 ### What licence is it under?
 
-Tessalith is GPL-3.0-or-later. Its conversion engine (the `engine` and `encoders-sys` crates) is MPL-2.0. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`. The plugins have their own split; see [Host plugins](Host-Plugins.md#licences).
+See the licence line on [Home](Home.md) and, for the plugins, [Host plugins](Host-Plugins.md#licences). The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`.

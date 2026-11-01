@@ -15,7 +15,7 @@ How the target is chosen, highest first:
 
 1. `--target` on the command line.
 2. `target` in the project `sdc.toml` (the GUI's Mode menu writes this).
-3. `target` in the user config, `%APPDATA%\sdc\config.toml`.
+3. `target` in the [user config](Project-Config.md).
 4. The selected preset's own `target`.
 5. `cs`.
 

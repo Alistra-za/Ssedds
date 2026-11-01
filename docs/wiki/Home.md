@@ -48,8 +48,7 @@ The product is called Tessalith, and the GUI program is `tessalith.exe`. The com
 | `tessalith` / `tessalith.exe` | Desktop application. |
 | `sdc.toml` | Project config file. |
 | `sdc-project.toml` | GUI-only set definitions, stored next to `sdc.toml`. |
-| `%APPDATA%\sdc\` | User config, user presets and GUI settings. |
-| `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. |
+| `%APPDATA%\sdc\`, `%LOCALAPPDATA%\sdc\` | Your settings, presets, scan database and logs ([list](Installation.md#where-tessalith-keeps-its-files)). |
 | `<output>\_sdc\manifest.jsonl` | Record of every file written. |
 
 ## What Tessalith does with a folder

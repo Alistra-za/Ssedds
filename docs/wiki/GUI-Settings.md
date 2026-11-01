@@ -6,12 +6,8 @@ Where the GUI keeps its settings, what it remembers between sessions, and what h
 
 | File | Contents |
 |---|---|
-| `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
 | `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections, the export folder, and the hashes of the JSON files and borrowed-slot copies Tessalith wrote, and the records of generated files (`[generated]`). GUI only. |
 | `%APPDATA%\sdc\gui.toml` | Window and app settings: the default export folder (a project's own is in its `sdc-project.toml`), recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
-| `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
-| `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |
-| `%LOCALAPPDATA%\sdc\scan.db` | The mod scan database. |
 
 The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. The header's **Preset** menu picks the project's preset (written to `sdc.toml` as `preset`), and **Presets…** makes and edits user presets (see [Presets](GUI-Presets.md#presets)).
 
@@ -40,10 +36,6 @@ How `gui.toml` is written:
 ## Analyses are reused
 
 Tessalith keeps what it learned about each image (its size, alpha, statistics and thumbnail) in `%LOCALAPPDATA%\sdc\analysis-cache`. A folder you opened before reuses the analyses of unchanged files instead of decoding them again. The GUI prunes the folder to 200 MB when it starts, and it is safe to delete. Only the GUI uses it.
-
-## Fonts
-
-Tessalith ships no fonts. It loads the Windows system fonts at start-up and refuses to start, with a message, if Segoe UI is missing. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when missing.
 
 ## When something goes wrong
 

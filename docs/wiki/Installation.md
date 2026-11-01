@@ -41,7 +41,7 @@ The plugins for Photoshop, GIMP, Paint.NET and chaiNNer come in their own zips. 
 | Rust | Installed through `rustup`. The repository's `rust-toolchain.toml` selects the stable channel, the MSVC target, and the `clippy` and `rustfmt` components. |
 | Minimum Rust version | 1.88 for the workspace. The GUI crate needs 1.95 or later because of its `eframe` 0.36.2 dependency. A current stable toolchain covers both. |
 | C++ compiler | Microsoft Visual C++ Build Tools (MSVC) with C++17 support. The `encoders-sys` crate compiles the rgbcx encoder, the ISPC Texture Compressor host code and a small C++ shim. |
-| Fonts (GUI only) | Segoe UI is required: `tessalith.exe` will not start without it. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when missing. All four ship with Windows. |
+| Fonts (GUI only) | Segoe UI is required: `tessalith.exe` will not start without it. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when missing. All four ship with Windows; Tessalith ships no fonts. |
 | ISPC | Not needed for a normal build. See [ISPC objects](#ispc-objects). |
 | NVTT | Optional. See [Optional: NVTT 3.2.5](#optional-nvtt-325). |
 
@@ -162,7 +162,7 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 | Path | Contents | Written by |
 |---|---|---|
 | `%APPDATA%\sdc\config.toml` | User config: default target, preset and overrides for every project. | You |
-| `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run. | You |
+| `%APPDATA%\sdc\presets\*.toml` | Your own presets. Loaded by the CLI and the GUI on every run; a file that fails to load is skipped. | You |
 | `%APPDATA%\sdc\gui.toml` | GUI settings: recent folders, the default export folder, preview limits, threads, NVTT path, window layout. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\analysis-cache\` | What the GUI learned about each image, so a folder opened before reuses them instead of decoding again. Pruned to 200 MB when the GUI starts. Safe to delete. | `tessalith.exe` |
@@ -170,6 +170,7 @@ Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-
 | `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
 | `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |
 | `<output>\_sdc\manifest.jsonl` | Record of every converted file. | `sdc` and `tessalith.exe` |
+| `sdc.toml.recovery`, `sdc-project.toml.recovery` | Unsaved edits after a crash, beside the original. | `tessalith.exe` |
 
 ## Uninstalling
 

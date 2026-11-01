@@ -96,15 +96,7 @@ Exit codes: 0 done, 1 some files failed or were skipped, 2 usage or config error
 
 ## Where your data lives
 
-| What | Where |
-|---|---|
-| GUI settings | `%APPDATA%\sdc\gui.toml` |
-| CLI/GUI user config | `%APPDATA%\sdc\config.toml` |
-| User presets | `%APPDATA%\sdc\presets\` |
-| Mod scan database | `%LOCALAPPDATA%\sdc\scan.db` |
-| GUI crash logs | `%LOCALAPPDATA%\sdc\logs\crash-<date>-<time>.log` (the CLI writes none) |
-| Per-folder settings | `sdc.toml` and `sdc-project.toml` in the folder you convert |
-| Unsaved edits after a crash | `sdc.toml.recovery`, `sdc-project.toml.recovery`, beside the original |
+Settings, presets, the scan database, logs and the per-folder files are listed in [Installation](docs/wiki/Installation.md#where-tessalith-keeps-its-files).
 
 ## Known issues and changes
 
@@ -122,10 +114,10 @@ See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 | | [NIF editing](docs/wiki/GUI-NIF-Edit.md) | |
 
 Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Host-Plugins.md); their source is on branch `host-plugins`, which gets bug fixes but is not kept in step with the engine):
-- Photoshop: a [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS.
-- GIMP 3: a [Tessalith DDS plug-in](docs/gimp-plugin.md) (GPL-3.0-or-later, with the same MIT/MPL-2.0 `psdds.dll`) opens and exports DDS.
-- Paint.NET: a [Tessalith DDS file type](docs/paintdotnet-plugin.md) (GPL-3.0-or-later with a Paint.NET permission, same `psdds.dll`) saves DDS.
-- chaiNNer: three [Tessalith DDS nodes](https://github.com/Alistra-za/Tessalith/tree/host-plugins/chainner/README.md) (GPL-3.0-or-later, same `psdds.dll`) save DDS.
+- Photoshop: a [Tessalith DDS plugin](docs/photoshop-plugin.md) opens and saves DDS.
+- GIMP 3: a [Tessalith DDS plug-in](docs/gimp-plugin.md) opens and exports DDS.
+- Paint.NET: a [Tessalith DDS file type](docs/paintdotnet-plugin.md) saves DDS.
+- chaiNNer: three [Tessalith DDS nodes](https://github.com/Alistra-za/Tessalith/tree/host-plugins/chainner/README.md) save DDS. Their licences are in [Host plugins](docs/wiki/Host-Plugins.md#licences).
 
 Design records: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
 
