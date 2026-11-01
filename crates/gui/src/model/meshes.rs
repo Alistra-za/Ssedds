@@ -187,7 +187,38 @@ struct ProjectCache {
     key: (PathBuf, Option<ScanTarget>, Option<u64>),
     rows: (Arc<Vec<NifEntry>>, Arc<Vec<NifEntry>>),
     project_mod: Option<String>,
-    nifs: Arc<HashSet<String>>,
+    state: ProjectState,
+}
+
+/// The pill's NIF paths: read on a worker, then held.
+enum ProjectState {
+    Reading(Receiver<Result<HashSet<String>, String>>),
+    Done(Arc<HashSet<String>>),
+}
+
+/// What the pill's worker reads: the project mod's NIF copies, or the users of the folder's textures.
+enum ProjectJob {
+    Mod(i64),
+    Textures(Arc<HashSet<String>>),
+}
+
+/// Note GH3: the pill's store read, off the UI thread, from a read-only connection.
+fn read_project(db: &Path, job: ProjectJob) -> Result<HashSet<String>, String> {
+    let store = Store::open_read_only(db).map_err(db_err)?;
+    match job {
+        ProjectJob::Mod(id) => {
+            let v = store.nifs_of(id).map_err(db_err)?;
+            Ok(v.into_iter().map(|n| n.path).collect())
+        }
+        ProjectJob::Textures(tex) => {
+            let mut nifs = HashSet::new();
+            for p in tex.iter() {
+                let u = store.users_of_texture(p).map_err(db_err)?;
+                nifs.extend(u.into_iter().map(|(n, ..)| n));
+            }
+            Ok(nifs)
+        }
+    }
 }
 
 /// The visible list and every input it was built from (rule 9.1). The row lists are held, so a dropped list's address
@@ -491,8 +522,8 @@ pub struct MeshesModel {
     rows_cache: Option<RowsCache>,
     /// Note GH3: the opened texture folder (`AppModel.root`), set by the app each frame (`set_project_root`).
     project_root: Option<PathBuf>,
-    /// Roots opened this session: the pill is on the first time each one opens.
-    project_seen: HashSet<PathBuf>,
+    /// Roots opened this session, each with its pill's on/off as it was left (the current root's is `project_on`).
+    project_seen: HashMap<PathBuf, bool>,
     /// The This project pill is on.
     pub project_on: bool,
     /// The opened folder's output game paths with their PBR twins (`set_project_textures`), and their rev.
@@ -651,7 +682,7 @@ impl MeshesModel {
             row_builds: 0,
             rows_cache: None,
             project_root: None,
-            project_seen: HashSet::new(),
+            project_seen: HashMap::new(),
             project_on: false,
             project_tex: None,
             project_cache: None,
@@ -963,6 +994,7 @@ impl MeshesModel {
     pub fn poll(&mut self) -> bool {
         let mut changed = self.v3.poll();
         changed |= self.poll_pg();
+        changed |= self.poll_project();
         if self.rows_loading() {
             changed |= !self.poll_rows();
         }
@@ -1413,17 +1445,18 @@ impl MeshesModel {
         h
     }
 
-    /// Note GH3: the opened texture folder (`AppModel.root`); the app calls this each frame. A root not opened before
-    /// in this session turns the This project pill on.
+    /// Note GH3: the opened texture folder (`AppModel.root`); the app calls this each frame. The pill's on/off is kept
+    /// per root for the session: a root not opened before starts on.
     pub fn set_project_root(&mut self, root: Option<&Path>) {
         if self.project_root.as_deref() == root {
             return;
         }
+        if let Some(old) = self.project_root.take() {
+            self.project_seen.insert(old, self.project_on);
+        }
         self.project_root = root.map(Path::to_path_buf);
         if let Some(r) = root {
-            if self.project_seen.insert(r.to_path_buf()) {
-                self.project_on = true;
-            }
+            self.project_on = self.project_seen.get(r).copied().unwrap_or(true);
         }
     }
 
@@ -1455,8 +1488,10 @@ impl MeshesModel {
     }
 
     /// Note GH3: the This project pill: the project mod (`None`: the NIFs that use the opened folder's textures) and
-    /// the NIF paths it lists. `None` when there is no pill: no folder open, or no NIF in it. Read once per input
-    /// change (rule 9.1); while the store is unsettled (Note GC15) a changed input waits for the next completed scan.
+    /// the NIF paths it lists. `None` when there is no pill: no folder open, no NIF in it, or the store read for the
+    /// current inputs still running (no partial count). A changed input starts one read on a worker (rule 9.1) and
+    /// drops the one in flight; `poll` takes the answer. While the store is unsettled (Note GC15) a changed input waits
+    /// for the next completed scan.
     pub fn project_nifs(&mut self) -> Option<(Option<String>, Arc<HashSet<String>>)> {
         let root = self.project_root.clone()?;
         let key = (
@@ -1473,16 +1508,21 @@ impl MeshesModel {
             if self.store_unsettled {
                 return None;
             }
-            let (project_mod, nifs) = self.build_project(&key.0);
-            self.project_cache = Some(ProjectCache {
-                key,
-                rows: (self.winners.clone(), self.losers.clone()),
-                project_mod,
-                nifs: Arc::new(nifs),
-            });
+            self.start_project_read(key);
         }
         let c = self.project_cache.as_ref()?;
-        (!c.nifs.is_empty()).then(|| (c.project_mod.clone(), c.nifs.clone()))
+        match &c.state {
+            ProjectState::Done(n) if !n.is_empty() => Some((c.project_mod.clone(), n.clone())),
+            _ => None,
+        }
+    }
+
+    /// The pill's store read for the current inputs is running.
+    pub fn project_reading(&self) -> bool {
+        matches!(
+            self.project_cache.as_ref().map(|c| &c.state),
+            Some(ProjectState::Reading(_))
+        )
     }
 
     /// `project_nifs` while the pill is on: what the list is cut to.
@@ -1494,10 +1534,12 @@ impl MeshesModel {
         }
     }
 
-    /// The project mod is the folder `root` when it sits directly in the MO2 instance's `mods\`: its NIF copies'
-    /// paths. Else the NIFs any copy of which names one of `project_tex` in a slot.
-    fn build_project(&mut self, root: &Path) -> (Option<String>, HashSet<String>) {
+    /// The project mod is the folder `root` when it sits directly in the MO2 instance's `mods\`: the read lists its
+    /// NIF copies' paths. Else it lists the NIFs any copy of which names one of `project_tex` in a slot. Replacing the
+    /// cache drops the read in flight, so an answer for older inputs is never taken.
+    fn start_project_read(&mut self, key: (PathBuf, Option<ScanTarget>, Option<u64>)) {
         self.project_builds += 1;
+        let root = &key.0;
         let mods_dir = match &self.target {
             Some(ScanTarget::Mo2 { root, profile }) => {
                 Instance::load(root, Some(profile)).ok().map(|i| i.mods)
@@ -1506,38 +1548,62 @@ impl MeshesModel {
         };
         let in_mods =
             mods_dir.is_some_and(|d| root.parent().is_some_and(|p| nif_edit::same_dir(p, &d)));
-        let Some(store) = &self.store else {
-            return (None, HashSet::new());
-        };
-        let mut nifs = HashSet::new();
-        if in_mods {
+        let (project_mod, job) = if in_mods {
             let name = root.file_name().map(|n| n.to_string_lossy().into_owned());
             let row = self.mods.iter().find(|r| {
                 name.as_deref()
                     .is_some_and(|n| r.name.eq_ignore_ascii_case(n))
             });
             // A mod the scan holds no NIF copy of: no pill (the mod rule applies alone).
-            let Some(row) = row else {
-                return (name, nifs);
-            };
-            match store.nifs_of(row.id) {
-                Ok(v) => nifs.extend(v.into_iter().map(|n| n.path)),
-                Err(e) => self.error = Some(db_err(e)),
+            match row {
+                Some(r) => (Some(r.name.clone()), Some(ProjectJob::Mod(r.id))),
+                None => (name, None),
             }
-            return (Some(row.name.clone()), nifs);
-        }
-        // shortcut: one indexed store query per output path, on the UI thread as `set_tex_filter`'s; move it to the
-        // rows worker if a large folder stalls a frame.
-        for p in self.project_tex.iter().flat_map(|(_, s)| s.iter()) {
-            match store.users_of_texture(p) {
-                Ok(u) => nifs.extend(u.into_iter().map(|(n, ..)| n)),
-                Err(e) => {
-                    self.error = Some(db_err(e));
-                    break;
-                }
+        } else {
+            let tex = self.project_tex.as_ref().map(|(_, t)| t.clone());
+            (None, tex.map(ProjectJob::Textures))
+        };
+        let db = self.store.as_ref().and(self.store_path.clone());
+        let state = match (job, db) {
+            (Some(job), Some(db)) => {
+                let (tx, rx) = channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send(read_project(&db, job)); // newer inputs replaced this read: nobody listens
+                });
+                ProjectState::Reading(rx)
             }
-        }
-        (None, nifs)
+            _ => ProjectState::Done(Arc::default()),
+        };
+        self.project_cache = Some(ProjectCache {
+            key,
+            rows: (self.winners.clone(), self.losers.clone()),
+            project_mod,
+            state,
+        });
+    }
+
+    /// Takes the pill's finished read. True when one landed.
+    fn poll_project(&mut self) -> bool {
+        let Some(c) = &mut self.project_cache else {
+            return false;
+        };
+        let ProjectState::Reading(rx) = &c.state else {
+            return false;
+        };
+        let nifs = match rx.try_recv() {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                self.error = Some(e);
+                HashSet::new()
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.error = Some(db_err("reading the project's meshes stopped"));
+                HashSet::new()
+            }
+        };
+        c.state = ProjectState::Done(Arc::new(nifs));
+        true
     }
 
     fn build_visible(

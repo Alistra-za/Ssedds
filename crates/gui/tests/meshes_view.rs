@@ -2224,6 +2224,7 @@ fn project_textures() -> (tempfile::TempDir, MeshesModel) {
 fn this_project_lists_the_opened_mods_nifs_and_names_the_winner_on_hover() {
     let (d, mut m) = project_mods();
     m.set_project_root(Some(&d.path().join("mods").join("A")));
+    wait_project(&mut m);
     assert!(m.project_on, "on the first time the project opens");
     assert_eq!(
         rows_of(&mut m),
@@ -2278,6 +2279,7 @@ fn outside_mods_this_project_lists_the_nifs_that_use_the_folders_textures() {
     m.set_project_root(Some(&d.path().join("plain")));
     let paths = ["textures/pbr/xmead/ale_bc.dds".to_string()];
     m.set_project_textures(1, &paths);
+    wait_project(&mut m);
     assert_eq!(
         rows_of(&mut m),
         [row("meshes/ale.nif", "A"), row("meshes/ale2.nif", "A")]
@@ -2299,6 +2301,7 @@ fn outside_mods_this_project_lists_the_nifs_that_use_the_folders_textures() {
     );
     h.state_mut()
         .set_project_textures(2, &["textures/none.dds".to_string()]);
+    wait_project(h.state_mut());
     h.run_steps(3);
     assert!(h.state().project_builds > builds, "a new rev builds");
     assert!(h.query_by_label_contains("This project").is_none());
@@ -2313,6 +2316,7 @@ fn this_project_never_deselects_and_is_on_by_default_once_per_project() {
     let plain = d.path().join("plain");
     m.set_project_root(Some(&plain));
     m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    wait_project(&mut m);
     m.project_on = false;
     m.search = "other".into();
     let first = m.visible_nifs()[0];
@@ -2339,4 +2343,88 @@ fn this_project_never_deselects_and_is_on_by_default_once_per_project() {
     h.state_mut()
         .set_project_root(Some(&d.path().join("plain2")));
     assert!(h.state().project_on, "a new project starts on");
+}
+
+/// Starts the pill's read for the current inputs and polls until it lands.
+fn wait_project(m: &mut MeshesModel) {
+    let t = Instant::now();
+    m.project_nifs();
+    while m.project_reading() {
+        assert!(
+            t.elapsed() < Duration::from_secs(60),
+            "the project read did not land"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        m.poll();
+    }
+}
+
+/// Note GH3 fix round 1: the pill's store read runs on a worker. Until its answer for the current inputs lands there
+/// is no pill (no partial count) and nothing is cut; an answer for an older `rev` is dropped.
+#[test]
+fn the_project_read_lands_after_polling_and_an_older_revs_answer_is_dropped() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    assert!(m.project_nifs().is_none(), "no pill before the read lands");
+    assert!(m.project_reading());
+    assert_eq!(m.visible_nifs().len(), 3, "nothing is cut while it reads");
+    wait_project(&mut m);
+    assert_eq!(m.project_nifs().map(|(_, n)| n.len()), Some(2));
+    assert_eq!(m.visible_nifs().len(), 2);
+    // Rev 2 names nothing; rev 3 names ale again. Rev 2's read starts, rev 3 replaces it before any poll.
+    m.set_project_textures(2, &["textures/none.dds".to_string()]);
+    assert!(m.project_nifs().is_none());
+    m.set_project_textures(3, &["textures/other/ale_bc.dds".to_string()]);
+    assert!(
+        m.project_nifs().is_none(),
+        "the old rev's answer is not shown"
+    );
+    wait_project(&mut m);
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/other.nif", "A")],
+        "rev 3's answer, not rev 1's or rev 2's"
+    );
+}
+
+/// Note GH3 fix round 1: the pill's on/off is kept per project root: A off, then B, then A again keeps A off.
+#[test]
+fn the_pill_state_is_kept_per_project_root() {
+    let mut m = MeshesModel::empty();
+    let (a, b) = (Path::new("C:\\proj\\A"), Path::new("C:\\proj\\B"));
+    m.set_project_root(Some(a));
+    assert!(m.project_on);
+    m.project_on = false;
+    m.set_project_root(Some(b));
+    assert!(m.project_on, "B opens for the first time: on");
+    m.set_project_root(Some(a));
+    assert!(!m.project_on, "A keeps its own off");
+    m.set_project_root(Some(b));
+    assert!(m.project_on, "B keeps its own on");
+}
+
+/// Note GH3 fix round 1: the `wins: {winner}` hover reads the path's winner, not the shown copy's mod: with the pill
+/// on and A picked (or the Overridden chip), A's losing rock.nif still says B wins.
+#[test]
+fn the_winner_hover_shows_for_the_project_mods_own_losing_copy() {
+    for picked in [true, false] {
+        let (d, mut m) = project_mods();
+        m.set_project_root(Some(&d.path().join("mods").join("A")));
+        wait_project(&mut m);
+        if picked {
+            let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+            m.select_mod(a);
+        } else {
+            m.filter = NifFilter::Overridden;
+        }
+        let first = rows_of(&mut m).remove(0);
+        assert_eq!(first, row("meshes/rock.nif", "A"), "picked {picked}");
+        let mut h = harness(m);
+        h.run();
+        let cell = h.query_all_by_label("A").next().unwrap();
+        cell.hover();
+        h.run();
+        h.get_by_label("wins: B");
+    }
 }

@@ -467,6 +467,11 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     );
     mod_picker(ui, m);
     let project = m.project_nifs();
+    // Note GH3: the pill's read runs on a worker and `poll` takes it; no pill until it lands.
+    if m.project_reading() {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
     ui.horizontal_wrapped(|ui| {
         // Note GH3: the This project pill comes first; it combines with the chips, the picker and the search.
         if let Some((pm, nifs)) = &project {
@@ -528,7 +533,8 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     let w = ui.available_width() - 8.0 - 2.0 * gap;
     let (mod_w, chips_w) = ((0.25 * w).min(180.0), (0.25 * w).min(200.0));
     let path_w = (w - mod_w - chips_w).max(0.0);
-    // Note GH3: with the pill on, a row another mod wins names the project mod, the winner on hover.
+    // Note GH3: with the pill on, a project row names the project mod, and the path's winner on hover when another
+    // mod wins it (read off the row: the shown copy may be the project mod's losing one).
     let project_mod = project
         .filter(|_| m.project_on)
         .and_then(|(pm, nifs)| Some((pm?, nifs)));
@@ -558,10 +564,17 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
                         picked = Some(n.copy_id);
                     }
                     match &project_mod {
-                        Some((pm, nifs)) if origin != pm && nifs.contains(&n.path) => {
-                            cell(ui, mod_w, |ui| ui.weak(pm.as_str())).on_hover_ui(|ui| {
-                                ui.label(format!("wins: {origin}"));
-                            });
+                        Some((pm, nifs)) if nifs.contains(&n.path) => {
+                            let r = cell(ui, mod_w, |ui| ui.weak(pm.as_str()));
+                            let winner = match n.wins {
+                                true => Some(origin),
+                                false => n.overridden_by.as_deref(),
+                            };
+                            if let Some(w) = winner.filter(|w| w != pm) {
+                                r.on_hover_ui(|ui| {
+                                    ui.label(format!("wins: {w}"));
+                                });
+                            }
                         }
                         _ => {
                             cell(ui, mod_w, |ui| ui.weak(origin));
