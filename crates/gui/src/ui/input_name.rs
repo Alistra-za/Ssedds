@@ -447,7 +447,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                     .id(edit_id)
                     .hint_text(HINT)
                     .frame(egui::Frame::NONE)
-                    // As tall as the box was with BH13's lock track (2 + 2 pt).
+                    // As tall as the box was with the old lock track (2 + 2 pt; FI17).
                     .margin(egui::Margin { left: 4, right: 4, top: 2, bottom: 2 })
                     .layouter(&mut layouter)
                     // Tab stays in the box while a ghost shows; Esc while a list shows (AO2, AO4, FI17).

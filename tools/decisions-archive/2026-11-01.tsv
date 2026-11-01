@@ -1,0 +1,18 @@
+id	note	line	marker	superseder	superseder_quote	class	date	code_cites	remark
+AM12	AM		back	FI16	(amended by FI16)	partial	2026-11-01		goes: the Mode control before the Preset combo (the Mode moved to the Presets tab, FI16); stays: the Preset menu filtered by the Mode, `preset` in sdc.toml
+AN3	AN		back	FI11	(superseded by FI11)	partial	2026-11-01		goes: the menu labels (FI11 renames them); stays: the `lock_<slot>` key, one undo step, JSON sets only
+AN4	AN		back	FI11	(superseded by FI11)	partial	2026-11-01		goes: the "(sdc)" menu labels (FI11); stays: the sdc `lock` key and the pin wording on hovers and the Slot commands dialog
+AO3	AO		back	FI17	(superseded by FI17)	archive-item	2026-11-01		the lock rail is gone; segments replace it (FI17)
+AO4	AO		back	FI17	(amended by FI17)	partial	2026-11-01		goes: filtering by the lock; stays: the live list, ghost, highlight and commit rules, the 200-row all-paths list
+AO5	AO		back	FI17	(amended by FI17)	partial	2026-11-01		goes: the locked label in the width rule; stays: 160-480 pt, the set header shows the box only
+AO¶- A pasted path that starts with the locked part	AO		back	FI17	(superseded by FI17)	archive-item	2026-11-01		no locked part to drop (FI17)
+AO¶- The box's `input_name_plan` check is cached per	AO		back	FI17	(amended by FI17)	partial	2026-11-01		goes: the locked part in the cache key; stays: the plan check cache per (text, `items_rev`)
+BH2	BH		back	FI17	(superseded by FI17)	archive-item	2026-11-01		the padlock is gone (FI17)
+BH6	BH		back	FI16	(amended by FI16)	partial	2026-11-01		goes: the Mode in the framed unit (FI16); stays: MO2... on the one header row, Meshes draws the header too
+BH13	BH		back	FI17	(superseded by FI17)	archive-item	2026-11-01		the lock track is gone (FI17)
+CD1	CD		back	FI16	(amended by FI16)	partial	2026-11-01		goes: Mode in the header order (FI16); stays: the rest of the order and the tab names
+DO3	DO		back	FI17	(amended by FI17)	partial	2026-11-01		goes: the move-the-lock-left line; stays: the empty-scan line, the truthful empty-list line
+FB1	FB		back	FI5	(amended by FI5)	partial	2026-11-01		goes: the Export-to chip drawn only with a folder chosen (FI5); stays: the rest of FB1
+FC1	FC		back	FI4	(amended by FI4)	partial	2026-11-01		goes: the document is dirty after the first plan that decides (FI4); stays: what is recorded and the one undo step
+FC¶- **NIF edits.** `app.rs` hands	FC		back	FI7	(amended by FI7)	partial	2026-11-01		goes: a blocked NIF row is always a Warning (FI7); stays: the rest of the NIF footer rules
+FC¶- **One accent.** The RNM outline	FC		back	FI17	(amended by FI17)	partial	2026-11-01		goes: the path lock taking the accent (the lock is gone, FI17); stays: the RNM outline and slot flash accent
