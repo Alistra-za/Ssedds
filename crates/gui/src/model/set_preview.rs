@@ -4,6 +4,7 @@
 //!
 //! Part 1: per-member preview encodes → DDS bytes served as `FileSource::Memory`, fresh/stale per member, paused
 //! during an export. Results come back on this module's own channel, so `worker.rs` needs no new message.
+use crate::model::cs_pbr::{self, CsBlock};
 use crate::model::items::{ItemKind, ItemStatus, TextureItem};
 use crate::model::meshes::ScanTarget;
 use crate::model::pbr_export::json_entries;
@@ -29,13 +30,14 @@ use engine::image::Rgba32F;
 use engine::manifest::sha256_json;
 use engine::policy::ResolvedJob;
 use engine::session::{pack_key, Session};
+use modscan::plugin_store::WinRec;
 use modscan::store::{MatchRow, ShapeView, Store, TexKey};
 use nif::material::MaterialState;
 use nif::path::TexPath;
 use pgpsim::{Badge, SimInput, SimResult};
 use render3d::builtin::Builtin;
 use render3d::perf_log;
-use render3d::{ParsedNif, ShapeId, Variant};
+use render3d::{Glint, ParsedNif, ProjectedLayer, ShapeId, Variant};
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -1541,6 +1543,93 @@ enum SpMsg {
         token: u64,
         result: Result<LoadedNif, String>,
     },
+    MatoRead {
+        key: MatoKey,
+        result: Result<Option<esp::MatoData>, String>,
+    },
+}
+
+// ---- Part 3: the material-object (MATO) layer (Note GG) ----
+
+pub const MATO_NO_RECORD: &str = "No MATO record in the load order; showing default coverage";
+pub const MATO_PBR_ONLY: &str = "The JSON values apply to PBR shapes only.";
+
+pub fn mato_missing_text(path: &str) -> String {
+    format!("{path} is not in the load order; showing a plain fallback")
+}
+
+/// (plugin path, its mtime, EDID lower case): what one record read depends on.
+type MatoKey = (PathBuf, Option<std::time::SystemTime>, String);
+
+fn cs_default(fields: &[cs_pbr::Field], name: &str) -> f32 {
+    fields
+        .iter()
+        .find(|f| f.name == name)
+        .map_or(0.0, |f| f.default) as f32
+}
+
+/// `v` as a finite f32, else `default`.
+fn finite_or(v: Option<&Value>, default: f32) -> f32 {
+    v.and_then(Value::as_f64)
+        .map(|v| v as f32)
+        .filter(|v| v.is_finite())
+        .unwrap_or(default)
+}
+
+/// Number `name` of `o`, else its CS default in `fields` (a missing, wrong-typed or non-finite value).
+fn cs_num(o: &serde_json::Map<String, Value>, fields: &[cs_pbr::Field], name: &str) -> f32 {
+    finite_or(o.get(name), cs_default(fields, name))
+}
+
+/// The layer from a `cs_mato` block's values and its record's DATA (design D3, D5). `data` None: SnowMaterialObject1P's
+/// coverage (falloff 0.35 / 0.4, noise 48, colour white). A missing or wrong-typed field takes CS's default
+/// (`MATO_FIELDS`, `GLINT_FIELDS`); the glint is on only when `glintParameters.enabled` is true. Values outside the
+/// editor's slider ranges pass as CS reads them (it does not clamp JSON).
+pub fn layer_from_block(
+    values: &serde_json::Map<String, Value>,
+    data: Option<&esp::MatoData>,
+) -> ProjectedLayer {
+    let mato = &cs_pbr::MATO_FIELDS;
+    // Three finite numbers, else the whole field's default.
+    let base_color_scale = values
+        .get("baseColorScale")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 3)
+        .and_then(|a| {
+            let c: Vec<f32> = a
+                .iter()
+                .map(|x| Some(finite_or(Some(x), f32::NAN)).filter(|v| v.is_finite()))
+                .collect::<Option<_>>()?;
+            Some([c[0], c[1], c[2]])
+        })
+        .unwrap_or([cs_default(mato, "baseColorScale"); 3]);
+    let glint = values
+        .get("glintParameters")
+        .and_then(Value::as_object)
+        .filter(|g| g.get("enabled").and_then(Value::as_bool) == Some(true))
+        .map(|g| {
+            let n = |k| cs_num(g, &cs_pbr::GLINT_FIELDS, k);
+            Glint {
+                screen_space_scale: n("screenSpaceScale"),
+                log_microfacet_density: n("logMicrofacetDensity"),
+                microfacet_roughness: n("microfacetRoughness"),
+                density_randomization: n("densityRandomization"),
+            }
+        });
+    let (falloff_scale, falloff_bias, noise_uv_scale, colour) = data
+        .map_or((0.35, 0.4, 48.0, [1.0; 3]), |d| {
+            (d.falloff_scale, d.falloff_bias, d.noise_uv_scale, d.colour)
+        });
+    ProjectedLayer {
+        falloff_scale,
+        falloff_bias,
+        noise_uv_scale,
+        colour,
+        base_color_scale,
+        roughness: cs_num(values, mato, "roughness"),
+        specular_level: cs_num(values, mato, "specularLevel"),
+        glint,
+    }
 }
 
 pub struct SetPreview {
@@ -1599,6 +1688,20 @@ pub struct SetPreview {
     rx: Receiver<SpMsg>,
     /// The Meshes view's whole-run crash lines (Note GE14, `MeshesModel::pg_crashes`), set by the app.
     crashes: Vec<String>,
+    /// Note GG: the material-object layer is on (this session only, like `tiling`).
+    pub mato_layer: bool,
+    /// The followed set's `cs_mato` block, as last read.
+    mato_block: Option<CsBlock>,
+    /// The record the block's EDIDs picked (`None`: none), the read it needs, and its DATA once read.
+    mato_rec: Option<WinRec>,
+    mato_key: Option<MatoKey>,
+    mato_data: Option<esp::MatoData>,
+    /// A record was picked and its DATA is read or being read (false: default coverage).
+    mato_found: bool,
+    mato_reading: bool,
+    mato_cache: HashMap<MatoKey, Option<esp::MatoData>>,
+    /// The record is to be picked again on the next shown frame (the layer turned on, the set changed).
+    mato_due: bool,
 }
 
 impl Default for SetPreview {
@@ -1664,6 +1767,15 @@ impl SetPreview {
             tx,
             rx,
             crashes: vec![],
+            mato_layer: false,
+            mato_block: None,
+            mato_rec: None,
+            mato_key: None,
+            mato_data: None,
+            mato_found: false,
+            mato_reading: false,
+            mato_cache: HashMap::new(),
+            mato_due: false,
         }
     }
 
@@ -1732,6 +1844,7 @@ impl SetPreview {
             })
             || self.querying.is_some()
             || self.loading.is_some()
+            || self.mato_reading
             || (self.want_scene && !self.enc.paused && (self.shown || self.visible))
     }
 
@@ -1779,6 +1892,10 @@ impl SetPreview {
             if let Some(k) = key {
                 self.check(m, &k, now);
             }
+        }
+        let mato_due = std::mem::take(&mut self.mato_due);
+        if due || mato_due {
+            self.sync_mato(m);
         }
         self.enc
             .pump(m.session.as_ref(), now, m.export.running.is_some());
@@ -1849,6 +1966,7 @@ impl SetPreview {
             return;
         }
         if d.set {
+            self.forget_mato();
             self.enc.reset();
             self.rows.clear();
             self.notices.clear();
@@ -1949,6 +2067,24 @@ impl SetPreview {
                     }
                     self.want_scene = true;
                 }
+                SpMsg::MatoRead { key, result }
+                    if self.mato_reading && self.mato_key.as_ref() == Some(&key) =>
+                {
+                    self.mato_reading = false;
+                    match result {
+                        Ok(d) => {
+                            self.mato_cache.insert(key, d);
+                            self.mato_data = d;
+                            self.mato_found = d.is_some();
+                        }
+                        // Counts as no record; not cached, so the next pick reads again.
+                        Err(e) => {
+                            self.mato_found = false;
+                            self.notice(e);
+                        }
+                    }
+                    self.push_layer();
+                }
                 _ => {}
             }
         }
@@ -2019,25 +2155,28 @@ impl SetPreview {
         }
     }
 
+    /// Opens the UI thread's read-only connection on first use; a failure goes to `vfs_err`.
+    fn open_store(&self) {
+        if self.store_tried.get() {
+            return;
+        }
+        self.store_tried.set(true);
+        if let Some(p) = self.store_path.as_ref().filter(|p| p.is_file()) {
+            match Store::open_read_only(p) {
+                Ok(st) => *self.store.borrow_mut() = Some(st),
+                Err(e) => *self.vfs_err.borrow_mut() = Some(format!("scan database: {e}")),
+            }
+        }
+    }
+
     /// The game's copy of `norm` (UI-thread read-only connection, opened on first use; lookups cached).
     fn vfs_lookup(&self, norm: &str) -> Option<FileSource> {
         if let Some(hit) = self.vfs_cache.borrow().get(norm) {
             return hit.clone();
         }
+        self.open_store();
         if self.vfs_err.borrow().is_some() {
             return None;
-        }
-        if !self.store_tried.get() {
-            self.store_tried.set(true);
-            if let Some(p) = self.store_path.as_ref().filter(|p| p.is_file()) {
-                match Store::open_read_only(p) {
-                    Ok(st) => *self.store.borrow_mut() = Some(st),
-                    Err(e) => {
-                        *self.vfs_err.borrow_mut() = Some(format!("scan database: {e}"));
-                        return None;
-                    }
-                }
-            }
         }
         let found = match self
             .store
@@ -2078,6 +2217,15 @@ impl SetPreview {
             }
             if let Some(src) = self.vfs_lookup(&t.norm) {
                 map.insert(t.norm.clone(), src);
+            }
+        }
+        // Note GG: the material-object layer's four global textures, whether or not the layer is on now (it resolves
+        // them through this map when it turns on, without a new load).
+        for (_, p) in render3d::textures::PROJECTED {
+            if !map.contains_key(p) {
+                if let Some(src) = self.vfs_lookup(p) {
+                    map.insert(p.to_string(), src);
+                }
             }
         }
         // The skin RFAOS candidates too (render3d resolves only through this map), optional: a failed read is quiet.
@@ -2411,6 +2559,134 @@ fn slot_norms(materials: &[&MaterialState]) -> HashSet<String> {
         .filter(|t| !t.norm.is_empty())
         .map(|t| t.norm.clone())
         .collect()
+}
+
+/// Note GG: the material-object layer.
+impl SetPreview {
+    /// The "Material object layer" toggle. The record is picked on the next shown frame; until its DATA is read the
+    /// layer shows default coverage.
+    pub fn set_mato_layer(&mut self, on: bool) {
+        if on != self.mato_layer {
+            self.mato_layer = on;
+            self.mato_due = true;
+            self.push_layer();
+        }
+    }
+
+    fn forget_mato(&mut self) {
+        self.mato_rec = None;
+        self.mato_key = None;
+        self.mato_data = None;
+        self.mato_found = false;
+        self.mato_reading = false;
+        self.mato_due = true;
+    }
+
+    /// The followed set's block, and with the layer on its record (design D3): the first EDID of `edids` the scan
+    /// has as a winning MATO (ASCII case-insensitive, as `esp::mato_data` matches it). Then the layer is pushed.
+    fn sync_mato(&mut self, m: &AppModel) {
+        self.mato_block = self
+            .fp
+            .as_ref()
+            .and_then(|f| m.cs_block(&f.label, cs_pbr::Kind::Mato));
+        if let (true, Some(b)) = (self.mato_layer, &self.mato_block) {
+            // A scan read error is no record (the CS PBR card reports scan errors).
+            let rec = m.scan_records().ok().and_then(|r| {
+                b.edids.iter().find_map(|e| {
+                    r.mato
+                        .iter()
+                        .find(|w| w.edid.eq_ignore_ascii_case(e))
+                        .cloned()
+                })
+            });
+            if rec != self.mato_rec {
+                self.pick_record(rec);
+            }
+        }
+        self.push_layer();
+    }
+
+    /// The DATA of `rec`: from the cache, else read from its plugin on a worker (Skyrim.esm is ~250 MB).
+    fn pick_record(&mut self, rec: Option<WinRec>) {
+        self.mato_rec.clone_from(&rec);
+        self.mato_key = None;
+        self.mato_data = None;
+        self.mato_found = false;
+        self.mato_reading = false;
+        let Some(w) = rec else {
+            return;
+        };
+        self.open_store();
+        let path = match (self.vfs_err.borrow().clone(), self.store.borrow().as_ref()) {
+            (Some(e), _) => Err(e),
+            (None, Some(s)) => s
+                .plugin_path(&w.plugin)
+                .map_err(|e| format!("scan database: {e}")),
+            (None, None) => Ok(None),
+        };
+        let path = match path {
+            Ok(Some(p)) => p,
+            Ok(None) => return,
+            Err(e) => return self.notice(e),
+        };
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let key: MatoKey = (path, mtime, w.edid.to_ascii_lowercase());
+        self.mato_key = Some(key.clone());
+        if let Some(d) = self.mato_cache.get(&key) {
+            self.mato_data = *d;
+            self.mato_found = d.is_some();
+            return;
+        }
+        self.mato_found = true;
+        self.mato_reading = true;
+        let (edid, same) = (w.edid, key.clone());
+        spawn(
+            self.tx.clone(),
+            move || {
+                let result = std::fs::read(&key.0)
+                    .map(|b| esp::mato_data(&b, &edid))
+                    .map_err(|e| format!("{}: {e}", key.0.display()));
+                SpMsg::MatoRead { key, result }
+            },
+            move |e| SpMsg::MatoRead {
+                key: same,
+                result: Err(format!("internal error reading the MATO record: {e}")),
+            },
+        );
+    }
+
+    /// The layer the renderer should have: on, and the set has a block. The viewport sends only a change.
+    fn push_layer(&mut self) {
+        // shortcut: the four textures are resolved only when the layer turns on (ruling a), so a rescan while it is on
+        // shows after the user turns it off and on; upgrade: push None then Some after the scene push a requery makes.
+        let want = self
+            .mato_block
+            .as_ref()
+            .filter(|_| self.mato_layer)
+            .map(|b| layer_from_block(&b.values, self.mato_data.as_ref()));
+        self.v3.set_projected_layer(want);
+    }
+
+    /// The grey lines under the toggle (design D3, D4, D6); none while the layer is off or the set has no block.
+    pub fn mato_lines(&self) -> Vec<String> {
+        if !self.mato_layer || self.mato_block.is_none() {
+            return vec![];
+        }
+        let mut out = vec![];
+        if !self.mato_found {
+            out.push(MATO_NO_RECORD.to_string());
+        }
+        if self.rows.iter().any(|r| !r.material.is_pbr()) {
+            out.push(MATO_PBR_ONLY.to_string());
+        }
+        out.extend(
+            self.v3
+                .projected_missing
+                .iter()
+                .map(|p| mato_missing_text(p)),
+        );
+        out
+    }
 }
 
 impl SetPreview {
