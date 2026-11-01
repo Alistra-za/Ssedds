@@ -2,7 +2,7 @@
 
 Tessalith has optional plugins for four image programs. They save Skyrim SE/AE DDS textures with Tessalith's own encoders and rules, so a texture saved from a plugin gets the same bytes as the same choices in Tessalith. All of them use one shared library, `psdds.dll` (Photoshop links it in), so the rules for each option exist in one place.
 
-The plugins save one image at a time. They do not read `sdc.toml`, sets or a mod scan. For whole folders, packing and TruePBR JSON, use Tessalith itself.
+The plugins save one image at a time. They do not read `sdc.toml`, sets or a mod scan. For whole folders, packing and PGPatcher JSON, use Tessalith itself.
 
 | Program | Version | Release zip | Saves | Opens DDS |
 |---|---|---|---|---|

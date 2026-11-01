@@ -145,7 +145,7 @@ It takes no parameters. It hashes every vendored file except `SHA256SUMS` itself
 | `%LOCALAPPDATA%\sdc\analysis-cache\` | What the GUI learned about each image, so a folder opened before reuses them instead of decoding again. Pruned to 200 MB when the GUI starts. Safe to delete. | `tessalith.exe` |
 | `%LOCALAPPDATA%\sdc\logs\` | GUI crash logs, `crash-<date>-<time>.log`. The CLI writes none. | `tessalith.exe` |
 | `<project>\sdc.toml` | Project config. | You or `tessalith.exe` |
-| `<project>\sdc-project.toml` | GUI set definitions and TruePBR JSON settings. | `tessalith.exe` |
+| `<project>\sdc-project.toml` | GUI set definitions and PGPatcher JSON settings. | `tessalith.exe` |
 | `<output>\_sdc\manifest.jsonl` | Record of every converted file. | `sdc` and `tessalith.exe` |
 | `sdc.toml.recovery`, `sdc-project.toml.recovery` | Unsaved edits after a crash, beside the original. | `tessalith.exe` |
 
