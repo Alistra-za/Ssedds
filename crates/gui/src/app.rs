@@ -347,6 +347,7 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
+        self.meshes.set_project_root(self.model.root.as_deref());
         // Note GD5: an export folder change's lines about the open NIF edit go to Messages.
         for line in self.meshes.messages.drain(..) {
             self.model

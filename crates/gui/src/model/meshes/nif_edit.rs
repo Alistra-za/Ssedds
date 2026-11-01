@@ -1906,7 +1906,7 @@ fn slot_paths(p: &ParsedNif) -> Vec<(u32, Vec<String>)> {
 }
 
 /// The same folder, ignoring ASCII case, `/` versus `\` and a trailing separator (MO2 paths on Windows).
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
         let s = p.to_string_lossy().replace('/', "\\");
         s.trim_end_matches('\\').to_ascii_lowercase()

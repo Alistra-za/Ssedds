@@ -466,7 +466,22 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
             .desired_width(f32::INFINITY),
     );
     mod_picker(ui, m);
+    let project = m.project_nifs();
     ui.horizontal_wrapped(|ui| {
+        // Note GH3: the This project pill comes first; it combines with the chips, the picker and the search.
+        if let Some((pm, nifs)) = &project {
+            let r = ui
+                .selectable_label(m.project_on, format!("This project {}", nifs.len()))
+                .on_hover_ui(|ui| {
+                    ui.label(match pm {
+                        Some(name) => format!("Only the NIFs with a copy in {name}"),
+                        None => "Only the NIFs that use the opened folder's textures".into(),
+                    });
+                });
+            if r.clicked() {
+                m.project_on = !m.project_on;
+            }
+        }
         for f in crate::model::meshes::NifFilter::ALL {
             // Note GC: every row of "Any mod" wins, so Wins is offered only with a picked mod.
             if f == crate::model::meshes::NifFilter::Wins && m.selected_mod.is_none() {
@@ -513,6 +528,10 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     let w = ui.available_width() - 8.0 - 2.0 * gap;
     let (mod_w, chips_w) = ((0.25 * w).min(180.0), (0.25 * w).min(200.0));
     let path_w = (w - mod_w - chips_w).max(0.0);
+    // Note GH3: with the pill on, a row another mod wins names the project mod, the winner on hover.
+    let project_mod = project
+        .filter(|_| m.project_on)
+        .and_then(|(pm, nifs)| Some((pm?, nifs)));
     let mut picked = None;
     egui::ScrollArea::vertical()
         .id_salt("meshes-tree-scroll")
@@ -538,7 +557,16 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
                     {
                         picked = Some(n.copy_id);
                     }
-                    cell(ui, mod_w, |ui| ui.weak(origin));
+                    match &project_mod {
+                        Some((pm, nifs)) if origin != pm && nifs.contains(&n.path) => {
+                            cell(ui, mod_w, |ui| ui.weak(pm.as_str())).on_hover_ui(|ui| {
+                                ui.label(format!("wins: {origin}"));
+                            });
+                        }
+                        _ => {
+                            cell(ui, mod_w, |ui| ui.weak(origin));
+                        }
+                    }
                     cell(ui, chips_w, |ui| chips_cell(ui, m, n, origin));
                 });
             }

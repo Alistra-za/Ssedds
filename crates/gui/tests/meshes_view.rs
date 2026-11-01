@@ -2164,3 +2164,179 @@ fn the_path_filter_folds_ascii_only_like_stored_paths() {
     m.search = "éclair".into();
     assert!(m.visible_nifs().is_empty(), "É and é are different paths");
 }
+
+// ---- Note GH3 (review D9): the This project pill ----
+
+#[path = "../../nif/tests/builder/mod.rs"]
+mod builder;
+
+/// An instance with `modlist` and the NIF `files` (data path, bytes; `None` is the skinned fixture), scanned.
+fn scan_files(
+    modlist: &str,
+    files: &[(&str, Option<Vec<u8>>)],
+) -> (tempfile::TempDir, MeshesModel) {
+    let d = instance(modlist);
+    for (rel, bytes) in files {
+        put(d.path(), rel, bytes.as_deref());
+    }
+    let mut m = scan_model(d.path().join("scan.db"));
+    m.activate_with(None);
+    m.use_instance(d.path().to_path_buf(), "Default".into());
+    start_scan(&mut m);
+    wait(&mut m);
+    assert_eq!(m.error, None);
+    (d, m)
+}
+
+/// A (2 NIFs) and B, which overrides A's rock.nif and has a NIF of its own.
+fn project_mods() -> (tempfile::TempDir, MeshesModel) {
+    scan_files(
+        "+B\n+A\n",
+        &[
+            ("mods/A/meshes/rock.nif", None),
+            ("mods/A/meshes/tree/oak.nif", None),
+            ("mods/B/meshes/rock.nif", None),
+            ("mods/B/meshes/bonly.nif", None),
+        ],
+    )
+}
+
+/// Three NIFs in A: one naming `textures\xmead\ale_bc.dds` (the review's PBR-redirect case), one `xmead\ale_bc.dds`
+/// (no `textures\` prefix) and one `textures\other\ale_bc.dds`.
+fn project_textures() -> (tempfile::TempDir, MeshesModel) {
+    let set = |p: &str| Some(builder::scenes::one_shape_set(&[p]));
+    scan_files(
+        "+A\n",
+        &[
+            ("mods/A/meshes/ale.nif", set("textures\\xmead\\ale_bc.dds")),
+            ("mods/A/meshes/ale2.nif", set("xmead\\ale_bc.dds")),
+            (
+                "mods/A/meshes/other.nif",
+                set("textures\\other\\ale_bc.dds"),
+            ),
+        ],
+    )
+}
+
+/// Note GH3 (N3 test 1): the opened folder is mod A: `This project 2` comes first, on, and lists both of A's NIFs;
+/// rock.nif, which B wins, shows `A` with `wins: B` on hover; B's own NIF is hidden.
+#[test]
+fn this_project_lists_the_opened_mods_nifs_and_names_the_winner_on_hover() {
+    let (d, mut m) = project_mods();
+    m.set_project_root(Some(&d.path().join("mods").join("A")));
+    assert!(m.project_on, "on the first time the project opens");
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/rock.nif", "B"), row("meshes/tree/oak.nif", "A")]
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2");
+    let first = h.query_all_by_role(Role::Button).find_map(|n| {
+        let l = n.accesskit_node().label().unwrap_or_default();
+        let chips = [
+            "This project",
+            "All",
+            "Overridden",
+            "Conflicted",
+            "Problems",
+        ];
+        chips.iter().any(|c| l.starts_with(c)).then_some(l)
+    });
+    assert_eq!(
+        first.as_deref(),
+        Some("This project 2"),
+        "first in the chip row"
+    );
+    h.get_by_label_contains("2 of 3 NIFs");
+    assert!(h.query_by_label("meshes/bonly.nif").is_none());
+    let cells: Vec<_> = h.query_all_by_label("A").collect();
+    assert_eq!(cells.len(), 2, "both rows name the project mod");
+    assert!(h.query_by_label("B").is_none(), "not the winner's name");
+    cells[0].hover();
+    h.run();
+    h.get_by_label("wins: B");
+    // Off, the list is the whole instance again and the winner's name is back.
+    h.get_by_role_and_label(Role::Button, "This project 2")
+        .click();
+    h.run();
+    assert!(!h.state().project_on);
+    h.get_by_label_contains("3 of 3 NIFs");
+    assert_eq!(
+        h.query_all_by_label("B").count(),
+        2,
+        "rock.nif and bonly.nif"
+    );
+}
+
+/// Note GH3 (N3 test 2, Review Focus 2; owner O11 (a)): the opened folder is not a mod: the pill counts the NIFs that
+/// name one of its output paths, PBR-folded and with a missing `textures\` added; an unchanged `rev` builds nothing;
+/// paths no NIF names show no pill and cut nothing.
+#[test]
+fn outside_mods_this_project_lists_the_nifs_that_use_the_folders_textures() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    let paths = ["textures/pbr/xmead/ale_bc.dds".to_string()];
+    m.set_project_textures(1, &paths);
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/ale.nif", "A"), row("meshes/ale2.nif", "A")]
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2");
+    h.get_by_label_contains("2 of 3 NIFs");
+    assert!(h.query_by_label("meshes/other.nif").is_none());
+    let builds = h.state().project_builds;
+    h.state_mut().set_project_textures(1, &paths);
+    h.state_mut()
+        .set_project_root(Some(&d.path().join("plain")));
+    h.run_steps(3);
+    assert_eq!(
+        h.state().project_builds,
+        builds,
+        "the same rev builds nothing"
+    );
+    h.state_mut()
+        .set_project_textures(2, &["textures/none.dds".to_string()]);
+    h.run_steps(3);
+    assert!(h.state().project_builds > builds, "a new rev builds");
+    assert!(h.query_by_label_contains("This project").is_none());
+    h.get_by_label_contains("3 of 3 NIFs");
+}
+
+/// Note GH3 (N3 test 3, Review Focus 3; rule 6.1): turning the pill on while the selected NIF is outside the project
+/// keeps the selection and says it is hidden; the pill is on by default only the first time a project opens.
+#[test]
+fn this_project_never_deselects_and_is_on_by_default_once_per_project() {
+    let (d, mut m) = project_textures();
+    let plain = d.path().join("plain");
+    m.set_project_root(Some(&plain));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    m.project_on = false;
+    m.search = "other".into();
+    let first = m.visible_nifs()[0];
+    let other = m.nif_at(first).0.copy_id;
+    m.select_nif(other);
+    m.search.clear();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2")
+        .click();
+    h.run();
+    assert!(h.state().project_on);
+    h.get_by_label("2 of 3 NIFs (the selected NIF is hidden by the filters)");
+    assert_eq!(h.state().selected_nif, Some(other));
+    assert!(!h.state().shapes.is_empty(), "its details stay");
+    // Off again, then the project closed and reopened: it stays off; a project not opened before starts on.
+    h.state_mut().project_on = false;
+    h.state_mut().set_project_root(None);
+    h.state_mut().set_project_root(Some(&plain));
+    assert!(
+        !h.state().project_on,
+        "a project opened before keeps its pill"
+    );
+    h.state_mut()
+        .set_project_root(Some(&d.path().join("plain2")));
+    assert!(h.state().project_on, "a new project starts on");
+}

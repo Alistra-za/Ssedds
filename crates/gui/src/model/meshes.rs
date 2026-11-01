@@ -171,20 +171,31 @@ pub type NifEntry = (NifRow, String);
 /// What the worker reads for the list (Note GC): every winner, and every losing copy.
 pub type RowsRead = Result<(Vec<NifEntry>, Vec<NifEntry>), String>;
 
-/// The row lists the visible list reads: the picked mod's copies, the winners, the losers, the texture's users.
+/// The row lists the visible list reads: the picked mod's copies, the winners, the losers, the texture's users, the
+/// This project pill's NIF paths while it is on (Note GH3).
 type RowLists = (
     Arc<Vec<NifRow>>,
     Arc<Vec<NifEntry>>,
     Arc<Vec<NifEntry>>,
     Option<Arc<HashSet<String>>>,
+    Option<Arc<HashSet<String>>>,
 );
+
+/// Note GH3: the This project pill's NIF paths and the project mod (`None`: the NIFs that use the opened folder's
+/// textures), with every input read: the root, the scan target (its `mods\`), the textures' rev and the rows read.
+struct ProjectCache {
+    key: (PathBuf, Option<ScanTarget>, Option<u64>),
+    rows: (Arc<Vec<NifEntry>>, Arc<Vec<NifEntry>>),
+    project_mod: Option<String>,
+    nifs: Arc<HashSet<String>>,
+}
 
 /// The visible list and every input it was built from (rule 9.1). The row lists are held, so a dropped list's address
 /// is never reused under the cache's nose.
 struct RowsCache {
     lists: RowLists,
-    /// The picked mod's name (rows show it), the chip and the search needle.
-    key: (Option<String>, NifFilter, String),
+    /// The picked mod's name (rows show it), the chip, the search needle and the project mod (Note GH3).
+    key: (Option<String>, NifFilter, String, Option<String>),
     list: Arc<Vec<usize>>,
     /// `selection_hidden` for this list: the selected copy and whether the filters hide it.
     hidden: Option<(i64, bool)>,
@@ -478,6 +489,18 @@ pub struct MeshesModel {
     #[doc(hidden)]
     pub row_builds: u64,
     rows_cache: Option<RowsCache>,
+    /// Note GH3: the opened texture folder (`AppModel.root`), set by the app each frame (`set_project_root`).
+    project_root: Option<PathBuf>,
+    /// Roots opened this session: the pill is on the first time each one opens.
+    project_seen: HashSet<PathBuf>,
+    /// The This project pill is on.
+    pub project_on: bool,
+    /// The opened folder's output game paths with their PBR twins (`set_project_textures`), and their rev.
+    project_tex: Option<(u64, Arc<HashSet<String>>)>,
+    project_cache: Option<ProjectCache>,
+    /// How often the textures' match set or the pill's NIF set was built (tests pin the cache with it).
+    #[doc(hidden)]
+    pub project_builds: u64,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// The selected row itself, kept apart from the lists (a new search replaces them).
@@ -627,6 +650,12 @@ impl MeshesModel {
             unsettled_before: false,
             row_builds: 0,
             rows_cache: None,
+            project_root: None,
+            project_seen: HashSet::new(),
+            project_on: false,
+            project_tex: None,
+            project_cache: None,
+            project_builds: 0,
             selected_nif: None,
             selected_info: None,
             shapes: vec![],
@@ -1327,28 +1356,33 @@ impl MeshesModel {
     /// picked mod and its name, the chip and the search.
     pub fn visible_nifs(&mut self) -> Arc<Vec<usize>> {
         let tex = self.tex_filter.as_ref().and_then(|(_, u)| u.clone());
+        let (project_mod, project) = self.project_filter().unzip();
         let lists = (
             self.nifs.clone(),
             self.winners.clone(),
             self.losers.clone(),
             tex,
+            project,
         );
         let picked = self.selected_mod.map(|id| self.mod_name(id).to_string());
-        let key = (picked, self.filter, self.needle());
+        let key = (picked, self.filter, self.needle(), project_mod.flatten());
+        let same_set =
+            |x: &Option<Arc<HashSet<String>>>, y: &Option<Arc<HashSet<String>>>| match (x, y) {
+                (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+                (x, y) => x.is_none() && y.is_none(),
+            };
         if let Some(c) = &self.rows_cache {
             let (a, b) = (&c.lists, &lists);
             let same = Arc::ptr_eq(&a.0, &b.0)
                 && Arc::ptr_eq(&a.1, &b.1)
                 && Arc::ptr_eq(&a.2, &b.2)
-                && match (&a.3, &b.3) {
-                    (Some(x), Some(y)) => Arc::ptr_eq(x, y),
-                    (x, y) => x.is_none() && y.is_none(),
-                };
+                && same_set(&a.3, &b.3)
+                && same_set(&a.4, &b.4);
             if same && c.key == key {
                 return c.list.clone();
             }
         }
-        let list = Arc::new(self.build_visible());
+        let list = Arc::new(self.build_visible(key.3.as_deref(), lists.4.as_deref()));
         self.rows_cache = Some(RowsCache {
             lists,
             key,
@@ -1379,7 +1413,138 @@ impl MeshesModel {
         h
     }
 
-    fn build_visible(&mut self) -> Vec<usize> {
+    /// Note GH3: the opened texture folder (`AppModel.root`); the app calls this each frame. A root not opened before
+    /// in this session turns the This project pill on.
+    pub fn set_project_root(&mut self, root: Option<&Path>) {
+        if self.project_root.as_deref() == root {
+            return;
+        }
+        self.project_root = root.map(Path::to_path_buf);
+        if let Some(r) = root {
+            if self.project_seen.insert(r.to_path_buf()) {
+                self.project_on = true;
+            }
+        }
+    }
+
+    /// Note GH3 (owner O11 (a)): the opened folder's output game paths (`textures/…`, lower case, `/`), `rev` bumped
+    /// only when they change; the app calls this each frame. Each path is kept with its PBR twin, so a NIF naming
+    /// `textures/x` matches an output `textures/pbr/x` and back (a leading `textures/pbr/` folded on both sides).
+    pub fn set_project_textures(&mut self, rev: u64, paths: &[String]) {
+        if self.project_tex.as_ref().is_some_and(|(r, _)| *r == rev) {
+            return;
+        }
+        self.project_builds += 1;
+        let mut set = HashSet::new();
+        for p in paths {
+            let n = nif::path::canon_texture(p.as_bytes()).norm;
+            if n.is_empty() {
+                continue;
+            }
+            let folded = match n.strip_prefix("textures/pbr/") {
+                Some(rest) => format!("textures/{rest}"),
+                None => n.clone(),
+            };
+            set.insert(format!("textures/pbr/{}", &folded["textures/".len()..]));
+            if !folded.starts_with("textures/pbr/") {
+                set.insert(folded);
+            }
+            set.insert(n);
+        }
+        self.project_tex = Some((rev, Arc::new(set)));
+    }
+
+    /// Note GH3: the This project pill: the project mod (`None`: the NIFs that use the opened folder's textures) and
+    /// the NIF paths it lists. `None` when there is no pill: no folder open, or no NIF in it. Read once per input
+    /// change (rule 9.1); while the store is unsettled (Note GC15) a changed input waits for the next completed scan.
+    pub fn project_nifs(&mut self) -> Option<(Option<String>, Arc<HashSet<String>>)> {
+        let root = self.project_root.clone()?;
+        let key = (
+            root,
+            self.target.clone(),
+            self.project_tex.as_ref().map(|(r, _)| *r),
+        );
+        let fresh = self.project_cache.as_ref().is_some_and(|c| {
+            c.key == key
+                && Arc::ptr_eq(&c.rows.0, &self.winners)
+                && Arc::ptr_eq(&c.rows.1, &self.losers)
+        });
+        if !fresh {
+            if self.store_unsettled {
+                return None;
+            }
+            let (project_mod, nifs) = self.build_project(&key.0);
+            self.project_cache = Some(ProjectCache {
+                key,
+                rows: (self.winners.clone(), self.losers.clone()),
+                project_mod,
+                nifs: Arc::new(nifs),
+            });
+        }
+        let c = self.project_cache.as_ref()?;
+        (!c.nifs.is_empty()).then(|| (c.project_mod.clone(), c.nifs.clone()))
+    }
+
+    /// `project_nifs` while the pill is on: what the list is cut to.
+    fn project_filter(&mut self) -> Option<(Option<String>, Arc<HashSet<String>>)> {
+        if self.project_on {
+            self.project_nifs()
+        } else {
+            None
+        }
+    }
+
+    /// The project mod is the folder `root` when it sits directly in the MO2 instance's `mods\`: its NIF copies'
+    /// paths. Else the NIFs any copy of which names one of `project_tex` in a slot.
+    fn build_project(&mut self, root: &Path) -> (Option<String>, HashSet<String>) {
+        self.project_builds += 1;
+        let mods_dir = match &self.target {
+            Some(ScanTarget::Mo2 { root, profile }) => {
+                Instance::load(root, Some(profile)).ok().map(|i| i.mods)
+            }
+            _ => None,
+        };
+        let in_mods =
+            mods_dir.is_some_and(|d| root.parent().is_some_and(|p| nif_edit::same_dir(p, &d)));
+        let Some(store) = &self.store else {
+            return (None, HashSet::new());
+        };
+        let mut nifs = HashSet::new();
+        if in_mods {
+            let name = root.file_name().map(|n| n.to_string_lossy().into_owned());
+            let row = self.mods.iter().find(|r| {
+                name.as_deref()
+                    .is_some_and(|n| r.name.eq_ignore_ascii_case(n))
+            });
+            // A mod the scan holds no NIF copy of: no pill (the mod rule applies alone).
+            let Some(row) = row else {
+                return (name, nifs);
+            };
+            match store.nifs_of(row.id) {
+                Ok(v) => nifs.extend(v.into_iter().map(|n| n.path)),
+                Err(e) => self.error = Some(db_err(e)),
+            }
+            return (Some(row.name.clone()), nifs);
+        }
+        // shortcut: one indexed store query per output path, on the UI thread as `set_tex_filter`'s; move it to the
+        // rows worker if a large folder stalls a frame.
+        for p in self.project_tex.iter().flat_map(|(_, s)| s.iter()) {
+            match store.users_of_texture(p) {
+                Ok(u) => nifs.extend(u.into_iter().map(|(n, ..)| n)),
+                Err(e) => {
+                    self.error = Some(db_err(e));
+                    break;
+                }
+            }
+        }
+        (None, nifs)
+    }
+
+    fn build_visible(
+        &mut self,
+        project_mod: Option<&str>,
+        project: Option<&HashSet<String>>,
+    ) -> Vec<usize> {
         self.row_builds += 1;
         let needle = self.needle();
         let n = needle.as_bytes();
@@ -1394,9 +1559,16 @@ impl MeshesModel {
             .tex_filter
             .as_ref()
             .and_then(|(_, users)| users.as_ref());
+        // Note GH3: a project mod keeps its own copies and the winning copy of every path it has a copy of.
+        let in_project = |row: &NifRow, origin: &str| match (project, project_mod) {
+            (None, _) => true,
+            (Some(p), Some(m)) => origin == m || (row.wins && p.contains(&row.path)),
+            (Some(p), None) => p.contains(&row.path),
+        };
         let keep = |row: &NifRow, origin: &str| {
             self.filter.matches(row)
                 && tex.is_none_or(|u| u.contains(&row.path))
+                && in_project(row, origin)
                 && (has(display_path(&row.path)) || has(origin))
         };
         match self.selected_mod {
