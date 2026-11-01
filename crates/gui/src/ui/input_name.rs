@@ -198,7 +198,8 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
     let buf = id.with("buf");
     let anchor_id = id.with("drag-anchor");
     let full_id = id.with("menu-full");
-    let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
+    // `set_known` moves `evidence_rev`: a revision, not the Arc's address, which a new list can reuse.
+    let key = (model.evidence_rev as usize, model.items_rev());
     let salt = if bare_name(&current) {
         "input-name-bare"
     } else {
@@ -711,7 +712,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 let full = ui.data(|d| d.get_temp::<bool>(full_id)).unwrap_or(false);
                 let cut = if full { 0 } else { segment_start(&text) };
                 let pre = text[..cut].replace('\\', "/");
-                let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
+                let under_key = (key.0, egui::Id::new((key.1, salt, &pre)).value());
                 let under = path_picker::cached(ui, "input-name-under", under_key, || {
                     paths
                         .iter()
@@ -740,7 +741,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             } else {
                 let what = if all { "any slot".to_string() } else { format!("slot {slot}") };
                 ui.label(egui::RichText::new(format!("Textures used in {what}")).strong());
-                let list_key = (Arc::as_ptr(&model.known) as usize, egui::Id::new((model.items_rev(), slot, all)).value());
+                let list_key = (key.0, egui::Id::new((key.1, slot, all)).value());
                 let list = path_picker::cached(ui, "input-name-slot", list_key, || {
                     let mut l = model.known_textures((!all).then_some(slot - 1));
                     // AO8: PGPatcher's own outputs are never a match.
