@@ -356,6 +356,26 @@ fn start_screen(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
+/// What the centre's scroll area showed last (Note F?6).
+#[derive(Clone, PartialEq)]
+enum CentreShown {
+    Item(String),
+    Set(String),
+    Bulk,
+}
+
+/// True on the frame the centre shows something other than it showed before: that area opens at its top. Call it
+/// once per frame.
+fn switched_to(ctx: &egui::Context, now: CentreShown) -> bool {
+    let id = egui::Id::new("centre-shown");
+    let before = ctx.data(|d| d.get_temp::<CentreShown>(id));
+    let changed = before.as_ref() != Some(&now);
+    if changed {
+        ctx.data_mut(|d| d.insert_temp(id, now));
+    }
+    changed
+}
+
 /// The centre: a docked Presets or JSON editor tab in front (Note FB7), else the preview of an expanded texture, else
 /// the settings of the selected texture or set, else a hint.
 fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: bool) {
@@ -378,7 +398,8 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
     state.preview = preview::PreviewUi::default();
     // F3a D2/D3: two or more textures or sets.
     if model.in_bulk() {
-        bulk_panel::draw(ui, model);
+        let top = switched_to(ui.ctx(), CentreShown::Bulk);
+        bulk_panel::draw(ui, model, top);
         return;
     }
     let selection = model.selection.clone();
@@ -397,14 +418,19 @@ fn centre(ui: &mut egui::Ui, model: &mut AppModel, state: &mut State, three_d: b
             set_preview::draw(ui, model, &mut state.set3d);
         }
         Selection::Item(key) => {
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| settings_panel::draw(ui, model, &key, false));
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt("centre-texture")
+                .auto_shrink([false, false]);
+            if switched_to(ui.ctx(), CentreShown::Item(key.clone())) {
+                area = area.vertical_scroll_offset(0.0);
+            }
+            area.show(ui, |ui| settings_panel::draw(ui, model, &key, false));
         }
         Selection::Set(key) => {
             let view = set_editor::View {
                 switch: state.set3d.enabled,
                 three_d,
+                to_top: switched_to(ui.ctx(), CentreShown::Set(key.clone())),
             };
             set_editor::draw(
                 ui,

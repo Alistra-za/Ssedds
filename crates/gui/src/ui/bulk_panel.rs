@@ -53,7 +53,7 @@ fn reencode_row(ui: &mut egui::Ui, model: &AppModel, keys: &[String], acts: &mut
     });
 }
 
-pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
+pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, to_top: bool) {
     let mut acts = vec![];
     // Chips and rows come from one cached view (F3a: nothing recomputed per frame).
     let view = model.bulk_view();
@@ -117,32 +117,34 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel) {
                 keys.len(),
                 keys.first().map_or("", String::as_str)
             );
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add_enabled_ui(read_only.is_none(), |ui| {
-                        for g in GROUPS {
-                            egui::CollapsingHeader::new(g)
-                                .id_salt(("bulk", g))
-                                .default_open(true)
-                                .show(ui, |ui| {
-                                    egui::Grid::new(("bulk-grid", g)).num_columns(4).show(
-                                        ui,
-                                        |ui| {
-                                            for r in rows.iter().filter(|r| group_of(r.field) == g)
+            let mut area = egui::ScrollArea::vertical()
+                .id_salt("centre-bulk")
+                .auto_shrink([false, false]);
+            if to_top {
+                area = area.vertical_scroll_offset(0.0);
+            }
+            area.show(ui, |ui| {
+                ui.add_enabled_ui(read_only.is_none(), |ui| {
+                    for g in GROUPS {
+                        egui::CollapsingHeader::new(g)
+                            .id_salt(("bulk", g))
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                egui::Grid::new(("bulk-grid", g))
+                                    .num_columns(4)
+                                    .show(ui, |ui| {
+                                        for r in rows.iter().filter(|r| group_of(r.field) == g) {
+                                            if let Some(e) =
+                                                row(ui, &id, &job, target, busy, r, &formats)
                                             {
-                                                if let Some(e) =
-                                                    row(ui, &id, &job, target, busy, r, &formats)
-                                                {
-                                                    acts.push(Act::Edit(r.field, e));
-                                                }
+                                                acts.push(Act::Edit(r.field, e));
                                             }
-                                        },
-                                    );
-                                });
-                        }
-                    });
+                                        }
+                                    });
+                            });
+                    }
                 });
+            });
         }
     }
     for a in acts {
