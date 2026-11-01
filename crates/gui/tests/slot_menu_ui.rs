@@ -40,14 +40,43 @@ fn a_card_right_click_locks_and_unlocks_the_slot() {
     let mut h = opened_on_the_set(d.path());
     outside_sets(&h, "RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Pin slot (sdc)").click();
+    h.get_by_label(PIN).click();
     h.run();
     assert!(h.state().slot_locked(SET, 6));
     h.get_by_label("🔒 RMAOS").click_secondary();
     h.run();
-    h.get_by_label("Unpin slot (sdc)").click();
+    h.get_by_label("Unpin this slot").click();
     h.run();
     assert!(!h.state().slot_locked(SET, 6));
+}
+
+const PIN: &str = "Pin this slot (always use this file)";
+const KEEP: &str = "Keep the original texture (PGPatcher won't replace it)";
+
+/// Note F?11 (D14): the slot menu says what pinning and the PGPatcher lock do; the terms ride on hover.
+#[test]
+fn the_slot_menu_says_pin_and_keep_in_words() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = opened_on_the_set(d.path());
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    outside_sets(&h, "RMAOS").click_secondary();
+    h.run();
+    h.get_by_label(PIN);
+    h.get_by_label(KEEP);
+    for old in ["(sdc)", "(PGPatcher lock)"] {
+        assert_eq!(h.query_all_by_label_contains(old).count(), 0, "{old}");
+    }
+    h.get_by_label(PIN).hover();
+    h.run();
+    h.run();
+    h.get_by_label("Pinned slots refuse other files (sdc.toml pin)");
+    h.get_by_label(KEEP).hover();
+    h.run();
+    h.run();
+    h.get_by_label("PGPatcher lock: lock_rmaos in the JSON");
 }
 
 #[test]

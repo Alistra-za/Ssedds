@@ -13,7 +13,7 @@ const SET: &str = "landscape/rock01";
 
 /// Words the UI no longer uses for a concept that has one name (FC9): the old names of "undecided" and "not ready",
 /// the id-with-spaces sub-type label, and the two half-size names Review does not use.
-const STRAYS: [&str; 10] = [
+const STRAYS: [&str; 12] = [
     "need a decision",
     "Need a decision",
     "Needs a decision",
@@ -24,6 +24,9 @@ const STRAYS: [&str; 10] = [
     "mip 0",
     "Mip 0",
     "Fake resolution",
+    // Note F?11: the pin and the PGPatcher lock are said in words; the terms ride on hover.
+    "(sdc)",
+    "(PGPatcher lock)",
 ];
 
 fn harness(model: AppModel) -> Harness<'static, AppModel> {

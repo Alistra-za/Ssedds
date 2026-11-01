@@ -300,6 +300,35 @@ fn accept_all_suggestions_is_off_when_no_texture_has_one() {
     h.get_by_label("No undecided texture has a suggestion");
 }
 
+/// Note F?11 (A11): an undecided texture that only asks its alpha meaning is not accepted here; the hover says why.
+#[test]
+fn accept_all_explains_an_alpha_proposal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    // The alpha question only follows a sub-type.
+    m.decide(
+        "landscape/leaf.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Diffuse),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = harness(m);
+    h.run();
+    press_export(&mut h);
+    press(&mut h, "Accept all suggestions");
+    settle(&mut h);
+    let asks_alpha = h.state().undecided_keys().iter().any(|k| {
+        let it = h.state().item(k).unwrap();
+        it.decisions
+            .iter()
+            .any(|d| matches!(d, sdc_gui::model::items::Decision::AlphaMeaning))
+    });
+    assert!(asks_alpha, "a texture still asks its alpha meaning");
+    assert!(disabled(&h, "Accept all suggestions"));
+    h.get_by_label("Accept all suggestions").hover();
+    h.run();
+    h.get_by_label("Only type suggestions are accepted here; an alpha meaning needs your answer");
+}
+
 /// Review Focus 3.
 #[test]
 fn review_export_is_disabled_with_the_reason_while_read_only() {

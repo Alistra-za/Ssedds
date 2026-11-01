@@ -227,6 +227,8 @@ pub fn fix_buttons(
                 }
                 Decision::AlphaMeaning => {
                     ui.menu_button("Decide…", |ui| {
+                        // Note F?11 (D14): the question, as Review's inline row asks it.
+                        ui.label(egui::RichText::new("Alpha means:").weak());
                         for (v, label) in alpha_options() {
                             let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                                 continue;
@@ -745,6 +747,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let any_suggestion = undecided
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
+    // Note F?11 (A11): Accept all takes type suggestions only; an alpha meaning needs the user's answer.
+    let any_alpha = undecided.iter().any(|k| {
+        m.item(k).is_some_and(|i| {
+            i.decisions
+                .iter()
+                .any(|d| matches!(d, Decision::AlphaMeaning))
+        })
+    });
     let gate = m.review_gate();
     let nif_folder = m.export_folder_chosen();
     let folder_chosen = nif_folder.is_some();
@@ -1000,10 +1010,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     egui::Button::new("Accept all suggestions"),
                 )
                 .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
-                .on_disabled_hover_text(
-                    off.as_deref()
-                        .unwrap_or("No undecided texture has a suggestion"),
-                );
+                .on_disabled_hover_text(off.as_deref().unwrap_or(if any_alpha {
+                    "Only type suggestions are accepted here; an alpha meaning needs your answer"
+                } else {
+                    "No undecided texture has a suggestion"
+                }));
             if accept.clicked() {
                 act = Some(Act::AcceptAll);
             }

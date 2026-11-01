@@ -19,7 +19,8 @@ use serde_json::json;
 pub(crate) struct AutoNote {
     /// The row's text, `{n} types set automatically (High confidence)`; its count is the step label's.
     pub text: String,
-    /// `key: value`, one per written value (a threshold rides on its policy's line), for the row's hover.
+    /// `file name: value`, one per written value (a threshold rides on its policy's line), for the row's hover; the
+    /// last line explains High confidence when a sub-type was set.
     pub lines: Vec<String>,
     /// The `history.pushes` the step left: the row offers Undo only while it is the top step.
     pub step: u64,
@@ -27,10 +28,24 @@ pub(crate) struct AutoNote {
     pub clean_before: bool,
 }
 
-/// A written value as the row lists it: `normal`, `cutout`.
+/// A written value as the row lists it: `cutout`, a number.
 fn show(v: &serde_json::Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), str::to_string)
 }
+
+/// A written sub-type as the type picker shows it (`landscape diffuse`), not its id.
+fn show_type(v: &serde_json::Value) -> String {
+    serde_json::from_value::<Subtype>(v.clone())
+        .map_or_else(|_| show(v), super::labels::subtype_name)
+}
+
+/// The file's name, not its folder or game path (the hover lists files; the folder is in the Textures tree).
+fn file_name(key: &str) -> &str {
+    key.rsplit(['/', '\\']).next().unwrap_or(key)
+}
+
+/// Ends the row's hover when a sub-type was set (Note F?11, A17).
+const HIGH_CONFIDENCE: &str = "High confidence: the file name and the pixels agree on the type.";
 
 impl AppModel {
     /// What auto-accept picks for `key` from the plan: its top name-based suggestion when High (a `[files]` sub-type
@@ -133,7 +148,12 @@ impl AppModel {
                 if let Some(new) =
                     new.filter(|n| *n != old && doc.file_value(&k, "subtype") == Some(old.clone()))
                 {
-                    lines.push(format!("{k}: {} → {}", show(&old), show(&new)));
+                    lines.push(format!(
+                        "{}: {} → {}",
+                        file_name(&k),
+                        show_type(&old),
+                        show_type(&new)
+                    ));
                     writes.push((k, "subtype", new));
                 }
             }
@@ -164,7 +184,12 @@ impl AppModel {
                 }
                 if f != "alpha.threshold" {
                     only_types &= f == "subtype";
-                    lines.push(format!("{}: {}", i.key, show(&v)));
+                    let v = if f == "subtype" {
+                        show_type(&v)
+                    } else {
+                        show(&v)
+                    };
+                    lines.push(format!("{}: {v}", file_name(&i.key)));
                 }
                 writes.push((i.key.clone(), f, v));
             }
@@ -203,9 +228,13 @@ impl AppModel {
             })
         });
         if wrote {
+            let typed = writes.iter().any(|(_, f, _)| *f == "subtype");
             self.auto_note = Some(AutoNote {
                 text: format!("{n} {noun}{s} set automatically (High confidence)"),
-                lines,
+                lines: lines
+                    .into_iter()
+                    .chain(typed.then(|| HIGH_CONFIDENCE.to_string()))
+                    .collect(),
                 step: self.history.pushes,
                 clean_before,
             });

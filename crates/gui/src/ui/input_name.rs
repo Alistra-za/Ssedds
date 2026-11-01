@@ -1,7 +1,6 @@
 //! GUI tweaks G1, Note AO: the set header's input name box. A text box with gray Tab completion, a path lock rail
 //! and a ▾ list of known paths. Drawing only; the change is `AppModel::set_input_name`.
 use super::columns::RED;
-use super::json_editor::SLOT_NAMES;
 use super::path_picker;
 use crate::model::input_name::{
     bare_name, completion, in_form_of, live_rows, lock_cut, separator_stops, tab_part,
@@ -469,7 +468,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         };
         let chosen = slot;
         let mut all = json && ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
-        let name = |n: u8| format!("Match {n} · {}", SLOT_NAMES[n as usize - 1]);
+        let name = |n: u8| format!("Match {n} · {}", crate::model::sets::slot_name(n));
         if json {
             egui::ComboBox::from_id_salt(slot_id)
                 // Short in the header row, so it does not wrap a narrow 3D view's header; the list names the slots.
@@ -477,7 +476,9 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 .width(64.0)
                 .show_ui(ui, |ui| {
                     for n in 1..=8 {
-                        ui.selectable_value(&mut slot, n, name(n));
+                        // The PGPatcher key rides on hover.
+                        ui.selectable_value(&mut slot, n, name(n))
+                            .on_hover_text(format!("match{n}"));
                     }
                 })
                 .response

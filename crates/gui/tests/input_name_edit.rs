@@ -180,8 +180,33 @@ fn the_lock_defaults_to_the_folder_and_ctrl_arrows_move_it() {
 fn match1(h: &mut H) {
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 1 · diffuse").click();
+    h.get_by_label("Match 1 · Diffuse").click();
     h.run();
+}
+
+/// Note F?11 (A15): the Match menu and Slot commands name a slot as the set editor's card does; the key is on hover.
+#[test]
+fn the_match_menu_uses_the_sets_slot_names() {
+    let (_d, mut h) = harness();
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 6 · RMAOS").hover();
+    h.run();
+    h.run();
+    h.get_by_label("match6");
+    h.get_by_label("Match 3 · Emissive / Skin");
+    h.key_press(Key::Escape);
+    h.run();
+    h.get_by_label("Slot commands…").click();
+    h.run();
+    // The set editor's empty slot-3 card reads "Emissive / Skin (slot 3)"; the number is already in the text.
+    h.get_by_label("Slot 3 (Emissive / Skin)");
+    h.get_by_label("Slot 6 (RMAOS)");
+    h.get_by_label("Slot 7 (Coat normal / Fuzz)");
 }
 
 #[test]
@@ -235,7 +260,7 @@ fn match_selector_starts_from_the_set_and_stays() {
     // The user's choice is stored, and a new window starts from it.
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 4 · parallax").click();
+    h.get_by_label("Match 4 · Height _p").click();
     h.run();
     h.get_by_value("Match 4");
     assert_eq!(
@@ -266,7 +291,7 @@ fn the_match_selector_is_per_project() {
     let (_d, mut h) = harness();
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 4 · parallax").click();
+    h.get_by_label("Match 4 · Height _p").click();
     h.run();
     h.get_by_value("Match 4");
     let d2 = tempfile::tempdir().unwrap();

@@ -97,7 +97,7 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
                     n: 1,
                     on: true
                 },
-                "Pin slot (sdc)",
+                "Pin this slot (always use this file)",
                 None
             ),
             (
@@ -106,7 +106,7 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
                     n: 1,
                     on: true
                 },
-                "Keep original texture (PGPatcher lock)",
+                "Keep the original texture (PGPatcher won't replace it)",
                 None
             ),
         ]
@@ -124,6 +124,22 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
     assert_eq!(slot_value(&m, ROCK_SET, 1), None);
     m.undo();
     assert_eq!(slot_value(&m, ROCK_SET, 1), Some(json!("")));
+}
+
+/// Note F?11 (D13): From this set on a slot the set has no file for says so; a slot that has one keeps "already".
+#[test]
+fn an_empty_slot_says_the_set_has_no_file() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened(d.path());
+    idle(&mut m);
+    let menu = m.slot_menu(ROCK_SET, SlotKind::Coat);
+    assert_eq!(menu[0].label, "From this set (nothing)");
+    assert_eq!(
+        menu[0].disabled.as_deref(),
+        Some("This set has no file for this slot")
+    );
+    let menu = m.slot_menu(ROCK_SET, SlotKind::Diffuse);
+    assert_eq!(menu[0].disabled.as_deref(), Some("already from this set"));
 }
 
 #[test]
@@ -193,7 +209,7 @@ fn a_locked_slot_menu_offers_only_unlock() {
         .unwrap();
     assert_eq!(
         (pin.action.clone(), pin.label.as_str()),
-        (lock(false), "Unpin slot (sdc)")
+        (lock(false), "Unpin this slot")
     );
     // A refused command comes back as the reason.
     assert_eq!(

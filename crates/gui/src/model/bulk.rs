@@ -977,8 +977,8 @@ pub enum MenuAction {
 }
 
 /// The slot menu's PGPatcher lock entry, off and on (Note AN).
-pub const PGP_LOCK: &str = "Keep original texture (PGPatcher lock)";
-pub const PGP_UNLOCK: &str = "Stop keeping original texture (PGPatcher lock)";
+pub const PGP_LOCK: &str = "Keep the original texture (PGPatcher won't replace it)";
+pub const PGP_UNLOCK: &str = "Let PGPatcher replace the texture";
 const NO_PGP_ENTRY: &str =
     "this set writes no PGPatcher entry (a TruePBR set under Community Shaders does)";
 
@@ -1292,13 +1292,21 @@ impl AppModel {
                 })
             })
             .collect();
+        let gives = slot_gives(self, &id, n);
         let mut menu = vec![
             MenuEntry {
                 action: cmd(SlotCommand::FromSet),
-                label: format!("From this set ({})", slot_gives(self, &id, n)),
-                disabled: off
-                    .clone()
-                    .or_else(|| current.is_none().then(|| "already from this set".into())),
+                label: format!("From this set ({gives})"),
+                // Note F?11 (D13): a slot the set has no file for says so, not "already".
+                disabled: off.clone().or_else(|| {
+                    current.is_none().then(|| {
+                        if gives == "nothing" {
+                            "This set has no file for this slot".into()
+                        } else {
+                            "already from this set".into()
+                        }
+                    })
+                }),
             },
             MenuEntry {
                 action: MenuAction::SlotPath { set: id.clone(), n },
@@ -1335,9 +1343,9 @@ impl AppModel {
                 on: !locked,
             },
             label: if locked {
-                "Unpin slot (sdc)"
+                "Unpin this slot"
             } else {
-                "Pin slot (sdc)"
+                "Pin this slot (always use this file)"
             }
             .into(),
             disabled: read_only.clone(),

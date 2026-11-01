@@ -2,7 +2,7 @@
 //! Task 8).
 use super::dialogs::{dialog, Role};
 use crate::model::bulk::MenuAction;
-use crate::model::sets::{slot_gives, SlotCommand, SLOT_LOCKED};
+use crate::model::sets::{slot_gives, slot_name, SlotCommand, SLOT_LOCKED};
 use crate::model::AppModel;
 use eframe::egui;
 use engine::sets::same_id;
@@ -21,16 +21,6 @@ pub struct SlotCmdState {
     pub filled: [bool; 8],
 }
 
-const NAMES: [&str; 8] = [
-    "Diffuse",
-    "Normal",
-    "Emissive",
-    "Height",
-    "Cubemap",
-    "RMAOS",
-    "Coat normal / fuzz",
-    "Subsurface",
-];
 const CHOICES: [&str; 3] = ["From this set", "Path", "Clear"];
 
 pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
@@ -57,7 +47,7 @@ pub fn draw(ctx: &egui::Context, model: &mut AppModel, st: &mut SlotCmdState) {
             .show(ui, |ui| {
                 for n in 1..=8u8 {
                     let i = usize::from(n - 1);
-                    ui.label(format!("Slot {n} ({})", NAMES[i]));
+                    ui.label(format!("Slot {n} ({})", slot_name(n)));
                     ui.weak(&given[i]);
                     let locked = locks.contains(&n);
                     let mut on = locked;

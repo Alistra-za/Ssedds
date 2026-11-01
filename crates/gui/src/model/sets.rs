@@ -121,6 +121,18 @@ pub fn slot_kinds_label(slot: SlotKind) -> String {
     kinds.join(" or ")
 }
 
+/// Note F?11 (A15): PGPatcher slot `n` as the set editor's empty card names it, without the "(slot n)" its title adds
+/// (the Match menu and Slot commands say the number themselves). Slot 5 has no card: the cubemap.
+pub fn slot_name(n: u8) -> &'static str {
+    match SlotKind::ALL.iter().find(|k| k.slot_number() == n) {
+        Some(k) => slot_label(*k, "")
+            .split(" (slot")
+            .next()
+            .unwrap_or_default(),
+        None => "Cubemap",
+    }
+}
+
 /// The card title of `slot` holding `key` in a set drawn by `shader`: a grass file in the Diffuse card is "Complex grass".
 pub fn card_title(slot: SlotKind, key: &str, shader: Option<Shader>) -> &'static str {
     if slot == SlotKind::Diffuse && shader == Some(Shader::ComplexGrass) {

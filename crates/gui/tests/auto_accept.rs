@@ -110,7 +110,7 @@ fn auto_accepted_types_are_recorded_and_undoable() {
         (At::Project, Some(Fix::UndoLast))
     );
     assert!(
-        row.detail.as_deref().unwrap_or("").contains("a/rock_n.png"),
+        row.detail.as_deref().unwrap_or("").contains("rock_n.png: "),
         "{row:?}"
     );
     // The GUI and `sdc convert` plan the same value with the same provenance (the manifests match).
@@ -135,6 +135,29 @@ fn auto_accepted_types_are_recorded_and_undoable() {
     assert!(!m.can_redo());
 }
 
+/// Note F?11 (A17, D15): the row's hover names files and types in words and explains High confidence.
+#[test]
+fn the_automatic_row_explains_high_confidence() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/rock_n.png", [128, 128, 255]);
+    rgb(&root, "landscape/grass/g.png", [60, 120, 40]);
+    let m = support::opened_as_the_app(root, d.path().join("export"));
+    let detail = auto_row(&m).expect("the row").detail.unwrap_or_default();
+    assert!(
+        detail.ends_with("High confidence: the file name and the pixels agree on the type."),
+        "{detail}"
+    );
+    // The file name and the type the picker shows, not the folder and the id.
+    assert!(detail.contains("rock_n.png: normal"), "{detail}");
+    assert!(detail.contains("g.png: landscape diffuse"), "{detail}");
+    assert!(!detail.contains("textures/") && !detail.contains("a/rock_n.png"));
+    for st in Subtype::ALL {
+        let id = st.id().to_string();
+        assert!(!id.contains('_') || !detail.contains(&id), "raw id {id}");
+    }
+}
+
 /// R2: a recording a user's edit leads to is its own undo step; Undo takes back only the recording.
 #[test]
 fn a_recording_after_a_user_edit_is_its_own_step() {
@@ -155,10 +178,10 @@ fn a_recording_after_a_user_edit_is_its_own_step() {
     let row = auto_row(&m).expect("the row");
     assert_eq!(row.fix, Some(Fix::UndoLast));
     assert!(
-        row.detail
-            .as_deref()
-            .unwrap_or("")
-            .contains(&format!("a/x_mask.png: {}", st.as_str().unwrap())),
+        row.detail.as_deref().unwrap_or("").contains(&format!(
+            "x_mask.png: {}",
+            st.as_str().unwrap().replace('_', " ")
+        )),
         "{row:?}"
     );
     m.undo();
@@ -315,7 +338,7 @@ fn an_explicit_subtype_is_never_touched() {
     let row = auto_row(&m).expect("the combined row");
     let detail = row.detail.unwrap_or_default();
     assert!(
-        detail.contains("a/wall_n.png") && !detail.contains("a/rock_n.png"),
+        detail.contains("wall_n.png") && !detail.contains("rock_n.png"),
         "{detail}"
     );
 }
@@ -371,7 +394,7 @@ fn evidence_decisions_are_recorded_and_recorded_values_stay() {
     assert_eq!(m.undo_label(), Some("Set 1 value automatically"));
     let row = auto_row(&m).expect("the row");
     assert_eq!(row.text, "1 value set automatically (High confidence)");
-    assert_eq!(row.detail.as_deref(), Some("a/wall.png: cutout"));
+    assert_eq!(row.detail.as_deref(), Some("wall.png: cutout"));
     let p = cli_plan(&root, &text(&m));
     assert_eq!(
         cli_job(&p, "g.png").profile.subtype,
