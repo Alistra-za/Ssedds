@@ -63,7 +63,7 @@ the two results is kept. The shim builds the
 profile as veryslow plus `fast_mode` (`g_bc6[5]`, `Bc6hLevel::VeryslowPeak`). The five upstream profiles encode
 byte-identically to the pre-patch objects: `encoders-sys` `tests/bc6h.rs` pins their AVX2-path output, recorded from the
 pre-patch objects. Rebuilt with `tools/regen-ispc.ps1 -Update` and `tools/hash-vendor.ps1`; the bc7e objects did not
-change and a second `regen-ispc.ps1` run matches 12/12. Why and measurements: docs/DECISIONS.md (Note FE, "BC6H
+change and a second `regen-ispc.ps1` run matches 12/12. Why and measurements: .claude/DECISIONS.md (Note FE, "BC6H
 peak-preserving mode") and docs/research/encoder-benchmark.md ("BC6H (HDR)").
 
 Patch "rgbcx BC4 round-to-nearest" (M6 Track D, 2026-10-12) edits `bc7enc_rdo/rgbcx.h` in place, marked

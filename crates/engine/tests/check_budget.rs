@@ -1,5 +1,5 @@
 //! v2 artist checks, Task 10: the load-time budget. Planning with the check stats on must stay within 15 % of
-//! planning without them on the local test corpus (DECISIONS Note CL41). Owner data: `#[ignore]`, gated on
+//! planning without them on the local test corpus (DECISIONS Note CL42). Owner data: `#[ignore]`, gated on
 //! `SDC_TEXTURES_10K`. Run with `cargo test -p engine --release --test check_budget -- --ignored --nocapture`.
 use engine::api::*;
 use engine::config::Target;

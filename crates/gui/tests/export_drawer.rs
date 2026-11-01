@@ -1,4 +1,4 @@
-//! Task 5 (items 6 and 14; DECISIONS AG34-AG38): Open export folder, Show in Explorer, the progress line, the
+//! Task 5 (items 6 and 14; DECISIONS AG34-AG37, CA16): Open export folder, Show in Explorer, the progress line, the
 //! virtualised Files list with its filters, and a row's warnings on hover.
 mod support;
 use egui_kittest::kittest::{NodeT, Queryable};
