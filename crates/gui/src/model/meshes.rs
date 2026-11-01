@@ -562,6 +562,13 @@ pub struct MeshesModel {
     pub messages: Vec<String>,
     /// Note GD2: the edit panel's Review… was clicked; the app opens Review (`SdcApp::update`).
     pub open_review_request: bool,
+    /// Note GH9: the 3D view's `Export this NIF` wrote (or skipped) the open edit; the app moves it to
+    /// `AppModel::nif_export_result` (Messages, toast, export notes).
+    pub quick_export_result: Option<Result<usize, String>>,
+    /// Note GH9: the 3D menu's `Choose export folder…` was clicked; the app opens the header's picker.
+    pub pick_export_folder_request: bool,
+    /// Note GH9: a texture export runs (set by the app each frame); `Export this NIF` waits for it.
+    pub export_running: bool,
     /// Note GD18: the edit panel's Diff view, set by `show_nif_diff`: the NIF's data path and `nif_diff`'s lines.
     pub nif_diff_view: Option<(String, Vec<String>)>,
     /// Note GD2: Review's Keep / Overwrite answers by lowercase data path, with the hash each was given for.
@@ -662,6 +669,9 @@ impl MeshesModel {
             nif_export_root: None,
             messages: vec![],
             open_review_request: false,
+            quick_export_result: None,
+            pick_export_folder_request: false,
+            export_running: false,
             nif_diff_view: None,
             nif_answers: HashMap::new(),
             foreign_cache: Default::default(),

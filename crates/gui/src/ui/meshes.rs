@@ -804,7 +804,41 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         0.0
     };
     m.tick_anim(dt);
-    super::viewport3d::show(ui, &mut m.v3);
+    let image = super::viewport3d::show(ui, &mut m.v3);
+    // Note GH9 (Q1): a plain right-click on the frame while a NIF edit is open. egui opens a context menu only on a
+    // secondary click, not a drag, so the right-drag orbit and the Shift+right-drag sun are untouched.
+    if let Some(r) = image.filter(|_| m.edit.is_some()) {
+        r.context_menu(|ui| quick_export_menu(ui, m));
+    }
+}
+
+/// Note GH9 (Q2-Q4): the 3D view's menu. Export this NIF writes the open edit without Review, and is off with its
+/// reason on hover; with no export folder chosen Choose export folder… opens the header's picker.
+fn quick_export_menu(ui: &mut egui::Ui, m: &mut MeshesModel) {
+    let block = m.quick_export_block();
+    let r = ui.add_enabled(block.is_none(), egui::Button::new("Export this NIF"));
+    let r = match &block {
+        Some(why) => r.on_disabled_hover_text(why),
+        None => r.on_hover_text("Write this NIF to the export folder now, without Review"),
+    };
+    if r.clicked() {
+        m.quick_export();
+        ui.close();
+    }
+    if m.nif_export_root.is_none() {
+        let r = ui.add_enabled(
+            !m.export_running,
+            egui::Button::new("Choose export folder…"),
+        );
+        let r = match m.export_running {
+            true => r.on_disabled_hover_text("An export is running"),
+            false => r.on_hover_text("Choose where converted textures and NIF edits are written"),
+        };
+        if r.clicked() {
+            m.pick_export_folder_request = true;
+            ui.close();
+        }
+    }
 }
 
 /// The shape cards of the selected NIF, in the left column (owner, 2026-10-14). A click on a texture asks who else

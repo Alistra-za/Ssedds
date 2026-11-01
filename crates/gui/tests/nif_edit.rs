@@ -10982,3 +10982,236 @@ fn meshes_only_waits_for_a_foreign_answer() {
     h.run_steps(6);
     assert_eq!(std::fs::read(&out_path).unwrap(), bytes);
 }
+
+// ---- Note GH9: right-click `Export this NIF` on the Edit-mode 3D view ----
+
+const EXPORT_THIS_NIF: &str = "Export this NIF";
+
+/// Right-click the Meshes view's 3D image (the click lands on the image centre) and let the menu open.
+fn right_click_3d<S>(h: &mut Harness<'static, S>) {
+    h.get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .click_secondary();
+    h.run_steps(4);
+}
+
+fn is_disabled<S>(h: &Harness<'static, S>, label: &str) -> bool {
+    h.get_by_role_and_label(AkRole::Button, label)
+        .accesskit_node()
+        .is_disabled()
+}
+
+/// Q1, Q2, Q5: a plain right-click offers `Export this NIF`; it writes the open NIF alone and reports as Review does.
+#[test]
+fn right_click_on_the_3d_view_offers_export_this_nif() {
+    let (_t, _d, mut h) = review_app();
+    let (_path, out_path, out) = nif_out(&h);
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none());
+    right_click_3d(&mut h);
+    assert!(!is_disabled(&h, EXPORT_THIS_NIF));
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).ok(),
+        Some(out),
+        "the NIF is written"
+    );
+    assert!(h.state().model.review.is_none(), "no Review");
+    assert!(h.state().model.export.running.is_none(), "no texture run");
+    assert!(
+        h.query_by_label(EXPORT_THIS_NIF).is_none(),
+        "the menu closes"
+    );
+    assert!(
+        h.state()
+            .model
+            .messages
+            .entries()
+            .any(|e| e.text == "NIF edits written: 1 file"),
+        "the result goes through nif_export_result"
+    );
+    assert!(!h.state().meshes.edit.as_ref().unwrap().doc.pending());
+}
+
+/// Q5: the model keeps the result for the app to hand over.
+#[test]
+fn quick_export_keeps_its_result_for_the_app() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EDITS));
+    gloss(&mut m, 12.5);
+    assert_eq!(m.quick_export_block(), None);
+    m.quick_export();
+    assert_eq!(m.quick_export_result, Some(Ok(1)));
+    assert!(exported(&d).exists());
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EDITS));
+}
+
+/// Review Focus 3: a right-drag orbits and opens no menu.
+#[test]
+fn a_right_drag_orbits_and_opens_no_menu() {
+    let (_t, _d, mut h) = review_app();
+    let yaw = h.state().meshes.v3.orbit.yaw;
+    let c = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect()
+        .center();
+    let btn = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(btn(c, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + egui::vec2(10.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.event(btn(c + egui::vec2(40.0, 0.0), false));
+    h.run_steps(4);
+    assert_ne!(h.state().meshes.v3.orbit.yaw, yaw, "the drag orbited");
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none(), "no menu");
+}
+
+/// Review Focus 1 (Q3): a file Tessalith did not write is never overwritten by the one-click export: it opens
+/// Review on that row; after Overwrite there, the next one-click writes.
+#[test]
+fn quick_export_never_overwrites_a_foreign_file() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, out) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    right_click_3d(&mut h);
+    assert!(
+        !is_disabled(&h, EXPORT_THIS_NIF),
+        "a foreign file is Review's question"
+    );
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        b"theirs",
+        "nothing written"
+    );
+    assert!(h.state().model.review.is_some(), "Review opens on the row");
+    h.get_by_label(&format!("{path} was not written by Tessalith"));
+    assert!(h
+        .state()
+        .model
+        .messages
+        .entries()
+        .all(|e| !e.text.starts_with("NIF edits")));
+    h.state_mut()
+        .meshes
+        .set_nif_answer(&path, GuardChoice::Overwrite, sha(b"theirs"));
+    h.run_steps(2);
+    right_click_3d(&mut h);
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        out,
+        "the answer let it write"
+    );
+}
+
+/// Q4: with no export folder the item is off with the reason, and `Choose export folder…` asks for the picker.
+#[test]
+fn quick_export_is_off_without_a_folder_and_offers_the_picker() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EXPORT_FOLDER));
+    let mut h = view(m);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("No export folder chosen").count(), 0);
+    right_click_3d(&mut h);
+    assert!(is_disabled(&h, EXPORT_THIS_NIF));
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    assert!(
+        h.query_all_by_label("No export folder chosen").count() >= 1,
+        "the hover says why"
+    );
+    assert!(!h.state().pick_export_folder_request);
+    h.get_by_role_and_label(AkRole::Button, "Choose export folder…")
+        .click();
+    h.run_steps(2);
+    assert!(h.state().pick_export_folder_request);
+}
+
+/// Q2: while a texture export runs the item is off, with the reason on hover.
+#[test]
+fn quick_export_is_off_while_an_export_runs() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.export_running = true;
+    assert_eq!(
+        m.quick_export_block().as_deref(),
+        Some("An export is running")
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    right_click_3d(&mut h);
+    assert!(is_disabled(&h, EXPORT_THIS_NIF));
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    h.get_by_label("An export is running");
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().quick_export_result,
+        None,
+        "a disabled item writes nothing"
+    );
+}
+
+/// Q1: the set preview's 3D view (the same `image()`) gets no menu.
+#[test]
+fn the_set_preview_has_no_export_menu() {
+    use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(d.path());
+    let key = sdc_gui::model::pbr_export::json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/rock01")
+        .unwrap()
+        .0
+        .key;
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(520.0, 1000.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (sdc_gui::model::AppModel, SetPreview)| {
+                sdc_gui::ui::set_preview::draw(ui, m, s)
+            },
+            (m, SetPreview::new(None, None, None, DEFAULT_CAP)),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    for _ in 0..3 {
+        h.run_steps(4);
+        let (m, s) = h.state_mut();
+        s.poll(&*m);
+    }
+    h.run_steps(4);
+    right_click_3d(&mut h); // finds the 3D image, so the view is drawn
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none());
+}

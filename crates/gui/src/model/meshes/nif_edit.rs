@@ -2283,6 +2283,39 @@ impl MeshesModel {
             .insert(path.to_ascii_lowercase(), (choice, sha256));
     }
 
+    /// Note GH9 (Q2, Q4): why the 3D view's `Export this NIF` is off, which is its hover; None = on. The row is the
+    /// same one Review lists, so its `blocked` text is the reason.
+    pub fn quick_export_block(&self) -> Option<String> {
+        if self.export_running {
+            return Some("An export is running".into());
+        }
+        if self.nif_export_root.is_none() {
+            return Some(NO_EXPORT_FOLDER.into());
+        }
+        match self.nif_review_rows().into_iter().next() {
+            Some(r) => r.blocked,
+            None => Some(NO_EDITS.into()),
+        }
+    }
+
+    /// Note GH9 (Q3, Q5): writes the open edit's NIF alone, as Review's Export would. A file at the export path that
+    /// Tessalith did not write, with no Review answer that still matches it, is never overwritten: the click opens
+    /// Review on that row instead. The result waits in `quick_export_result` for the app.
+    pub fn quick_export(&mut self) {
+        if self.quick_export_block().is_some() {
+            return;
+        }
+        if self
+            .nif_review_rows()
+            .iter()
+            .any(|r| r.foreign.is_some() && r.answer.is_none())
+        {
+            self.open_review_request = true;
+            return;
+        }
+        self.quick_export_result = Some(self.export_nif_edits());
+    }
+
     /// Note GD29: drops every Review answer, so each foreign row asks again. Review calls it when it closes and when
     /// the project changes (FC5); the edit's close and a folder change call it too.
     pub fn clear_nif_answers(&mut self) {

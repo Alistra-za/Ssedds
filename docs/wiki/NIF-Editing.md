@@ -48,6 +48,8 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 
 The bottom of the edit panel says **Ready**, "No edits to export." (grey, before any edit), "Skipped until an export folder is chosen" (grey, edits but no folder), or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**. When a file Tessalith did not write is already where the export goes, **Diff…** (in the edit panel, or on its Review row) lists the blocks that differ from what the export writes.
 
+To write just this NIF, right-click the 3D view (a click, not a drag) and choose **Export this NIF**. It writes the open NIF to the export folder at once, with no Review and no texture export, and reports in Messages. It is greyed, with the reason on hover, while nothing is edited, an export runs, or no export folder is chosen (then **Choose export folder…** appears in the same menu). If a file Tessalith did not write is already there, the click opens Review on that row instead and writes nothing: answer **Overwrite** there, then **Export this NIF** writes.
+
 - Review lists each NIF with edits as a row. The export writes `meshes\...\<name>.nif` under the export folder. Blocks that your edits left unused are left out, and the row says how many.
 - A blocked NIF row is skipped; it never stops the texture export.
 - You do not need a texture folder open. With only the Meshes view and an export folder chosen, Review's **Export** reads "Export 1 NIF edit" and writes just the NIFs.
