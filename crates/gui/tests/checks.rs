@@ -936,7 +936,7 @@ fn painted_text(h: &Harness<'static, AppModel>, full: &str) -> Option<String> {
     })
 }
 
-/// Note F?13 (A10): at the narrowest Sets column a PBR set's pill and badges leave its name no room on one row, so
+/// Note FI13 (A10): at the narrowest Sets column a PBR set's pill and badges leave its name no room on one row, so
 /// the name has its own row and is painted whole, not as `…`.
 #[test]
 fn a_narrow_set_card_keeps_its_name() {
@@ -987,7 +987,7 @@ fn mead_card(width: f32, warned: bool) -> (Harness<'static, AppModel>, egui::Rec
     (h, sets, name)
 }
 
-/// Note F?13: a wide Sets column keeps the one-row heading: the pill and the ⚠ button sit on the name's row.
+/// Note FI13: a wide Sets column keeps the one-row heading: the pill and the ⚠ button sit on the name's row.
 #[test]
 fn a_wide_set_card_keeps_its_one_row_heading() {
     let (h, sets, name) = mead_card(400.0, true);
@@ -1004,7 +1004,7 @@ fn a_wide_set_card_keeps_its_one_row_heading() {
     }
 }
 
-/// Note F?13: the drop zone's one-off hint wraps instead of eliding.
+/// Note FI13: the drop zone's one-off hint wraps instead of eliding.
 #[test]
 fn the_drop_zone_hint_is_whole() {
     let d = tempfile::tempdir().unwrap();

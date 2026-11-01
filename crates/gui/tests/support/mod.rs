@@ -328,7 +328,7 @@ pub fn bc1_dds(path: &Path) {
     std::fs::write(path, dds_bytes(&desc, &data).unwrap()).unwrap();
 }
 
-/// Note F?2: a released mod's all-DDS PBR sets: `textures/pbr/<s>/<s>.dds`, `<s>_n.dds` and `<s>_rmaos.dds` for each
+/// Note FI2: a released mod's all-DDS PBR sets: `textures/pbr/<s>/<s>.dds`, `<s>_n.dds` and `<s>_rmaos.dds` for each
 /// of `sets` under `dir`; returns the `textures` folder.
 pub fn dds_pbr_sets(dir: &Path, sets: &[&str]) -> PathBuf {
     for s in sets {

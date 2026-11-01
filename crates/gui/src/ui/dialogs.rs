@@ -189,7 +189,7 @@ pub fn short_name(name: &str) -> String {
 }
 
 /// The weak line under a body that names the files an unsaved-changes question is about.
-/// Only the documents with unsaved changes (Note F?4).
+/// Only the documents with unsaved changes (Note FI4).
 fn files_hint(ui: &mut egui::Ui, model: &AppModel) {
     let toml =
         model.project.as_ref().is_some_and(|p| p.is_dirty()) || model.tentative_edits().is_some();

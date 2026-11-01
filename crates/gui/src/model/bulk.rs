@@ -1297,7 +1297,7 @@ impl AppModel {
             MenuEntry {
                 action: cmd(SlotCommand::FromSet),
                 label: format!("From this set ({gives})"),
-                // Note F?11 (D13): a slot the set has no file for says so, not "already".
+                // Note FI11 (D13): a slot the set has no file for says so, not "already".
                 disabled: off.clone().or_else(|| {
                     current.is_none().then(|| {
                         if gives == NOTHING {

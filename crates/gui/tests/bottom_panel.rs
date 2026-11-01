@@ -235,7 +235,7 @@ fn a_problems_row_selects_its_texture_and_decides_in_place() {
     );
 }
 
-/// Note F?11 (D14): the Decide… menu says what it asks before the options, as Review's inline row does.
+/// Note FI11 (D14): the Decide… menu says what it asks before the options, as Review's inline row does.
 #[test]
 fn the_decide_menu_starts_with_alpha_means() {
     let d = tempfile::tempdir().unwrap();

@@ -312,7 +312,7 @@ fn an_older_recovery_file_is_left_alone() {
     assert!(!restore_toast(&m));
 }
 
-// ---- Note F?4: FC1's automatic types alone are not recovery text.
+// ---- Note FI4: FC1's automatic types alone are not recovery text.
 
 /// Three lone normals opened as the app opens them (High accept): the plan records 3 types and nothing else.
 fn three_types(dir: &Path) -> (PathBuf, AppModel) {

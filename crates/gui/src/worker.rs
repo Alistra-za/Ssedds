@@ -147,7 +147,7 @@ pub enum WorkerMsg {
         path: std::path::PathBuf,
         result: Result<(), String>,
     },
-    /// Note F?1: the tile image of the skipped DDS `path` as it was at `stamp` (`spawn_dds_thumbs`).
+    /// Note FI1: the tile image of the skipped DDS `path` as it was at `stamp` (`spawn_dds_thumbs`).
     DdsThumb {
         path: PathBuf,
         stamp: SourceStamp,
@@ -436,7 +436,7 @@ pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, 
     });
 }
 
-/// Note F?1: decode the skipped DDS inputs' tile images in order, one message each.
+/// Note FI1: decode the skipped DDS inputs' tile images in order, one message each.
 /// shortcut: `dds_thumbnail` reads the whole file (`fs::read`), so a folder of 4K DDS reads every byte once per
 /// session; read the header and the tail mips only, or keep the thumbs in the DZ analysis disk cache, if open time
 /// shows it.

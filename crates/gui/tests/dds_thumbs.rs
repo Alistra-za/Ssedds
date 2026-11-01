@@ -1,4 +1,4 @@
-//! Note F?1: a skipped DDS input's tile shows its stored image, decoded by the GUI off the UI thread.
+//! Note FI1: a skipped DDS input's tile shows its stored image, decoded by the GUI off the UI thread.
 mod support;
 use engine::config::Format;
 use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};

@@ -41,7 +41,7 @@ fn tab_buttons(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// `nif_preview`: the Meshes view with a NIF selected, whose 3D preview needs the room above the panel (Note F?18).
+/// `nif_preview`: the Meshes view with a NIF selected, whose 3D preview needs the room above the panel (Note FI18).
 pub fn draw(
     ui: &mut egui::Ui,
     model: &mut AppModel,
@@ -70,7 +70,7 @@ pub fn draw(
     } else {
         ("bottom", 240.0)
     };
-    // Note F?18 (GH6/N6, ruling R3): room for the 3D frame's 160 px; Review's 40 % default obeys it too.
+    // Note FI18 (GH6/N6, ruling R3): room for the 3D frame's 160 px; Review's 40 % default obeys it too.
     let cap = nif_preview.then(|| (ui.available_height() - NIF_ROOM).max(120.0));
     keep_users_height(ui.ctx(), egui::Id::new(id), cap);
     let mut panel = egui::Panel::bottom(id)
@@ -112,10 +112,10 @@ pub fn draw(
 }
 
 /// The Meshes view's 3D frame minimum (GH6's `PREVIEW_MIN_H`, private to ui/meshes.rs) plus the lines, bars and
-/// spacing around it down to the bottom panel, measured at 1536x864 (Note F?18, ruling R3).
+/// spacing around it down to the bottom panel, measured at 1536x864 (Note FI18, ruling R3).
 const NIF_ROOM: f32 = 160.0 + 211.0;
 
-/// Note F?18: the cap is the view's limit, not the user's height. A taller height is kept aside while capped and
+/// Note FI18: the cap is the view's limit, not the user's height. A taller height is kept aside while capped and
 /// given back once the cap no longer applies (the panel itself stores the clamped height).
 fn keep_users_height(ctx: &egui::Context, id: egui::Id, cap: Option<f32>) {
     use egui::containers::panel::PanelState;

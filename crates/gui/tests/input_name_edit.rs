@@ -1,4 +1,4 @@
-//! Note AO: the set header's input name text box: gray Tab completion, path segments (Note F?17) and the commit keys.
+//! Note AO: the set header's input name text box: gray Tab completion, path segments (Note FI17) and the commit keys.
 mod support;
 use eframe::egui::{self, accesskit::Role, Key, Modifiers};
 use egui_kittest::kittest::{by, NodeT as _, Queryable};
@@ -213,7 +213,7 @@ fn pointer(h: &mut H, p: egui::Pos2, pressed: bool, modifiers: Modifiers) {
     });
 }
 
-/// Note F?17: Ctrl+Left / Ctrl+Right jump to the previous segment start / the next segment end; with Shift they
+/// Note FI17: Ctrl+Left / Ctrl+Right jump to the previous segment start / the next segment end; with Shift they
 /// extend the selection. `.` and `-` are not boundaries (egui's word jump stops at them).
 #[test]
 fn ctrl_arrows_jump_by_segment() {
@@ -242,7 +242,7 @@ fn ctrl_arrows_jump_by_segment() {
     assert_eq!(free(&h), "textures/landscape/rock-02.v2", "no text change");
 }
 
-/// Note F?17: a double-click selects the path segment under the pointer, not egui's word (`.` and `-` split words).
+/// Note FI17: a double-click selects the path segment under the pointer, not egui's word (`.` and `-` split words).
 #[test]
 fn double_click_selects_the_segment() {
     let (_d, mut h) = harness();
@@ -291,7 +291,7 @@ fn drag(h: &mut H, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
     h.run();
 }
 
-/// Note F?17: a drag whose head crosses a `/` selects whole segments, in either direction.
+/// Note FI17: a drag whose head crosses a `/` selects whole segments, in either direction.
 #[test]
 fn a_drag_across_a_slash_snaps_to_segments() {
     let (_d, mut h) = harness();
@@ -306,7 +306,7 @@ fn a_drag_across_a_slash_snaps_to_segments() {
     assert_eq!(free(&h), ROCK01);
 }
 
-/// Note F?17: a drag that stays inside one segment selects characters (egui's default).
+/// Note FI17: a drag that stays inside one segment selects characters (egui's default).
 #[test]
 fn a_drag_inside_one_segment_selects_characters() {
     let (_d, mut h) = harness();
@@ -319,7 +319,7 @@ fn a_drag_inside_one_segment_selects_characters() {
     assert!(lo > 9 && hi < 18 && lo < hi, "{lo}..{hi}");
 }
 
-/// Note F?17: Ctrl+A selects the whole path.
+/// Note FI17: Ctrl+A selects the whole path.
 #[test]
 fn ctrl_a_selects_the_whole_path() {
     let (_d, mut h) = harness();
@@ -328,7 +328,7 @@ fn ctrl_a_selects_the_whole_path() {
     assert_eq!(sel_sorted(&h), (0, ROCK01.len()));
 }
 
-/// Note F?17: Backspace on a `/` highlights it first (with a hint), a second press deletes it.
+/// Note FI17: Backspace on a `/` highlights it first (with a hint), a second press deletes it.
 #[test]
 fn backspace_on_a_slash_highlights_first_then_deletes() {
     let (_d, mut h) = harness();
@@ -348,7 +348,7 @@ fn backspace_on_a_slash_highlights_first_then_deletes() {
         .is_none());
 }
 
-/// Note F?17: Delete mirrors Backspace for a `/` after the cursor.
+/// Note FI17: Delete mirrors Backspace for a `/` after the cursor.
 #[test]
 fn delete_on_a_slash_highlights_first_then_deletes() {
     let (_d, mut h) = harness();
@@ -389,7 +389,7 @@ fn key_up(h: &mut H, key: Key) {
     h.run();
 }
 
-/// Note F?17: a held Backspace (repeat key events) deletes characters but stops at a `/`, without highlighting it.
+/// Note FI17: a held Backspace (repeat key events) deletes characters but stops at a `/`, without highlighting it.
 #[test]
 fn held_backspace_stops_at_a_slash() {
     let (_d, mut h) = harness();
@@ -410,7 +410,7 @@ fn held_backspace_stops_at_a_slash() {
     key_up(&mut h, Key::Backspace);
 }
 
-/// Note F?17 (supersedes BH2): no padlock, no lock slider; the box is still there.
+/// Note FI17 (supersedes BH2): no padlock, no lock slider; the box is still there.
 #[test]
 fn the_box_has_no_path_lock() {
     let (_d, h) = harness();
@@ -426,7 +426,7 @@ fn match1(h: &mut H) {
     h.run();
 }
 
-/// Note F?11 (A15): the Match menu and Slot commands name a slot as the set editor's card does; the key is on hover.
+/// Note FI11 (A15): the Match menu and Slot commands name a slot as the set editor's card does; the key is on hover.
 #[test]
 fn the_match_menu_uses_the_sets_slot_names() {
     let (_d, mut h) = harness();
@@ -451,7 +451,7 @@ fn the_match_menu_uses_the_sets_slot_names() {
     h.get_by_label("Slot 7 (Coat normal / Fuzz)");
 }
 
-/// Note F?17 (was the path lock's filter): the ▾ list and the live list show the paths under the folder before the
+/// Note FI17 (was the path lock's filter): the ▾ list and the live list show the paths under the folder before the
 /// segment being edited.
 #[test]
 fn the_list_filters_by_the_folder_before_the_cursor_segment() {
@@ -1125,7 +1125,7 @@ fn y(h: &H, label: &str) -> f32 {
     h.get_by_label(label).rect().center().y
 }
 
-/// Note F?17: Ctrl+Down lists the known names for the segment under the cursor; Up/Down then Enter replace only that
+/// Note FI17: Ctrl+Down lists the known names for the segment under the cursor; Up/Down then Enter replace only that
 /// segment, and nothing is committed until the box itself commits.
 #[test]
 fn ctrl_down_opens_the_segment_list_and_enter_replaces_only_that_segment() {
@@ -1167,7 +1167,7 @@ fn segment_at_cursor(h: &H) -> (usize, usize) {
     (r.start, r.end)
 }
 
-/// Note F?17: Esc closes the segment list and changes nothing; the box keeps its focus.
+/// Note FI17: Esc closes the segment list and changes nothing; the box keeps its focus.
 #[test]
 fn esc_closes_the_segment_list_unchanged() {
     let (_d, mut h) = harness();
@@ -1187,7 +1187,7 @@ fn esc_closes_the_segment_list_unchanged() {
     );
 }
 
-/// Note F?17 (rule 10, controller ruling R2): with the whole text selected, Ctrl+Down opens the ▾ list unfiltered
+/// Note FI17 (rule 10, controller ruling R2): with the whole text selected, Ctrl+Down opens the ▾ list unfiltered
 /// (another folder's rows too); a plain ▾ click afterwards keeps the folder filter.
 #[test]
 fn ctrl_down_with_all_selected_opens_the_full_list() {
@@ -1211,7 +1211,7 @@ fn ctrl_down_with_all_selected_opens_the_full_list() {
     );
 }
 
-/// Review fix (F?17 rule 9): a click on a segment row replaces only that segment and commits nothing, whether the
+/// Review fix (FI17 rule 9): a click on a segment row replaces only that segment and commits nothing, whether the
 /// press and the release land in separate frames or in one.
 #[test]
 fn a_click_on_a_segment_row_replaces_only_that_segment() {
@@ -1243,7 +1243,7 @@ fn a_click_on_a_segment_row_replaces_only_that_segment() {
     }
 }
 
-/// Note F?17 (rule 1): a triple-click still selects the whole path (egui's line select).
+/// Note FI17 (rule 1): a triple-click still selects the whole path (egui's line select).
 #[test]
 fn triple_click_selects_the_whole_path() {
     let (_d, mut h) = harness();
@@ -1260,7 +1260,7 @@ fn triple_click_selects_the_whole_path() {
     assert_eq!(sel_sorted(&h), (0, ROCK01.len()));
 }
 
-/// Note F?17 (rule 5): a held Delete deletes characters but stops at a `/`, without highlighting it.
+/// Note FI17 (rule 5): a held Delete deletes characters but stops at a `/`, without highlighting it.
 #[test]
 fn held_delete_stops_at_a_slash() {
     let (_d, mut h) = harness();
@@ -1278,7 +1278,7 @@ fn held_delete_stops_at_a_slash() {
 
 const ARMOR: &str = "textures/armor/iron/shield";
 
-/// Note F?17: in a folder list, folders that also hold the rest of the path are marked and listed first; picking one
+/// Note FI17: in a folder list, folders that also hold the rest of the path are marked and listed first; picking one
 /// opens the next segment's list with the old tail highlighted, and Enter keeps it.
 #[test]
 fn picking_a_folder_opens_the_next_segment_with_the_tail_highlighted() {
@@ -1319,7 +1319,7 @@ fn picking_a_folder_opens_the_next_segment_with_the_tail_highlighted() {
     );
 }
 
-/// Note F?17: when the new folder lacks the old tail, its closest names come first, none is highlighted, and Esc keeps
+/// Note FI17: when the new folder lacks the old tail, its closest names come first, none is highlighted, and Esc keeps
 /// the old tail's text.
 #[test]
 fn a_missing_tail_keeps_its_text_and_lists_close_names_first() {
@@ -1350,7 +1350,7 @@ fn a_missing_tail_keeps_its_text_and_lists_close_names_first() {
     assert_eq!(free(&h), "textures/armor/steel/shield");
 }
 
-/// Note F?17: a name that is no known texture draws its last segment amber, with a hover; it stays editable.
+/// Note FI17: a name that is no known texture draws its last segment amber, with a hover; it stays editable.
 #[test]
 fn an_unknown_tail_is_amber_with_a_hover() {
     let (_d, mut h) = harness();

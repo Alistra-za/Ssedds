@@ -266,7 +266,7 @@ impl AppModel {
     }
 
     /// The Open folder dialog: it starts in the parent of the most recent project, when that parent still exists
-    /// (Note F?10), so the next mod is usually one click away.
+    /// (Note FI10), so the next mod is usually one click away.
     pub fn open_folder_spec(&self) -> PickerSpec {
         match self
             .settings

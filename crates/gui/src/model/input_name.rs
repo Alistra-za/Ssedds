@@ -302,7 +302,7 @@ pub fn tab_part(paths: &[String], typed: &str) -> Option<String> {
 }
 
 /// Note AO4: the live list under the box: the first `limit` paths that start with `text` (the top one is the ghost);
-/// with none, the paths under the folder `text[..cut]` (`segment_start`, Note F?17) that contain every word after it.
+/// with none, the paths under the folder `text[..cut]` (`segment_start`, Note FI17) that contain every word after it.
 pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<String> {
     let rows: Vec<String> = starting_with(paths, text)
         .take(limit)
@@ -323,12 +323,12 @@ pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<
         .collect()
 }
 
-/// Note F?17: a path separator (`\` is read as `/` everywhere in the box).
+/// Note FI17: a path separator (`\` is read as `/` everywhere in the box).
 pub fn is_sep(c: char) -> bool {
     c == '/' || c == '\\'
 }
 
-/// Note F?17: the path segment at char index `i` of `s` (char indices, separators excluded): the run between the
+/// Note FI17: the path segment at char index `i` of `s` (char indices, separators excluded): the run between the
 /// separator before `i` and the one at or after it, so a `/` at `i` belongs to the segment before it.
 pub fn segment_at(s: &str, i: usize) -> Range<usize> {
     let chars: Vec<char> = s.chars().collect();
@@ -344,7 +344,7 @@ pub fn segment_at(s: &str, i: usize) -> Range<usize> {
     start..end
 }
 
-/// Note F?17: a drag from `anchor` to `head` (char indices) that crosses a separator covers whole segments: from the
+/// Note FI17: a drag from `anchor` to `head` (char indices) that crosses a separator covers whole segments: from the
 /// anchor's segment start to the head's segment end, or reversed when dragging left. Returns (anchor, head); unchanged
 /// inside one segment.
 pub fn snap_to_segments(s: &str, anchor: usize, head: usize) -> (usize, usize) {
@@ -358,13 +358,13 @@ pub fn snap_to_segments(s: &str, anchor: usize, head: usize) -> (usize, usize) {
     }
 }
 
-/// Note F?17: the byte index after the last separator of `s` (0 with none): `s[..segment_start(s)]` is the folder
+/// Note FI17: the byte index after the last separator of `s` (0 with none): `s[..segment_start(s)]` is the folder
 /// before the segment being edited, which the live list, the ▾ list and Tab completion filter by.
 pub fn segment_start(s: &str) -> usize {
     s.rfind(['/', '\\']).map_or(0, |i| i + 1)
 }
 
-/// Note F?17: the 0-based index of the segment at char index `i` (the separators before it).
+/// Note FI17: the 0-based index of the segment at char index `i` (the separators before it).
 pub fn segment_index(s: &str, i: usize) -> usize {
     s.chars()
         .take(segment_at(s, i).start)
@@ -372,7 +372,7 @@ pub fn segment_index(s: &str, i: usize) -> usize {
         .count()
 }
 
-/// Note F?17: `s` with segment `k` replaced by `value`, and the new segment's char range.
+/// Note FI17: `s` with segment `k` replaced by `value`, and the new segment's char range.
 pub fn replace_segment(s: &str, k: usize, value: &str) -> (String, Range<usize>) {
     let mut parts: Vec<&str> = s.split(['/', '\\']).collect();
     if k < parts.len() {
@@ -385,7 +385,7 @@ pub fn replace_segment(s: &str, k: usize, value: &str) -> (String, Range<usize>)
     (parts.join("/"), start..start + value.chars().count())
 }
 
-/// Note F?17: one row of a segment list (Ctrl+Up/Down in the input name box).
+/// Note FI17: one row of a segment list (Ctrl+Up/Down in the input name box).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Choice {
     /// The row's text: a folder's name, or (the last segment) the whole path, as the ▾ list shows it.
@@ -396,7 +396,7 @@ pub struct Choice {
     pub keeps_tail: bool,
 }
 
-/// Note F?17: the known names for segment `seg` of `text`, given the folder before it (from the ▾ list's cached
+/// Note FI17: the known names for segment `seg` of `text`, given the folder before it (from the ▾ list's cached
 /// `paths`). A middle segment lists the sibling folders: those that also hold the rest of the path first (`keeps_tail`),
 /// then the rest, alphabetically. The last segment lists the paths of the textures in that folder, in list order.
 pub fn segment_choices(paths: &[String], text: &str, seg: usize) -> Vec<Choice> {
@@ -441,7 +441,7 @@ pub fn segment_choices(paths: &[String], text: &str, seg: usize) -> Vec<Choice> 
     out
 }
 
-/// Note F?17 (rule 13): `choices` with those closest to `old` first (the longest common prefix, case aside: `shield`
+/// Note FI17 (rule 13): `choices` with those closest to `old` first (the longest common prefix, case aside: `shield`
 /// puts `shield_d` first), the rest in their order.
 pub fn closest_first(mut choices: Vec<Choice>, old: &str) -> Vec<Choice> {
     let old = old.to_lowercase();

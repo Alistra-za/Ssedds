@@ -348,7 +348,7 @@ impl eframe::App for SdcApp {
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
         self.meshes.set_project_root(self.model.root.as_deref());
-        // Note F?18 (GH3's hand-over): the rev moves only when the list does, so an idle frame builds nothing.
+        // Note FI18 (GH3's hand-over): the rev moves only when the list does, so an idle frame builds nothing.
         let (rev, paths) = self.model.output_game_paths();
         self.meshes.set_project_textures(rev, paths);
         // Note GD5: an export folder change's lines about the open NIF edit go to Messages.

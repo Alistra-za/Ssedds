@@ -708,7 +708,7 @@ fn grid_keys_wait_while_a_docked_view_is_in_front() {
     assert_eq!(h.state().0.centre_front(), CentreTab::Presets);
 }
 
-/// Note F?8 (D8): the palette's result rows are the buttons whose name is "label   detail".
+/// Note FI8 (D8): the palette's result rows are the buttons whose name is "label   detail".
 fn palette_rows_selected(h: &Harness<'static, AppModel>) -> usize {
     h.query_all_by_role(egui::accesskit::Role::Button)
         .filter(|n| {

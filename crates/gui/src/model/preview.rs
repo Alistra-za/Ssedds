@@ -354,7 +354,7 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
     Ok(PreviewOut { decoded, result })
 }
 
-/// A skipped DDS input's tile image (Note F?1): its largest mip of at most `THUMB_MAX`, else its smallest mip
+/// A skipped DDS input's tile image (Note FI1): its largest mip of at most `THUMB_MAX`, else its smallest mip
 /// box-downsampled, as stored (RGBA8).
 /// shortcut: a mipless 4K DDS decodes its full level once on the worker; read a cached thumb from the DZ disk cache
 /// if open time shows it.

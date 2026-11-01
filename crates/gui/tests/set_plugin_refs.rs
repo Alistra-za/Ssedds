@@ -17,7 +17,7 @@ fn tall(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 /// esp spec §4.1: TXSTs matching the set (EDID, load-order FormID, winning plugin, slot, overridden N×), then the
-/// records whose alternate textures use them. Information only. Note F?18 (4, GH7): TXST slot 0 reads "slot 1".
+/// records whose alternate textures use them. Information only. Note FI18 (4, GH7): TXST slot 0 reads "slot 1".
 #[test]
 fn used_by_plugins_lists_txsts_and_alternate_texture_users() {
     use modscan::plugin_store::{AltUse, ShapeSwap, TxstUse};

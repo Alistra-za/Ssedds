@@ -1858,7 +1858,7 @@ fn a_pressed_slot_thumbnail_scales_to_097() {
     }
 }
 
-/// Note F?6: the top of the first slot row (the "Diffuse" card title in the centre, right of the Sets column).
+/// Note FI6: the top of the first slot row (the "Diffuse" card title in the centre, right of the Sets column).
 fn diffuse_top(h: &Harness<'static, AppModel>) -> f32 {
     let left = h.get_by_label("Slot commands…").rect().min.x;
     h.query_all_by_label("Diffuse")

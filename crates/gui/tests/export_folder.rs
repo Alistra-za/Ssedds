@@ -1,6 +1,6 @@
 //! Note FB1 (review C2, amendment B): a project never inherits another project's export folder from `gui.toml`; the
 //! header's `Export to:` chip says `not chosen` until one is, and its Export button reads `Review {n} files` until
-//! Review would write without skipping anything (Note F?5 amended FB1's "chip only when chosen").
+//! Review would write without skipping anything (Note FI5 amended FB1's "chip only when chosen").
 mod support;
 use eframe::egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -171,7 +171,7 @@ fn files(m: &AppModel) -> String {
     format!("{n} file{}", if n == 1 { "" } else { "s" })
 }
 
-/// Note F?7 (4a): a pending NIF edit makes the header `Review …`, which writes nothing, so it counts the edit.
+/// Note FI7 (4a): a pending NIF edit makes the header `Review …`, which writes nothing, so it counts the edit.
 #[test]
 fn the_header_counts_pending_nif_edits() {
     let d = tempfile::tempdir().unwrap();
@@ -206,7 +206,7 @@ fn the_export_button_does_not_count_a_blocked_nif_edit() {
     );
 }
 
-/// Note F?7 (4a, round 2): a clean header click writes the files at once, so it names no NIF edit as written.
+/// Note FI7 (4a, round 2): a clean header click writes the files at once, so it names no NIF edit as written.
 #[test]
 fn a_clean_header_export_names_no_blocked_nif_edit() {
     let d = tempfile::tempdir().unwrap();
@@ -243,7 +243,7 @@ fn harness(m: AppModel) -> Harness<'static, AppModel> {
     h
 }
 
-/// Note F?5 (O2; supersedes FB1's "chip only when chosen"): a project is open and none is chosen, so the header says so.
+/// Note FI5 (O2; supersedes FB1's "chip only when chosen"): a project is open and none is chosen, so the header says so.
 #[test]
 fn the_header_says_the_folder_is_not_chosen() {
     let d = tempfile::tempdir().unwrap();
@@ -260,7 +260,7 @@ fn the_header_says_the_folder_is_not_chosen() {
     assert_eq!(h.query_all_by_label("Export to: not chosen").count(), 0);
 }
 
-/// Note F?5 (A4, Important 7): with no project the `gui.toml` folder is not shown (it vanishes when one opens), so the
+/// Note FI5 (A4, Important 7): with no project the `gui.toml` folder is not shown (it vanishes when one opens), so the
 /// menu is `More`; a project with no choice of its own then reads `Export to: not chosen`.
 #[test]
 fn the_start_screen_shows_more_even_with_a_gui_toml_folder() {
@@ -314,7 +314,7 @@ fn undo_harness(dir: &std::path::Path) -> UndoH {
     h
 }
 
-/// Note F?5 (A19): the Undo slot has a fixed width, so a long NIF step label does not move `MO2…` and the rest of the row.
+/// Note FI5 (A19): the Undo slot has a fixed width, so a long NIF step label does not move `MO2…` and the rest of the row.
 #[test]
 fn undo_text_does_not_move_the_header() {
     let d = tempfile::tempdir().unwrap();
@@ -385,7 +385,7 @@ fn review_lists_the_blocker_and_its_choose_button_picks_the_folder() {
     h.get_by_label("Blockers (0)");
 }
 
-/// Note F?5 (O4): the stacked layout draws the export folder row too, under `Blockers (1)`. A guard: it held before.
+/// Note FI5 (O4): the stacked layout draws the export folder row too, under `Blockers (1)`. A guard: it held before.
 #[test]
 fn the_export_folder_row_shows_in_the_stacked_review() {
     let d = tempfile::tempdir().unwrap();
@@ -401,7 +401,7 @@ fn the_export_folder_row_shows_in_the_stacked_review() {
     h.get_by_role_and_label(Role::Button, "Choose the export folder…");
 }
 
-/// Note F?5 (A5, O4): with no folder chosen nothing in the window shows a `sdc-out` path. The Also column is headed
+/// Note FI5 (A5, O4): with no folder chosen nothing in the window shows a `sdc-out` path. The Also column is headed
 /// `Also folders go in`, its location says the export folder is not chosen yet, and JSON lines are relative to it.
 #[test]
 fn no_sdc_out_path_is_shown_before_a_folder_is_chosen() {
@@ -525,8 +525,8 @@ fn no_folder_open_reads_plain_export() {
     assert_eq!(m.header_export_text(), "Export");
 }
 
-/// Note F?18 (3; HANDOFF 2026-11-01 owed item 3): with no folder open the header counts pending NIF edits as the
-/// project case does (Note F?7): `Review k NIF edit(s)`, blocked ones included; none pending keeps plain "Export".
+/// Note FI18 (3; HANDOFF 2026-11-01 owed item 3): with no folder open the header counts pending NIF edits as the
+/// project case does (Note FI7): `Review k NIF edit(s)`, blocked ones included; none pending keeps plain "Export".
 #[test]
 fn no_folder_open_counts_pending_nif_edits() {
     let mut m = AppModel::new(GuiSettings::default(), None, session());

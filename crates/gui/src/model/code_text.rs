@@ -115,7 +115,7 @@ pub fn code_line(code: Code) -> &'static str {
     }
 }
 
-/// The Acknowledge button's text for `code` (Note F?14): acknowledging `LossAlphaData` exports the texture without its
+/// The Acknowledge button's text for `code` (Note FI14): acknowledging `LossAlphaData` exports the texture without its
 /// alpha (the profile stays `remove`, or the format cannot store it), so the button says that.
 pub fn ack_label(code: Code) -> &'static str {
     match code {

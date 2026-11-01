@@ -17,7 +17,7 @@ enum Act {
     Reencode(Vec<String>),
 }
 
-/// Note F?3: re-encode the selection's skipped DDS files (the S6 `reencode` selector, a plan-time field, so not a
+/// Note FI3: re-encode the selection's skipped DDS files (the S6 `reencode` selector, a plan-time field, so not a
 /// `FIELDS` row). Files another input already writes are left out, with their names on hover.
 fn reencode_row(ui: &mut egui::Ui, model: &AppModel, keys: &[String], acts: &mut Vec<Act>) {
     let (ok, blocked) = model.reencode_split(keys);

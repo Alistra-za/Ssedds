@@ -42,7 +42,7 @@ enum Act {
     ResetAll,
 }
 
-/// Note F?16 (owner O7): the project's Mode (`target` in `sdc.toml`), moved here from the header. A pick is returned for
+/// Note FI16 (owner O7): the project's Mode (`target` in `sdc.toml`), moved here from the header. A pick is returned for
 /// the caller to apply once the `PresetsModel` borrow ends. The project's target wins over a preset's own Target.
 fn project_mode(ui: &mut egui::Ui, model: &AppModel) -> Option<Target> {
     use super::header::{target_help, target_name};

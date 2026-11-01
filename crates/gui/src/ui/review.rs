@@ -19,9 +19,9 @@ use engine::manifest::RecodeWhy;
 use engine::presets::{AlsoTarget, ExportConfig};
 use std::path::Path;
 
-/// Note F?5: what the Also location reads while no export folder is chosen (the fallback is never shown as a path).
+/// Note FI5: what the Also location reads while no export folder is chosen (the fallback is never shown as a path).
 const NOT_CHOSEN_YET: &str = "the export folder (not chosen yet)";
-/// Note F?5: what a JSON line's path starts with while no export folder is chosen.
+/// Note FI5: what a JSON line's path starts with while no export folder is chosen.
 const NOT_CHOSEN_ROOT: &str = "‹export folder›";
 
 /// What a click on an undecided row asks for.
@@ -228,7 +228,7 @@ pub fn fix_buttons(
                 }
                 Decision::AlphaMeaning => {
                     ui.menu_button("Decide…", |ui| {
-                        // Note F?11 (D14): the question, as Review's inline row asks it.
+                        // Note FI11 (D14): the question, as Review's inline row asks it.
                         ui.label(egui::RichText::new("Alpha means:").weak());
                         for (v, label) in alpha_options() {
                             let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
@@ -296,7 +296,7 @@ pub(super) fn plural(n: usize) -> &'static str {
 }
 
 /// R6: one line per JSON file under What will be written.
-/// Note F?5: with `unchosen` (the export folder's fallback name) the path is shown under `‹export folder›`.
+/// Note FI5: with `unchosen` (the export folder's fallback name) the path is shown under `‹export folder›`.
 fn json_line_text(l: &JsonLine, unchosen: Option<&Path>) -> String {
     let path = match unchosen.and_then(|r| l.path.strip_prefix(r).ok()) {
         Some(rel) => format!("{NOT_CHOSEN_ROOT}\\{}", rel.display()),
@@ -566,7 +566,7 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
             }
         });
         ui.weak("Also folders go in");
-        // Note F?5: with no export folder chosen and no own location, the fallback is a name, never a `sdc-out` path.
+        // Note FI5: with no export folder chosen and no own location, the fallback is a name, never a `sdc-out` path.
         let unchosen = m.export_folder_chosen().is_none()
             && m.sets_doc.as_ref().and_then(|d| d.also_location()).is_none();
         let loc = if unchosen {
@@ -749,7 +749,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let any_suggestion = undecided
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
-    // Note F?11 (A11): Accept all takes type suggestions only; an alpha meaning needs the user's answer.
+    // Note FI11 (A11): Accept all takes type suggestions only; an alpha meaning needs the user's answer.
     let any_alpha = undecided.iter().any(|k| {
         m.item(k).is_some_and(|i| {
             i.decisions
@@ -787,7 +787,7 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 )));
                 list.extend(nif_written.iter().map(|r| Footer::Nif(r)));
             }
-            // Note F?7 (O5): the Blockers column already names the missing folder, so these are not Warnings.
+            // Note FI7 (O5): the Blockers column already names the missing folder, so these are not Warnings.
             let nif_waiting: Vec<_> = nif_rows
                 .iter()
                 .filter(|r| r.blocked.as_deref() == Some(NO_EXPORT_FOLDER))

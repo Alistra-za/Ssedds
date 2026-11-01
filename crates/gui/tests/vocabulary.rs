@@ -24,7 +24,7 @@ const STRAYS: [&str; 12] = [
     "mip 0",
     "Mip 0",
     "Fake resolution",
-    // Note F?11: the pin and the PGPatcher lock are said in words; the terms ride on hover.
+    // Note FI11: the pin and the PGPatcher lock are said in words; the terms ride on hover.
     "(sdc)",
     "(PGPatcher lock)",
 ];
@@ -88,7 +88,7 @@ fn no_stray_words() {
     assert!(h.query_all_by_label_contains("Not ready").count() >= 1);
 }
 
-/// Note F?14 (A16): the editor is `PGPatcher JSON` in its title and its text; the add button names the action.
+/// Note FI14 (A16): the editor is `PGPatcher JSON` in its title and its text; the add button names the action.
 #[test]
 fn the_json_editor_has_one_name() {
     let d = tempfile::tempdir().unwrap();
@@ -102,7 +102,7 @@ fn the_json_editor_has_one_name() {
     h.get_by_label("Close PGPatcher JSON");
 }
 
-/// Note F?14 (A20): before any export the Files tab says so, and shows no counts of nothing.
+/// Note FI14 (A20): before any export the Files tab says so, and shows no counts of nothing.
 #[test]
 fn the_files_tab_before_export_says_not_exported_yet() {
     use sdc_gui::model::bottom::BottomTab;
@@ -117,7 +117,7 @@ fn the_files_tab_before_export_says_not_exported_yet() {
     assert_eq!(h.query_all_by_label_contains("No files yet").count(), 0);
 }
 
-/// Note F?14 (A21): one texture and one set read in the singular.
+/// Note FI14 (A21): one texture and one set read in the singular.
 #[test]
 fn one_set_is_singular() {
     let d = tempfile::tempdir().unwrap();
@@ -137,7 +137,7 @@ fn one_set_is_singular() {
     assert!(!m.status_line.contains("1 textures"), "{}", m.status_line);
 }
 
-/// Note F?14 (A22): the Undecided row's parts are sentences joined with `. `, and the alpha-data acknowledgement says
+/// Note FI14 (A22): the Undecided row's parts are sentences joined with `. `, and the alpha-data acknowledgement says
 /// what it does.
 #[test]
 fn the_alpha_acknowledge_names_its_action() {

@@ -129,7 +129,7 @@ pub fn slot_kinds_label(slot: SlotKind) -> String {
     kinds.join(" or ")
 }
 
-/// Note F?11 (A15): slot `n` as the set editor's empty card names it, without the "(slot n)" its title adds (the Match
+/// Note FI11 (A15): slot `n` as the set editor's empty card names it, without the "(slot n)" its title adds (the Match
 /// menu and Slot commands say the number themselves). Slot 5 has no card: the cubemap. A vanilla set (`!pbr`) takes the
 /// Meshes tab's name for the texture-set slot (`edit_slot_label`, read only; keep in step with nif_edit.rs).
 pub fn slot_name(pbr: bool, n: u8) -> &'static str {

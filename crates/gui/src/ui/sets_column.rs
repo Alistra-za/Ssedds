@@ -160,7 +160,7 @@ enum Act {
 }
 
 /// The card's heading is one row only when the name keeps this much beside the pill and badges; otherwise the pill
-/// and badges go under the name (Note F?13).
+/// and badges go under the name (Note FI13).
 const NAME_MIN: f32 = 80.0;
 /// The pill frame's horizontal margin (`status_pill`) and the status dot's width (`status::dot`, 8 px).
 const PILL_PAD_X: f32 = 6.0;
@@ -1059,7 +1059,7 @@ fn pill(
                                 .map(|w| (v.id.as_str(), w)),
                         )
                         .collect();
-                    // One row only when the name keeps NAME_MIN px beside the pill and badges (Note F?13).
+                    // One row only when the name keeps NAME_MIN px beside the pill and badges (Note FI13).
                     let sp = ui.spacing().item_spacing.x;
                     let btn = 2.0 * ui.spacing().button_padding.x + sp;
                     let body = egui::TextStyle::Body.resolve(ui.style());

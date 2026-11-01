@@ -360,7 +360,7 @@ fn start_screen(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// What the centre's scroll area showed last (Note F?6).
+/// What the centre's scroll area showed last (Note FI6).
 #[derive(Clone, PartialEq)]
 enum CentreShown {
     Item(String),

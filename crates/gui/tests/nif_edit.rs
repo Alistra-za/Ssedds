@@ -11416,7 +11416,7 @@ fn the_preview_keeps_160_px_with_review_open() {
     assert_eq!(tops[3], tops[4], "the head is at its least: {tops:?}");
 }
 
-/// Note F?18 (1; HANDOFF 2026-11-01 owed item 1, GH3): the app hands the opened folder's output game paths to the
+/// Note FI18 (1; HANDOFF 2026-11-01 owed item 1, GH3): the app hands the opened folder's output game paths to the
 /// Meshes side each frame. Idle frames build nothing (the rev is unchanged); a newly added output reaches it on the
 /// next frame.
 #[test]
@@ -11471,7 +11471,7 @@ fn the_meshes_side_gets_a_new_output_path_on_the_next_frame() {
     );
 }
 
-/// Note F?18 (2; HANDOFF owed item 2, GH6/N6; ruling R3): in the Meshes view with a NIF selected, the bottom panel
+/// Note FI18 (2; HANDOFF owed item 2, GH6/N6; ruling R3): in the Meshes view with a NIF selected, the bottom panel
 /// stops where the 3D frame keeps its 160 px (GH6). A Review dragged to 600 px at 1536x864 is cut down so the frame
 /// keeps 160 px, fully above the panel; in the Textures view (NIF still selected) it stays 600.
 #[test]
@@ -11524,7 +11524,7 @@ fn review_height(h: &AppH) -> f32 {
         .height()
 }
 
-/// Note F?18 (2): Review's 40 % default obeys the cap too. At 1536x600 the default (240) is over it.
+/// Note FI18 (2): Review's 40 % default obeys the cap too. At 1536x600 the default (240) is over it.
 #[test]
 fn reviews_default_height_obeys_the_meshes_cap() {
     app_data();
@@ -11537,7 +11537,7 @@ fn reviews_default_height_obeys_the_meshes_cap() {
     assert!((120.0..239.0).contains(&r), "Review opened at {r}");
 }
 
-/// Note F?18 (2; review minor 1): the cap is the Meshes view's limit, not the user's height. A Review set to 600 px in
+/// Note FI18 (2; review minor 1): the cap is the Meshes view's limit, not the user's height. A Review set to 600 px in
 /// the Textures view is capped for frames in the Meshes view and is 600 px again back in the Textures view (the
 /// panel state is written once, as a drag would, and not re-injected).
 #[test]

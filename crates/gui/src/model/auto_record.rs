@@ -24,7 +24,7 @@ pub(crate) struct AutoNote {
     pub lines: Vec<String>,
     /// The `history.pushes` the step left: the row offers Undo only while it is the top step.
     pub step: u64,
-    /// Note F?4: nothing prompted to be saved just before it, so while it is the top step nothing does.
+    /// Note FI4: nothing prompted to be saved just before it, so while it is the top step nothing does.
     pub clean_before: bool,
 }
 
@@ -44,7 +44,7 @@ fn file_name(key: &str) -> &str {
     key.rsplit(['/', '\\']).next().unwrap_or(key)
 }
 
-/// Ends the row's hover when a sub-type was set (Note F?11, A17).
+/// Ends the row's hover when a sub-type was set (Note FI11, A17).
 const HIGH_CONFIDENCE: &str = "High confidence: the file name and the pixels agree on the type.";
 
 impl AppModel {
@@ -194,7 +194,7 @@ impl AppModel {
                 writes.push((i.key.clone(), f, v));
             }
         }
-        // Note F?3: after a re-encode step still on top, the recording joins it (`set_reencode`).
+        // Note FI3: after a re-encode step still on top, the recording joins it (`set_reencode`).
         let join = self
             .reencode_follow
             .take()

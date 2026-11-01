@@ -126,7 +126,7 @@ fn a_filled_slot_offers_the_slot_commands_other_sets_and_lock() {
     assert_eq!(slot_value(&m, ROCK_SET, 1), Some(json!("")));
 }
 
-/// Note F?11 (D13): From this set on a slot the set has no file for says so; a slot that has one keeps "already".
+/// Note FI11 (D13): From this set on a slot the set has no file for says so; a slot that has one keeps "already".
 #[test]
 fn an_empty_slot_says_the_set_has_no_file() {
     let d = tempfile::tempdir().unwrap();

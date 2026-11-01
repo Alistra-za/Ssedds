@@ -344,7 +344,7 @@ fn the_export_folder_cannot_change_while_an_export_runs() {
     h.get_by_label(sdc_gui::ui::header::EXPORT_RUNNING_HOVER);
 }
 
-/// Note F?10: the start folder of the Open folder dialog for a model whose recent list is `recent`.
+/// Note FI10: the start folder of the Open folder dialog for a model whose recent list is `recent`.
 fn open_folder_start(recent: Vec<PathBuf>) -> Option<PathBuf> {
     let m = AppModel::placeholder(GuiSettings {
         recent,

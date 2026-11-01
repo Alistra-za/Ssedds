@@ -94,7 +94,7 @@ fn pick(h: &mut H, name: &str, option: &str) {
     h.get_by_role_and_label(Role::ComboBox, name).click();
     h.run();
     // The option in the open popup: the nearest button of that label below the combo (a "G" or "CNR" label or chip may be
-    // elsewhere, and a set card's member chip can sit below the combo: Note F?13 moved one there).
+    // elsewhere, and a set card's member chip can sit below the combo: Note FI13 moved one there).
     h.query_all_by_role_and_label(Role::Button, option)
         .filter(|n| n.rect().min.y >= below - 1.0)
         .min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y))

@@ -1315,7 +1315,7 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     );
 }
 
-/// Note F?2: a released mod of three all-DDS PBR sets plus a plain `misc/notes.png` (so Export has a file to write),
+/// Note FI2: a released mod of three all-DDS PBR sets plus a plain `misc/notes.png` (so Export has a file to write),
 /// opened as the app opens it; the export folder `<dir>/export` is chosen and empty.
 fn released_mod(dir: &std::path::Path) -> sdc_gui::model::AppModel {
     let root = dds_pbr_sets(dir, &["a", "b", "c"]);
@@ -1327,7 +1327,7 @@ fn released_mod(dir: &std::path::Path) -> sdc_gui::model::AppModel {
     opened_as_the_app(root, dir.join("export"))
 }
 
-/// Note F?2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets adds no
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets adds no
 /// Blocking row.
 #[test]
 fn a_released_mod_of_dds_sets_adds_no_blocking_rows() {
@@ -1343,12 +1343,12 @@ fn a_released_mod_of_dds_sets_adds_no_blocking_rows() {
         (0, 0),
         "{rows:?}"
     );
-    // Measured (Note F?2 Step 1): the sets add no Warning row and no set badge.
+    // Measured (Note FI2 Step 1): the sets add no Warning row and no set badge.
     assert_eq!(level(Level::Warning), 0, "{rows:?}");
     assert_eq!(flagged(&m).sets.len(), 0);
 }
 
-/// Note F?2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets writes no
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets writes no
 /// JSON and leaves its own JSON alone. Its sets are not JSON sets: their DDS members have no job, so no slots.
 #[test]
 fn a_released_mod_of_dds_sets_writes_no_json() {
@@ -1375,7 +1375,7 @@ fn a_released_mod_of_dds_sets_writes_no_json() {
     assert_eq!(std::fs::read(&src).unwrap(), bytes);
 }
 
-/// Note F?2 guard (passes before and after; the set count needs the engine fix): added DDS sets add no entry to
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): added DDS sets add no entry to
 /// Tessalith's own JSON.
 #[test]
 fn a_tessalith_json_gains_no_entry_without_a_change() {
@@ -1406,7 +1406,7 @@ fn a_tessalith_json_gains_no_entry_without_a_change() {
     );
 }
 
-/// Note F?2 guard: a PNG PBR set with nothing to re-export keeps its entry.
+/// Note FI2 guard: a PNG PBR set with nothing to re-export keeps its entry.
 #[test]
 fn an_up_to_date_png_set_keeps_its_json_entry() {
     let d = tempfile::tempdir().unwrap();
@@ -1423,7 +1423,7 @@ fn an_up_to_date_png_set_keeps_its_json_entry() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
 }
 
-/// Note F?2 guard: a foreign PGPatcher JSON in the export folder is never listed or replaced.
+/// Note FI2 guard: a foreign PGPatcher JSON in the export folder is never listed or replaced.
 #[test]
 fn a_foreign_json_in_the_export_folder_is_kept() {
     let d = tempfile::tempdir().unwrap();

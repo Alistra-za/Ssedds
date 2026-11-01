@@ -142,7 +142,7 @@ fn nif_row(blocked: Option<&str>) -> sdc_gui::model::meshes::NifReviewRow {
     }
 }
 
-/// Note F?7 (4b, O5): a NIF edit waiting only for the export folder is listed under its own footer heading, not warned.
+/// Note FI7 (4b, O5): a NIF edit waiting only for the export folder is listed under its own footer heading, not warned.
 #[test]
 fn a_nif_edit_waiting_for_a_folder_is_listed_not_warned() {
     let d = tempfile::tempdir().unwrap();
@@ -161,7 +161,7 @@ fn a_nif_edit_waiting_for_a_folder_is_listed_not_warned() {
     h.get_by_label(&format!("Blockers ({blockers})"));
 }
 
-/// Note F?7 (4b): any other blocked reason stays a Warning (FC5).
+/// Note FI7 (4b): any other blocked reason stays a Warning (FC5).
 #[test]
 fn another_blocked_nif_reason_is_still_a_warning() {
     let d = tempfile::tempdir().unwrap();
@@ -300,7 +300,7 @@ fn accept_all_suggestions_is_off_when_no_texture_has_one() {
     h.get_by_label("No undecided texture has a suggestion");
 }
 
-/// Note F?11 (A11): an undecided texture that only asks its alpha meaning is not accepted here; the hover says why.
+/// Note FI11 (A11): an undecided texture that only asks its alpha meaning is not accepted here; the hover says why.
 #[test]
 fn accept_all_explains_an_alpha_proposal() {
     let d = tempfile::tempdir().unwrap();

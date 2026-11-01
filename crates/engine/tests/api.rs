@@ -1396,7 +1396,7 @@ fn set_resolved(ev: &[EngineEvent]) -> Vec<&EngineEvent> {
 
 #[test]
 fn an_all_dds_set_resolves() {
-    // Note F?2: a set with no image member still resolves, so the GUI lists it.
+    // Note FI2: a set with no image member still resolves, so the GUI lists it.
     let d = tempfile::tempdir().unwrap();
     let (plan, ev) = plan_rock(d.path(), &["rock.dds", "rock_n.dds"]);
     let sets = set_resolved(&ev);
@@ -1420,7 +1420,7 @@ fn an_all_dds_set_resolves() {
 
 #[test]
 fn a_mixed_set_resolves_once_as_before() {
-    // Note F?2 guard (Review Focus 1): a set with an image member resolves once, its pbr flag and pick unchanged.
+    // Note FI2 guard (Review Focus 1): a set with an image member resolves once, its pbr flag and pick unchanged.
     let d = tempfile::tempdir().unwrap();
     let (_, ev) = plan_rock(d.path(), &["rock.png", "rock_n.dds"]);
     let sets = set_resolved(&ev);

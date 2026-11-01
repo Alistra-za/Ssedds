@@ -712,7 +712,7 @@ fn enter_in_unsaved_dialog_cancels() {
     assert!(h.state().is_dirty(), "OpenUnsaved: the edits are kept");
 }
 
-/// Note F?4: the unsaved dialog names only the documents with unsaved changes.
+/// Note FI4: the unsaved dialog names only the documents with unsaved changes.
 #[test]
 fn the_unsaved_dialog_names_only_dirty_files() {
     let d = tempfile::tempdir().unwrap();

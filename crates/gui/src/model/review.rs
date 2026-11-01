@@ -838,7 +838,7 @@ impl AppModel {
     pub fn export_text(&self, clean: bool) -> String {
         // Final review M5: with no folder open there is no count to give ("Review 0 files" greeted a new user).
         if self.root.is_none() {
-            // Note F?18 (GH handoff item 3): pending NIF edits are counted as in F?7; there are no files to name.
+            // Note FI18 (GH handoff item 3): pending NIF edits are counted as in FI7; there are no files to name.
             return match self.nif_rows.len() {
                 0 => "Export".into(),
                 rows => format!("Review {}", nif_edits(rows)),
@@ -852,7 +852,7 @@ impl AppModel {
             if clean { "Export" } else { "Review" },
             plural(n)
         );
-        // Note F?7: `Review` writes nothing, so it counts every pending NIF edit; `Export` names only what it writes.
+        // Note FI7: `Review` writes nothing, so it counts every pending NIF edit; `Export` names only what it writes.
         if !clean && rows > 0 {
             t.push_str(&format!(" + {}", nif_edits(rows)));
         } else if clean && blocked > 0 {
@@ -875,7 +875,7 @@ impl AppModel {
         if self.also_on() {
             t.push_str(&format!(" to {} folders", self.also_folder_count()));
         }
-        // Note F?7 (rule 7.1): only the NIF edits this Export writes; a blocked one is skipped.
+        // Note FI7 (rule 7.1): only the NIF edits this Export writes; a blocked one is skipped.
         let blocked = self.nif_rows.iter().filter(|r| r.blocked.is_some()).count();
         let written = self.nif_rows.len() - blocked;
         if written > 0 {

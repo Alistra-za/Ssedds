@@ -667,7 +667,7 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
     edit
 }
 
-/// A row's hint, cut to the room left with the whole text on one tooltip (Note F?12, rule 3.4).
+/// A row's hint, cut to the room left with the whole text on one tooltip (Note FI12, rule 3.4).
 fn hint_label(ui: &mut egui::Ui, text: &str) {
     ui.add(
         egui::Label::new(egui::RichText::new(text).small().weak())
@@ -678,7 +678,7 @@ fn hint_label(ui: &mut egui::Ui, text: &str) {
 }
 
 /// The last cell of a field row: ↺ (when `edited`) is laid out first on the right, the hint takes what is left
-/// (Note F?12, rule 3.3), so the reset never leaves the panel. Returns true when ↺ is clicked.
+/// (Note FI12, rule 3.3), so the reset never leaves the panel. Returns true when ↺ is clicked.
 fn hint_and_reset(ui: &mut egui::Ui, edited: bool, hint: impl FnOnce(&mut egui::Ui)) -> bool {
     egui::Sides::new()
         .shrink_left()
@@ -1046,7 +1046,7 @@ fn dds_header_panel(
     if v.issues.is_empty() && matches!(v.patch, Ok(None)) {
         ui.label("Header: valid");
     }
-    // Note F?3 (A23): one plain line; the raw header fields are on hover (rule 4.5).
+    // Note FI3 (A23): one plain line; the raw header fields are on hover (rule 4.5).
     if !v.issues.is_empty() {
         let patch = if matches!(v.patch, Ok(Some(_))) {
             " Patch header… writes a copy with a fixed header."
@@ -1197,7 +1197,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
     let last = model.dds_patch.last_for(key).map(str::to_string);
     let export_folder_chosen = model.export_folder_chosen().is_some();
-    // Note F?3: why the re-encode button is off (read-only first), and whether it would write over its source.
+    // Note FI3: why the re-encode button is off (read-only first), and whether it would write over its source.
     let reencode_off = toml_read_only
         .clone()
         .or_else(|| model.reencode_blocker(key));
@@ -1219,7 +1219,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
-        // Note F?3: a DDS re-encoded by `sdc.toml` (it has a job, or failed at plan) offers the way back.
+        // Note FI3: a DDS re-encoded by `sdc.toml` (it has a job, or failed at plan) offers the way back.
         if reencoding {
             let r = ui
                 .add_enabled(
@@ -1299,7 +1299,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
                 ui.label(
                     "Already a DDS file: it is left as it is and not written to the export.",
                 );
-                // Note F?3: the S6 `reencode` selector from a button, not a hand edit.
+                // Note FI3: the S6 `reencode` selector from a button, not a hand edit.
                 let mut hover = String::from("Decode it and encode it again with this project's settings. Block-compressed files lose some quality.");
                 if into_source {
                     hover.push_str(" It cannot be written into the folder it comes from.");

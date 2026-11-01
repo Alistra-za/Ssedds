@@ -21,9 +21,9 @@ pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
     ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
 }
 
-/// What the export menu's button says with no project open (Note F?5, was Note FB1's "no folder chosen").
+/// What the export menu's button says with no project open (Note FI5, was Note FB1's "no folder chosen").
 const MORE_TEXT: &str = "More ▾";
-/// What it says with a project open and no export folder chosen for it (Note F?5).
+/// What it says with a project open and no export folder chosen for it (Note FI5).
 const NOT_CHOSEN_TEXT: &str = "Export to: not chosen ▾";
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
@@ -52,7 +52,7 @@ pub fn window_title(model: &AppModel) -> String {
         Some(r) => format!("{} — {}", crate::PRODUCT_NAME, r.display()),
         None => crate::PRODUCT_NAME.to_string(),
     };
-    // Note F?4: automatic types alone are not marked.
+    // Note FI4: automatic types alone are not marked.
     if model.prompts_unsaved() {
         t.push_str(" ●");
     }
@@ -95,7 +95,7 @@ fn row(
     open_menu(ui, model);
     undo_redo(ui, model);
     ui.separator();
-    // Note F?16: the Mode control is in the Presets tab; MO2… stands alone, where the app has a scan model.
+    // Note FI16: the Mode control is in the Presets tab; MO2… stands alone, where the app has a scan model.
     if let Some(m) = scan {
         fit(ui, button_width(ui, "MO2…") + ui.spacing().item_spacing.x);
         super::meshes::mo2_button(ui, m);
@@ -115,7 +115,7 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     let h = 2.0 * ui.spacing().interact_size.y;
     let save_w = button_width(ui, "Save");
     let glyph = button_width(ui, "0") - 2.0 * ui.spacing().button_padding.x;
-    // Note F?5: with a project open the menu reads `Export to: {folder} ▾` or `Export to: not chosen ▾`; with none it
+    // Note FI5: with a project open the menu reads `Export to: {folder} ▾` or `Export to: not chosen ▾`; with none it
     // is `More ▾` (the folder in `gui.toml` is not this project's, and nothing exports without a project).
     let full = model
         .root
@@ -599,7 +599,7 @@ pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>)
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     // A20: the NIF history while a NIF edit is open in the Meshes view.
     let nif = super::meshes::undo_target(ui.ctx());
-    // Note F?5 (A19): a fixed slot, so a long NIF step label never moves the controls after it. `Undo NIF edit` is the
+    // Note FI5 (A19): a fixed slot, so a long NIF step label never moves the controls after it. `Undo NIF edit` is the
     // widest text without a step (the Textures view draws `Undo` / `Redo`), so every no-step text fits whole.
     let slot = egui::vec2(
         button_width(ui, "Undo NIF edit").max(button_width(ui, "Redo NIF edit")),
@@ -758,7 +758,7 @@ pub fn meshes_view_active(ctx: &egui::Context) -> bool {
 }
 
 /// Export to ▾ (A4): `text` shows the folder cut in the middle; the hover and the accessible name keep all of it (K8).
-/// Without a chosen folder (`full` None) it is "Export to: not chosen ▾", or "More ▾" with no project (Note F?5). Entries: Choose export folder…, Open export folder
+/// Without a chosen folder (`full` None) it is "Export to: not chosen ▾", or "More ▾" with no project (Note FI5). Entries: Choose export folder…, Open export folder
 /// and, in cs mode, the PGPatcher JSON editor (R14).
 fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: Option<String>) {
     let mut choose = false;

@@ -1,5 +1,5 @@
 //! GUI tweaks G1, Note AO: the set header's input name box. A text box with gray Tab completion, path segment
-//! selection and lists (Note F?17) and a ▾ list of known paths. Drawing only; the change is
+//! selection and lists (Note FI17) and a ▾ list of known paths. Drawing only; the change is
 //! `AppModel::set_input_name`.
 use super::columns::{AMBER, RED};
 use super::path_picker;
@@ -68,14 +68,14 @@ struct Live {
     pressed: Option<(String, egui::Rect)>,
     /// A row pressed and released on: the focus loss that click causes commits it, not the typed text.
     clicked: Option<String>,
-    /// Note F?17: the segment list (Ctrl+Up/Down): the segment's index and its rows. While it shows it takes the live
+    /// Note FI17: the segment list (Ctrl+Up/Down): the segment's index and its rows. While it shows it takes the live
     /// list's place, `sel` and the row clicks.
     seg: Option<(usize, Vec<Choice>)>,
     /// `rows` were the segment list's: a click there names a segment, never a path to commit.
     seg_rows: bool,
 }
 
-/// Note F?17: the hint while a separator is highlighted by a first Backspace / Delete.
+/// Note FI17: the hint while a separator is highlighted by a first Backspace / Delete.
 fn separator_hint(text: &str, r: Option<CCursorRange>) -> Option<&'static str> {
     let r = r?;
     let (p, s) = (r.primary.index.0, r.secondary.index.0);
@@ -93,7 +93,7 @@ fn range(anchor: usize, head: usize) -> CCursorRange {
     CCursorRange::two(CCursor::new(anchor), CCursor::new(head))
 }
 
-/// Note F?17 (rules 4, 5): Backspace / Delete on a `/`. With no selection, a first press highlights the `/` and a second
+/// Note FI17 (rules 4, 5): Backspace / Delete on a `/`. With no selection, a first press highlights the `/` and a second
 /// (the `/` now selected) deletes it; a held key (repeat events) stops at it. Removes the events egui must not see and
 /// returns the new selection, if any. `r` is the box's selection before this frame's events.
 // shortcut: decided against the selection before the frame's events, so a frame holding two presses (a second one
@@ -225,7 +225,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
     if ui.available_size_before_wrap().x < MIN_W + CHROME {
         ui.end_row();
     }
-    // Note F?17 (rule 14): the known paths, folded, for the amber "no known texture" check (built once per list).
+    // Note FI17 (rule 14): the known paths, folded, for the amber "no known texture" check (built once per list).
     // Keyed by the list itself (held, so its address is never reused while cached).
     let known: Arc<HashSet<String>> = {
         let kid = egui::Id::new(("input-name-known", salt));
@@ -267,7 +267,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             st.store(&ctx, edit_id);
             ctx.request_repaint();
         };
-        // Note F?17: open the list for segment `k` of `t`, the current value highlighted (rule 13: when that value is
+        // Note FI17: open the list for segment `k` of `t`, the current value highlighted (rule 13: when that value is
         // not there, the closest names first and nothing highlighted).
         let open_segment = |live: &mut Live, t: &str, k: usize| {
             let old = t.split(['/', '\\']).nth(k).unwrap_or_default().to_string();
@@ -279,7 +279,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             live.seg = Some((k, choices));
         };
         if focused {
-            // Note F?17 (rule 6): Ctrl+Left / Ctrl+Right jump by segment; Shift extends.
+            // Note FI17 (rule 6): Ctrl+Left / Ctrl+Right jump by segment; Shift extends.
             for (k, left) in [(Key::ArrowLeft, true), (Key::ArrowRight, false)] {
                 // Ctrl+Shift first: a Ctrl pattern also matches with Shift held.
                 let shift = ui.input_mut(|i| i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, k));
@@ -299,7 +299,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                     set_range(if shift { range(r.secondary.index.0, to) } else { range(to, to) });
                 }
             }
-            // Note F?17 (rules 9, 10): Ctrl+Up / Ctrl+Down list the segment under the cursor; with all selected, the ▾ list.
+            // Note FI17 (rules 9, 10): Ctrl+Up / Ctrl+Down list the segment under the cursor; with all selected, the ▾ list.
             let ctrl_ud = ui.input_mut(|i| {
                 i.consume_key(Modifiers::CTRL, Key::ArrowDown) | i.consume_key(Modifiers::CTRL, Key::ArrowUp)
             });
@@ -313,13 +313,13 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                     open_segment(&mut live, &text, segment_index(&text, p));
                 }
             }
-            // Note F?17 (rules 4, 5).
+            // Note FI17 (rules 4, 5).
             if let Some(r) = separator_keys(ui, &text, state_range()) {
                 set_range(r);
             }
         }
         let seg_shown = focused && live.seg.is_some();
-        // Note F?17: a pick in the segment list replaces only that segment; a middle folder opens the next list.
+        // Note FI17: a pick in the segment list replaces only that segment; a middle folder opens the next list.
         let pick = |live: &mut Live, text: &mut String, c: &Choice| {
             let Some((k, _)) = live.seg.take() else { return };
             let (t, r) = replace_segment(text, k, &c.value);
@@ -424,7 +424,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         let want = width(&text) + ghost.as_deref().map_or(0.0, width) + 24.0;
         let box_w = want.min(room).clamp(MIN_W, 480.0);
         let mut commit = None;
-        // Note F?17 (rule 14): the last segment of a name that is no known texture is amber.
+        // Note FI17 (rule 14): the last segment of a name that is no known texture is amber.
         let mut layouter = |ui: &egui::Ui, b: &dyn egui::TextBuffer, _wrap: f32| {
             let t = b.as_str();
             let base = ui.visuals().widgets.inactive.text_color();
@@ -450,7 +450,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                     // As tall as the box was with BH13's lock track (2 + 2 pt).
                     .margin(egui::Margin { left: 4, right: 4, top: 2, bottom: 2 })
                     .layouter(&mut layouter)
-                    // Tab stays in the box while a ghost shows; Esc while a list shows (AO2, AO4, F?17).
+                    // Tab stays in the box while a ghost shows; Esc while a list shows (AO2, AO4, FI17).
                     .event_filter(egui::EventFilter {
                         tab: ghost.is_some(),
                         escape: shown || seg_shown,
@@ -469,7 +469,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 b.set_description(e.as_str());
             }
         });
-        // Note F?17 (rule 1): a double-click selects the segment under the pointer (egui selected its word).
+        // Note FI17 (rule 1): a double-click selects the segment under the pointer (egui selected its word).
         if r.double_clicked() {
             if let Some(p) = r.interact_pointer_pos() {
                 let c = out.galley.cursor_from_pos(p - out.galley_pos).index.0;
@@ -477,7 +477,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 set_range(range(s.start, s.end));
             }
         }
-        // Note F?17 (rule 2): a drag that crosses a `/` snaps to whole segments; Alt held keeps it per character. egui
+        // Note FI17 (rule 2): a drag that crosses a `/` snaps to whole segments; Alt held keeps it per character. egui
         // moves only the head while dragging, so the anchor is kept from the drag's start.
         if r.drag_started() {
             let a = out.state.cursor.char_range().map(|c| c.secondary.index.0);
@@ -515,7 +515,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 egui::StrokeKind::Outside,
             );
         }
-        // The box's hover: why the name is refused, the separator hint (F?17 rule 8) and the unknown-texture note (rule 14).
+        // The box's hover: why the name is refused, the separator hint (FI17 rule 8) and the unknown-texture note (rule 14).
         let hint = r
             .has_focus()
             .then(|| separator_hint(&text, out.state.cursor.char_range()))
@@ -535,14 +535,14 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         if r.has_focus() || r.changed() {
             ui.data_mut(|d| d.insert_temp(buf, (text.clone(), frame)));
         }
-        // AO4: the live list follows the text while the box has focus; F?17: under the folder before the last segment.
+        // AO4: the live list follows the text while the box has focus; FI17: under the folder before the last segment.
         let rows = if r.has_focus() || r.lost_focus() {
             live_rows(&paths, &text, segment_start(&text), LIVE_ROWS)
         } else {
             vec![]
         };
         if r.changed() {
-            // Typing closes the segment list and keeps the text (F?17 rule 13).
+            // Typing closes the segment list and keeps the text (FI17 rule 13).
             live.seg = None;
             live.open = true;
             live.sel = None;
@@ -560,7 +560,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             });
             ui.ctx().request_repaint();
         }
-        // Note F?17: a click on a segment row picks it (as Enter does): the box takes its focus back and commits nothing.
+        // Note FI17: a click on a segment row picks it (as Enter does): the box takes its focus back and commits nothing.
         let mut refocus = false;
         if live.seg.is_some() {
             if let Some(label) = live.clicked.take() {
@@ -603,7 +603,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         let seg_rows = live.seg.clone().filter(|_| has_focus);
         live.seg_rows = seg_rows.is_some();
         let live_open = has_focus && seg_rows.is_none() && live.open && !rows.is_empty();
-        // The separator hint (F?17 rule 4) heads the list under the box, so it never adds a header row.
+        // The separator hint (FI17 rule 4) heads the list under the box, so it never adds a header row.
         if live_open || seg_rows.is_some() || hint.is_some() {
             egui::Area::new(live_id.with("area"))
                 .fade_in(false)
@@ -705,7 +705,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             if slot == 1 && !all {
                 ui.label(egui::RichText::new(HEADING).strong());
                 ui.weak(format!("now: {current}"));
-                // Only paths under the folder before the last segment (F?17, was the path lock); opened by Ctrl+Up/Down
+                // Only paths under the folder before the last segment (FI17, was the path lock); opened by Ctrl+Up/Down
                 // on the whole text, every path (rule 10, ruling R2: a whole-name selection has no folder).
                 let full = ui.data(|d| d.get_temp::<bool>(full_id)).unwrap_or(false);
                 let cut = if full { 0 } else { segment_start(&text) };
@@ -719,7 +719,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                         .collect()
                 });
                 if under.is_empty() && !paths.is_empty() {
-                    // Note DO: the scan knows paths, just none under the folder (F?17: no path lock to move).
+                    // Note DO: the scan knows paths, just none under the folder (FI17: no path lock to move).
                     // Review fix: advice that works (the box reverts when ▾ takes its focus, so editing it first does not).
                     ui.weak(format!(
                         "No known paths under {pre}. In the box, Ctrl+Down on a folder lists the others; Ctrl+A then \
@@ -774,7 +774,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         if slot != chosen {
             model.set_match_slot(&v.id, slot);
         }
-        // Note F?17 (rule 10): Ctrl+Up/Down with the whole text selected opens this list unfiltered; a ▾ click, filtered.
+        // Note FI17 (rule 10): Ctrl+Up/Down with the whole text selected opens this list unfiltered; a ▾ click, filtered.
         let popup = egui::Popup::default_response_id(&menu.response);
         if open_menu {
             egui::Popup::open_id(ui.ctx(), popup);

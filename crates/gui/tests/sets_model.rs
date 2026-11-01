@@ -2063,7 +2063,7 @@ fn a_generated_p_fills_the_height_slot_until_a_real_p_replaces_it() {
         .any(|p| format!("{p:?}").contains("GEN-REPLACED")));
 }
 
-/// Note F?2: a set of DDS files is a set: listed, and "Not in a set" is about names only.
+/// Note FI2: a set of DDS files is a set: listed, and "Not in a set" is about names only.
 #[test]
 fn an_all_dds_folder_shows_its_set() {
     let d = tempfile::tempdir().unwrap();

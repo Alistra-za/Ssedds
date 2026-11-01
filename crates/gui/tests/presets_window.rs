@@ -285,7 +285,7 @@ fn the_families_show_in_order_with_their_hints() {
     assert!(van < glow && van < complex, "{glow} {complex}");
 }
 
-/// Note F?16: the Presets tab's project Mode row (the combo moved out of the header).
+/// Note FI16: the Presets tab's project Mode row (the combo moved out of the header).
 fn mode_name(target: &str) -> String {
     format!("Mode (this project): {target}")
 }

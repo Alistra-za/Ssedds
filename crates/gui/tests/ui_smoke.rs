@@ -1124,7 +1124,7 @@ fn the_header_shows_the_chosen_export_folder() {
     model.accept = engine::policy::AcceptSuggestions::None;
     model.open_folder(root);
     assert!(model.wait_idle(std::time::Duration::from_secs(60)));
-    // Note F?5 (amends FB1): "not chosen" (and no "not set") until a folder is chosen.
+    // Note FI5 (amends FB1): "not chosen" (and no "not set") until a folder is chosen.
     let mut h = harness(model);
     h.run();
     h.get_by_label("Export to: not chosen");

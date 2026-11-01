@@ -830,7 +830,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
         }
         p.sel = p.sel.min(last);
         p.moved |= up || down;
-        // Note F?8: an empty palette has no default row, so Enter never starts Export by chance.
+        // Note FI8: an empty palette has no default row, so Enter never starts Export by chance.
         let active = !p.query.trim().is_empty() || p.moved;
         if hits.is_empty() {
             ui.weak("Nothing matches.");

@@ -258,7 +258,7 @@ fn sized(width: f32, m: AppModel) -> H {
     h
 }
 
-/// Note F?12 (A9): a row's ↺ is laid out before its hint, so it stays inside the centre at every width with the
+/// Note FI12 (A9): a row's ↺ is laid out before its hint, so it stays inside the centre at every width with the
 /// drawer open (the kittest stands in for screenshots at 1100, 1280 and 1600 px).
 #[test]
 fn the_reset_button_stays_on_the_panel() {

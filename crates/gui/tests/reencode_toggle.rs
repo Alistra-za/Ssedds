@@ -1,4 +1,4 @@
-//! Note F?3: a DDS input is re-encoded from a button (texture panel, bulk panel), which writes the S6 `reencode`
+//! Note FI3: a DDS input is re-encoded from a button (texture panel, bulk panel), which writes the S6 `reencode`
 //! selector; the panel says a skipped DDS is not written, and its header issues read in words.
 mod support;
 use eframe::egui;
@@ -88,7 +88,7 @@ fn reencode_button_writes_the_selector() {
         "the selector and the FC1 type it caused: {t}"
     );
     assert!(has_job(h.state(), "a.dds"), "a re-encoded DDS has a job");
-    // Note F?3: the plan's FC1 recording joined the re-encode: one step, one Undo, one Redo.
+    // Note FI3: the plan's FC1 recording joined the re-encode: one step, one Undo, one Redo.
     assert_eq!(h.state().history.undo.len(), steps + 1, "one undo step");
     assert_eq!(h.state().undo_label(), Some("Re-encode 1 DDS file"));
     h.state_mut().undo();
@@ -284,7 +284,7 @@ fn reencode_into_its_own_folder_is_a_failed_row() {
     );
 }
 
-/// Note F?2 follow-up: re-encoding the diffuse of an all-DDS PBR set makes it a full PBR set with its JSON entry.
+/// Note FI2 follow-up: re-encoding the diffuse of an all-DDS PBR set makes it a full PBR set with its JSON entry.
 #[test]
 fn reencoding_a_member_of_an_all_dds_set_makes_it_a_pbr_set() {
     use sdc_gui::model::pbr_export::json_entries;

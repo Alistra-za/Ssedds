@@ -50,7 +50,7 @@ fn a_card_right_click_locks_and_unlocks_the_slot() {
     assert!(!h.state().slot_locked(SET, 6));
 }
 
-/// Note F?11 fix round 1 (A15): a vanilla set's Slot commands name its slots as the Meshes tab does, never `RMAOS`.
+/// Note FI11 fix round 1 (A15): a vanilla set's Slot commands name its slots as the Meshes tab does, never `RMAOS`.
 #[test]
 fn a_vanilla_sets_slot_commands_use_vanilla_names() {
     let d = tempfile::tempdir().unwrap();
@@ -86,7 +86,7 @@ fn slot_names_follow_the_set_editors_cards() {
 const PIN: &str = "Pin this slot (always use this file)";
 const KEEP: &str = "Keep the original texture (PGPatcher won't replace it)";
 
-/// Note F?11 (D14): the slot menu says what pinning and the PGPatcher lock do; the terms ride on hover.
+/// Note FI11 (D14): the slot menu says what pinning and the PGPatcher lock do; the terms ride on hover.
 #[test]
 fn the_slot_menu_says_pin_and_keep_in_words() {
     let d = tempfile::tempdir().unwrap();

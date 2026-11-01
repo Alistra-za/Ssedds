@@ -135,7 +135,7 @@ fn auto_accepted_types_are_recorded_and_undoable() {
     assert!(!m.can_redo());
 }
 
-/// Note F?11 (A17, D15): the row's hover names files and types in words and explains High confidence.
+/// Note FI11 (A17, D15): the row's hover names files and types in words and explains High confidence.
 #[test]
 fn the_automatic_row_explains_high_confidence() {
     let d = tempfile::tempdir().unwrap();
@@ -461,7 +461,7 @@ fn choose_preset_opens_the_preset_menu() {
     assert!(h.state().choose_preset.is_none(), "the request was taken");
 }
 
-// ---- Note F?4 (owner O1 (b)): an automatic-only state never asks; a user edit does.
+// ---- Note FI4 (owner O1 (b)): an automatic-only state never asks; a user edit does.
 
 const THREE: [&str; 3] = ["a/x_n.png", "a/y_n.png", "a/z_n.png"];
 
@@ -567,7 +567,7 @@ fn a_user_edit_after_the_recording_asks_and_saves_both() {
     assert_eq!(saved_types(&root), 3, "{t}");
 }
 
-/// Note F?3: the recording a re-encode causes joins the user's step, so the state is a user edit and asks.
+/// Note FI3: the recording a re-encode causes joins the user's step, so the state is a user edit and asks.
 #[test]
 fn a_reencode_and_its_recording_ask_on_close() {
     let d = tempfile::tempdir().unwrap();

@@ -88,7 +88,7 @@ pub struct View {
     pub switch: bool,
     /// The 3D panel shows this set: the slot rows are left out, the TruePBR settings stay.
     pub three_d: bool,
-    /// The editor was not what the centre showed last frame: open at the top (Note F?6).
+    /// The editor was not what the centre showed last frame: open at the top (Note FI6).
     pub to_top: bool,
 }
 

@@ -1,4 +1,4 @@
-//! Note F?3: re-encoding a DDS input from the texture or bulk panel. Each edit writes the S6 `reencode` selector
+//! Note FI3: re-encoding a DDS input from the texture or bulk panel. Each edit writes the S6 `reencode` selector
 //! of the files' own `[files]` entries in `sdc.toml` as one undo step, then plans again.
 use super::items::TextureItem;
 use super::AppModel;

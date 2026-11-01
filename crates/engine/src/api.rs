@@ -2236,7 +2236,7 @@ impl Engine {
                 .members
                 .iter()
                 .find(|&&i| files[i].kind == InputKind::Image)
-                // Note F?2: an all-DDS set resolves too; `first` only feeds `is_pbr_set`'s game path.
+                // Note FI2: an all-DDS set resolves too; `first` only feeds `is_pbr_set`'s game path.
                 .or_else(|| set.members.first())
             else {
                 continue;

@@ -74,7 +74,7 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
             ui.label(format!("Exporting: {line}"));
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
-        // Note F?14 (rule 1.7): no counts of nothing before an export.
+        // Note FI14 (rule 1.7): no counts of nothing before an export.
         if !model.export.rows.is_empty() {
             ui.label(format!(
                 "{converted} converted, {up_to_date} up to date, {skipped} skipped, {failed} failed, \

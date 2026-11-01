@@ -37,7 +37,7 @@ pub struct Palette {
     /// The search field takes the focus on the frame the palette opens.
     pub focus: bool,
     /// An arrow key moved the highlight since the query last changed. With an empty query nothing is highlighted
-    /// and Enter does nothing until then (Note F?8).
+    /// and Enter does nothing until then (Note FI8).
     pub moved: bool,
 }
 

@@ -270,7 +270,7 @@ fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
     h.get_by_label(&full);
 }
 
-/// Note F?5: at 1100, 1280 and 1600 px the export chip (`not chosen`, or a long folder cut in the middle) stays on the
+/// Note FI5: at 1100, 1280 and 1600 px the export chip (`not chosen`, or a long folder cut in the middle) stays on the
 /// row, before Save and inside the window, and nothing overlaps (the capture check of the plan's Task 5, as a test).
 #[test]
 fn the_export_chip_holds_at_three_widths() {
@@ -303,7 +303,7 @@ fn the_export_chip_holds_at_three_widths() {
     }
 }
 
-/// Note F?16 (owner O7): the Mode control left the header for the Presets tab; the Preset menu stays. Plus the plan's
+/// Note FI16 (owner O7): the Mode control left the header for the Presets tab; the Preset menu stays. Plus the plan's
 /// capture check as a test: at 1100, 1280 and 1600 px nothing overlaps and MO2… stands in the row.
 #[test]
 fn the_header_has_no_mode_control() {
@@ -466,7 +466,7 @@ fn the_meshes_header_never_overlaps() {
 /// The 3D view's height under this row (at least 72 % of the centre at 1024×768) is checked by
 /// `set_preview_layout::in_3d_the_viewport_takes_most_of_the_centre`.
 /// Note AO: the set header's input name box and its ▾ never overlap each other or run off the window, and the box keeps
-/// at least 160 pt (Note F?17: the box holds the whole path; there is no locked folder label).
+/// at least 160 pt (Note FI17: the box holds the whole path; there is no locked folder label).
 #[test]
 fn the_set_header_input_name_box_never_overlaps() {
     let d = tempfile::tempdir().unwrap();

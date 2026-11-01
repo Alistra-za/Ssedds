@@ -105,7 +105,7 @@ fn a_card_shows_name_pill_and_a_full_width_shader() {
     let kind = on_card(&h, "PBR Landscape");
     assert_eq!(kind.len(), 1, "the kind text");
     let (name, kind) = (name_rect(&h), kind[0].rect());
-    // Note F?13: the heading is one row only when the name keeps 80 px beside the pill and badges. rock01's pill and
+    // Note FI13: the heading is one row only when the name keeps 80 px beside the pill and badges. rock01's pill and
     // two badges do not leave that at the default width, so the pill is on the row below; either way the name is whole.
     assert!(
         name.width() >= 80.0 && (kind.min.y > name.max.y || kind.min.x > name.max.x),

@@ -1049,7 +1049,7 @@ pub(super) fn bulk_menu(
         let r = ui.add_enabled(e.disabled.is_none(), egui::Button::new(&e.label));
         let r = match &e.disabled {
             Some(why) => r.on_disabled_hover_text(why),
-            // Note F?11 (D14): the label is in words; the term and the key ride on hover.
+            // Note FI11 (D14): the label is in words; the term and the key ride on hover.
             None => match &e.action {
                 MenuAction::SlotLock { .. } => {
                     r.on_hover_text("Pinned slots refuse other files (sdc.toml pin)")

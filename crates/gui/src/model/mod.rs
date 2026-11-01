@@ -413,9 +413,9 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
-    /// Note F?15: the opened folder's output game paths and their revision (see `output_game_paths`).
+    /// Note FI15: the opened folder's output game paths and their revision (see `output_game_paths`).
     game_paths: (u64, Vec<String>),
-    /// Note F?1: skipped DDS inputs' tile images by path, with the stamp they were decoded at; cleared on open and
+    /// Note FI1: skipped DDS inputs' tile images by path, with the stamp they were decoded at; cleared on open and
     /// reload.
     dds_thumbs: std::collections::HashMap<PathBuf, (SourceStamp, Arc<Thumbnail>)>,
     /// The DDS tile images asked for and not landed yet (no second request while one is out; the repaint gate).
@@ -555,7 +555,7 @@ pub struct AppModel {
     /// Note FC8 (CP10): a BC7 weighting pick whose own value may have hidden an inherited one: (item key, pick, the
     /// pick's history merge key). The settled plan checks it and completes the pick in the same step.
     weighting_follow: Option<(String, String, String)>,
-    /// Note F?3: a re-encode step's history merge key; the FC1 recording its settled plan makes joins that step.
+    /// Note FI3: a re-encode step's history merge key; the FC1 recording its settled plan makes joins that step.
     reencode_follow: Option<String>,
     /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
     pub(crate) gen_ids: u64,
@@ -957,7 +957,7 @@ impl AppModel {
         self.sizes.clear_folder();
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
-        // Note F?1: the previous folder's DDS tile images.
+        // Note FI1: the previous folder's DDS tile images.
         self.dds_thumbs.clear();
         self.dds_thumbs_asked.clear();
         self.drawer_epoch += 1;
@@ -1430,7 +1430,7 @@ impl AppModel {
                 msg => self.handle(msg),
             }
         }
-        // Note F?1: one invalidation for every DDS tile image of this poll (the tile cache keys on the revision).
+        // Note FI1: one invalidation for every DDS tile image of this poll (the tile cache keys on the revision).
         if thumbs_landed {
             self.invalidate_views();
         }
@@ -2033,7 +2033,7 @@ impl AppModel {
     pub fn check_sources(&mut self) -> usize {
         // A hand edit of a clean `sdc.toml` is simply taken (nothing to lose): the next plan reads it. With unsaved
         // edits the save dialog still asks (audit 2026-10-14 finding 3). Automatic types alone are recorded again
-        // (Note F?4).
+        // (Note FI4).
         let hand_edited = self.project.as_ref().is_some_and(|p| {
             (!p.is_dirty() || self.only_automatic_unsaved()) && p.changed_on_disk()
         });
@@ -2095,7 +2095,7 @@ impl AppModel {
 
     /// Plan again after sources changed on disk; the session cache reloads only the changed files.
     pub fn reload_changed(&mut self) {
-        // Note F?1: the DDS tile images are read again with the reload.
+        // Note FI1: the DDS tile images are read again with the reload.
         self.dds_thumbs.clear();
         self.dds_thumbs_asked.clear();
         self.replan();
@@ -2508,7 +2508,7 @@ impl AppModel {
         self.refresh_mesh_votes(true);
     }
 
-    /// Note F?1: a DDS tile with no image takes the cached one when its stamp matches; the rest are decoded on one
+    /// Note FI1: a DDS tile with no image takes the cached one when its stamp matches; the rest are decoded on one
     /// worker (none asked twice while out).
     fn request_dds_thumbs(&mut self) {
         let mut ask = vec![];
@@ -2533,7 +2533,7 @@ impl AppModel {
         spawn_dds_thumbs(self.tx.clone(), ask, session.bc1_model());
     }
 
-    /// Note F?1: a DDS tile image landed. True when an item took it (the caller invalidates the views once). An
+    /// Note FI1: a DDS tile image landed. True when an item took it (the caller invalidates the views once). An
     /// error stores nothing: the tile stays grey and the preview gives the reason.
     fn dds_thumb_landed(
         &mut self,
@@ -2562,7 +2562,7 @@ impl AppModel {
         took
     }
 
-    /// Note F?1: DDS tile images are still being decoded (the window keeps polling).
+    /// Note FI1: DDS tile images are still being decoded (the window keeps polling).
     pub fn dds_thumbs_pending(&self) -> bool {
         !self.dds_thumbs_asked.is_empty()
     }
@@ -2644,7 +2644,7 @@ impl AppModel {
         self.items_rev
     }
 
-    /// Note F?15: every item's output game path (a skipped DDS included), from its `textures/` component on, with
+    /// Note FI15: every item's output game path (a skipped DDS included), from its `textures/` component on, with
     /// `/`, lowercased by the engine's output-key fold (equal to the ASCII fold for ASCII paths), sorted and
     /// deduplicated; paths with no `textures/` component are left out. The `u64` changes only when the list does,
     /// so the Meshes view can key a cache on it.
@@ -2988,7 +2988,7 @@ impl AppModel {
         Some(UNDO_NOTE_FOR.saturating_sub(now.saturating_duration_since(at)))
     }
 
-    /// "1 texture, 1 set" / "3 textures, 2 sets" (Note F?14).
+    /// "1 texture, 1 set" / "3 textures, 2 sets" (Note FI14).
     fn counts_line(&self) -> String {
         let pl = |n: usize| if n == 1 { "" } else { "s" };
         let (t, s) = (self.items.len(), self.sets.len());
@@ -3538,7 +3538,7 @@ impl AppModel {
                 .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
     }
 
-    /// Note F?4 (owner O1 (b)): the only unsaved change is FC1's automatic recording, still the top step. It neither
+    /// Note FI4 (owner O1 (b)): the only unsaved change is FC1's automatic recording, still the top step. It neither
     /// asks on close, open or reload nor marks the title; Save stays live and writes it.
     /// shortcut: a user edit followed by its Undo leaves `pushes` advanced, so that state prompts although the text
     /// equals the automatic state; compare the document with the recording's snapshot if users report it.
@@ -3553,7 +3553,7 @@ impl AppModel {
             && self.tentative_edits().is_none()
     }
 
-    /// Unsaved changes the close, open and reload dialogs ask about: a user's, not only automatic ones (Note F?4).
+    /// Unsaved changes the close, open and reload dialogs ask about: a user's, not only automatic ones (Note FI4).
     pub fn prompts_unsaved(&self) -> bool {
         self.is_dirty() && !self.only_automatic_unsaved()
     }
@@ -3570,7 +3570,7 @@ impl AppModel {
     /// The unsaved documents as `(file, text)`, for the panic hook's recovery files (Note AR).
     pub fn recovery_snapshot(&self) -> Vec<(std::path::PathBuf, String)> {
         let mut out = vec![];
-        // Note F?4: automatic types alone are recorded again on the next plan, so a restore never offers them.
+        // Note FI4: automatic types alone are recorded again on the next plan, so a restore never offers them.
         let only_auto = self.only_automatic_unsaved();
         if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty() && !only_auto) {
             out.push((p.path().to_path_buf(), p.text()));
