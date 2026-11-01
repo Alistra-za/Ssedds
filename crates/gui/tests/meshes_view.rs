@@ -1867,24 +1867,31 @@ fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
     m.nifs = Arc::new(vec![nif(7, "meshes/x.nif")]);
     let mut h = harness(m);
     h.run();
-    // No mesh selected: disabled.
+    // Note GH4: the column is titled for what it lists; no mesh selected: the toggle is plain `Shapes` and disabled.
+    h.get_by_label("NIFs");
+    assert!(h.query_by_label("Meshes").is_none(), "the view tab's name");
     assert!(h.get_by_label("Shapes").accesskit_node().is_disabled());
     h.state_mut().selected_nif = Some(7);
     h.state_mut().shapes = vec![shape(vec![None])];
     h.run();
+    h.get_by_label("NIFs");
+    assert!(
+        h.query_by_label("Shapes").is_none(),
+        "the toggle names the file"
+    );
     assert_eq!(
         h.query_all_by_label("x.nif").count() + h.query_all_by_label("meshes/x.nif").count(),
         2,
         "heading and list row"
     );
-    h.get_by_label("Shapes").click();
+    h.get_by_label("Shapes of x.nif").click();
     h.run();
     assert!(h.state().shapes_col);
     h.get_by_label_contains("#0 Body");
     assert_eq!(h.query_all_by_label("x.nif").count(), 1, "heading only");
     // The detail pane has no Shapes | 3D selector any more.
     assert!(h.query_by_label("3D").is_none());
-    h.get_by_label("Shapes").click();
+    h.get_by_label("Shapes of x.nif").click();
     h.run();
     assert_eq!(
         h.query_all_by_label("x.nif").count() + h.query_all_by_label("meshes/x.nif").count(),
@@ -1940,8 +1947,13 @@ fn shader_line_is_the_bare_type_name_and_slots_are_indented() {
     assert!(h.query_by_label_contains("Lighting:").is_none());
     h.get_by_label("Environment Map (1)");
     let head = h.get_by_label_contains("#0 Body").rect().min.x;
-    let slot = h.get_by_label_contains("slot 0").rect().min.x;
+    let slot = h.get_by_label_contains("slot 1").rect().min.x;
     assert!(slot > head + 4.0, "slot x {slot} vs header x {head}");
+    // Note GH7: slots count from 1 like the set editor; the NIF's own index is on hover.
+    assert!(h.query_by_label_contains("slot 0").is_none());
+    h.get_by_label_contains("slot 1").hover();
+    h.run();
+    h.get_by_label_contains("NIF texture index 0");
 }
 
 #[test]
@@ -2151,4 +2163,330 @@ fn the_path_filter_folds_ascii_only_like_stored_paths() {
     assert_eq!(*m.visible_nifs(), [0]);
     m.search = "éclair".into();
     assert!(m.visible_nifs().is_empty(), "É and é are different paths");
+}
+
+// ---- Note GH3 (review D9): the This project pill ----
+
+#[path = "../../nif/tests/builder/mod.rs"]
+mod builder;
+
+/// An instance with `modlist` and the NIF `files` (data path, bytes; `None` is the skinned fixture), scanned.
+fn scan_files(
+    modlist: &str,
+    files: &[(&str, Option<Vec<u8>>)],
+) -> (tempfile::TempDir, MeshesModel) {
+    let d = instance(modlist);
+    for (rel, bytes) in files {
+        put(d.path(), rel, bytes.as_deref());
+    }
+    let mut m = scan_model(d.path().join("scan.db"));
+    m.activate_with(None);
+    m.use_instance(d.path().to_path_buf(), "Default".into());
+    start_scan(&mut m);
+    wait(&mut m);
+    assert_eq!(m.error, None);
+    (d, m)
+}
+
+/// A (2 NIFs) and B, which overrides A's rock.nif and has a NIF of its own.
+fn project_mods() -> (tempfile::TempDir, MeshesModel) {
+    scan_files(
+        "+B\n+A\n",
+        &[
+            ("mods/A/meshes/rock.nif", None),
+            ("mods/A/meshes/tree/oak.nif", None),
+            ("mods/B/meshes/rock.nif", None),
+            ("mods/B/meshes/bonly.nif", None),
+        ],
+    )
+}
+
+/// Three NIFs in A: one naming `textures\xmead\ale_bc.dds` (the review's PBR-redirect case), one `xmead\ale_bc.dds`
+/// (no `textures\` prefix) and one `textures\other\ale_bc.dds`.
+fn project_textures() -> (tempfile::TempDir, MeshesModel) {
+    let set = |p: &str| Some(builder::scenes::one_shape_set(&[p]));
+    scan_files(
+        "+A\n",
+        &[
+            ("mods/A/meshes/ale.nif", set("textures\\xmead\\ale_bc.dds")),
+            ("mods/A/meshes/ale2.nif", set("xmead\\ale_bc.dds")),
+            (
+                "mods/A/meshes/other.nif",
+                set("textures\\other\\ale_bc.dds"),
+            ),
+        ],
+    )
+}
+
+/// Note GH3 (N3 test 1): the opened folder is mod A: `This project 2` comes first, on, and lists both of A's NIFs;
+/// rock.nif, which B wins, shows `A` with `wins: B` on hover; B's own NIF is hidden.
+#[test]
+fn this_project_lists_the_opened_mods_nifs_and_names_the_winner_on_hover() {
+    let (d, mut m) = project_mods();
+    m.set_project_root(Some(&d.path().join("mods").join("A")));
+    wait_project(&mut m);
+    assert!(m.project_on, "on the first time the project opens");
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/rock.nif", "B"), row("meshes/tree/oak.nif", "A")]
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2");
+    let first = h.query_all_by_role(Role::Button).find_map(|n| {
+        let l = n.accesskit_node().label().unwrap_or_default();
+        let chips = [
+            "This project",
+            "All",
+            "Overridden",
+            "Conflicted",
+            "Problems",
+        ];
+        chips.iter().any(|c| l.starts_with(c)).then_some(l)
+    });
+    assert_eq!(
+        first.as_deref(),
+        Some("This project 2"),
+        "first in the chip row"
+    );
+    h.get_by_label_contains("2 of 3 NIFs");
+    assert!(h.query_by_label("meshes/bonly.nif").is_none());
+    let cells: Vec<_> = h.query_all_by_label("A").collect();
+    assert_eq!(cells.len(), 2, "both rows name the project mod");
+    assert!(h.query_by_label("B").is_none(), "not the winner's name");
+    cells[0].hover();
+    h.run();
+    h.get_by_label("wins: B");
+    // Off, the list is the whole instance again and the winner's name is back.
+    h.get_by_role_and_label(Role::Button, "This project 2")
+        .click();
+    h.run();
+    assert!(!h.state().project_on);
+    h.get_by_label_contains("3 of 3 NIFs");
+    assert_eq!(
+        h.query_all_by_label("B").count(),
+        2,
+        "rock.nif and bonly.nif"
+    );
+}
+
+/// Note GH3 (N3 test 2, Review Focus 2; owner O11 (a)): the opened folder is not a mod: the pill counts the NIFs that
+/// name one of its output paths, PBR-folded and with a missing `textures\` added; an unchanged `rev` builds nothing;
+/// paths no NIF names show no pill and cut nothing.
+#[test]
+fn outside_mods_this_project_lists_the_nifs_that_use_the_folders_textures() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    let paths = ["textures/pbr/xmead/ale_bc.dds".to_string()];
+    m.set_project_textures(1, &paths);
+    wait_project(&mut m);
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/ale.nif", "A"), row("meshes/ale2.nif", "A")]
+    );
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2");
+    h.get_by_label_contains("2 of 3 NIFs");
+    assert!(h.query_by_label("meshes/other.nif").is_none());
+    let builds = h.state().project_builds;
+    h.state_mut().set_project_textures(1, &paths);
+    h.state_mut()
+        .set_project_root(Some(&d.path().join("plain")));
+    h.run_steps(3);
+    assert_eq!(
+        h.state().project_builds,
+        builds,
+        "the same rev builds nothing"
+    );
+    h.state_mut()
+        .set_project_textures(2, &["textures/none.dds".to_string()]);
+    wait_project(h.state_mut());
+    h.run_steps(3);
+    assert!(h.state().project_builds > builds, "a new rev builds");
+    assert!(h.query_by_label_contains("This project").is_none());
+    h.get_by_label_contains("3 of 3 NIFs");
+}
+
+/// Note GH3 (N3 test 3, Review Focus 3; rule 6.1): turning the pill on while the selected NIF is outside the project
+/// keeps the selection and says it is hidden; the pill is on by default only the first time a project opens.
+#[test]
+fn this_project_never_deselects_and_is_on_by_default_once_per_project() {
+    let (d, mut m) = project_textures();
+    let plain = d.path().join("plain");
+    m.set_project_root(Some(&plain));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    wait_project(&mut m);
+    m.project_on = false;
+    m.search = "other".into();
+    let first = m.visible_nifs()[0];
+    let other = m.nif_at(first).0.copy_id;
+    m.select_nif(other);
+    m.search.clear();
+    let mut h = harness(m);
+    h.run();
+    h.get_by_role_and_label(Role::Button, "This project 2")
+        .click();
+    h.run();
+    assert!(h.state().project_on);
+    h.get_by_label("2 of 3 NIFs (the selected NIF is hidden by the filters)");
+    assert_eq!(h.state().selected_nif, Some(other));
+    assert!(!h.state().shapes.is_empty(), "its details stay");
+    // Off again, then the project closed and reopened: it stays off; a project not opened before starts on.
+    h.state_mut().project_on = false;
+    h.state_mut().set_project_root(None);
+    h.state_mut().set_project_root(Some(&plain));
+    assert!(
+        !h.state().project_on,
+        "a project opened before keeps its pill"
+    );
+    h.state_mut()
+        .set_project_root(Some(&d.path().join("plain2")));
+    assert!(h.state().project_on, "a new project starts on");
+}
+
+/// Starts the pill's read for the current inputs and polls until it lands.
+fn wait_project(m: &mut MeshesModel) {
+    let t = Instant::now();
+    m.project_nifs();
+    while m.project_reading() {
+        assert!(
+            t.elapsed() < Duration::from_secs(60),
+            "the project read did not land"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        m.poll();
+    }
+}
+
+/// Note GH3 fix round 1: the pill's store read runs on a worker. Until its answer for the current inputs lands there
+/// is no pill (no partial count) and nothing is cut; an answer for an older `rev` is dropped.
+#[test]
+fn the_project_read_lands_after_polling_and_an_older_revs_answer_is_dropped() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    assert!(m.project_nifs().is_none(), "no pill before the read lands");
+    assert!(m.project_reading());
+    assert_eq!(m.visible_nifs().len(), 3, "nothing is cut while it reads");
+    wait_project(&mut m);
+    assert_eq!(m.project_nifs().map(|(_, n)| n.len()), Some(2));
+    assert_eq!(m.visible_nifs().len(), 2);
+    // Rev 2 names nothing; rev 3 names ale again. Rev 2's read starts, rev 3 replaces it before any poll.
+    m.set_project_textures(2, &["textures/none.dds".to_string()]);
+    assert!(m.project_nifs().is_none());
+    m.set_project_textures(3, &["textures/other/ale_bc.dds".to_string()]);
+    assert!(
+        m.project_nifs().is_none(),
+        "the old rev's answer is not shown"
+    );
+    wait_project(&mut m);
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/other.nif", "A")],
+        "rev 3's answer, not rev 1's or rev 2's"
+    );
+}
+
+/// Note GH3 fix round 2: at most one pill read runs at a time. Three key changes while a read is held start nothing;
+/// when it ends its answer is dropped and only the newest key's read starts (the keys in between never do).
+#[test]
+fn one_project_read_runs_at_a_time_and_only_the_newest_key_starts_next() {
+    use std::sync::atomic::Ordering;
+    let (d, mut m) = project_textures();
+    let gate = Arc::new(std::sync::Mutex::new(()));
+    let held = gate.lock().unwrap();
+    m.project_gate = Some(gate.clone());
+    m.set_project_root(Some(&d.path().join("plain")));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    assert!(m.project_nifs().is_none());
+    assert_eq!(m.project_alive.load(Ordering::SeqCst), 1);
+    for (rev, p) in [
+        (2, "textures/none.dds"),
+        (3, "textures/none2.dds"),
+        (4, "textures/other/ale_bc.dds"),
+    ] {
+        m.set_project_textures(rev, &[p.to_string()]);
+        assert!(
+            m.project_nifs().is_none(),
+            "rev {rev}: no pill while a read runs"
+        );
+        m.poll();
+        assert_eq!(
+            m.project_alive.load(Ordering::SeqCst),
+            1,
+            "rev {rev}: one worker"
+        );
+    }
+    assert_eq!(
+        m.project_started,
+        [Some(1)],
+        "nothing starts while rev 1's read is held"
+    );
+    drop(held);
+    wait_project(&mut m);
+    assert_eq!(
+        m.project_started,
+        [Some(1), Some(4)],
+        "revs 2 and 3 never start"
+    );
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/other.nif", "A")],
+        "rev 4's answer"
+    );
+    assert_eq!(m.project_alive.load(Ordering::SeqCst), 0);
+}
+
+/// Final review Minor 3: the start record is a test hook; reads without a gate (production) leave it empty.
+#[test]
+fn ungated_project_reads_record_no_starts() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    for rev in 1..=3 {
+        m.set_project_textures(rev, &[format!("textures/pbr/xmead/ale{rev}_bc.dds")]);
+        wait_project(&mut m);
+    }
+    assert!(m.project_started.is_empty(), "{:?}", m.project_started);
+}
+
+/// Note GH3 fix round 1: the pill's on/off is kept per project root: A off, then B, then A again keeps A off.
+#[test]
+fn the_pill_state_is_kept_per_project_root() {
+    let mut m = MeshesModel::empty();
+    let (a, b) = (Path::new("C:\\proj\\A"), Path::new("C:\\proj\\B"));
+    m.set_project_root(Some(a));
+    assert!(m.project_on);
+    m.project_on = false;
+    m.set_project_root(Some(b));
+    assert!(m.project_on, "B opens for the first time: on");
+    m.set_project_root(Some(a));
+    assert!(!m.project_on, "A keeps its own off");
+    m.set_project_root(Some(b));
+    assert!(m.project_on, "B keeps its own on");
+}
+
+/// Note GH3 fix round 1: the `wins: {winner}` hover reads the path's winner, not the shown copy's mod: with the pill
+/// on and A picked (or the Overridden chip), A's losing rock.nif still says B wins.
+#[test]
+fn the_winner_hover_shows_for_the_project_mods_own_losing_copy() {
+    for picked in [true, false] {
+        let (d, mut m) = project_mods();
+        m.set_project_root(Some(&d.path().join("mods").join("A")));
+        wait_project(&mut m);
+        if picked {
+            let a = m.mods.iter().find(|r| r.name == "A").unwrap().id;
+            m.select_mod(a);
+        } else {
+            m.filter = NifFilter::Overridden;
+        }
+        let first = rows_of(&mut m).remove(0);
+        assert_eq!(first, row("meshes/rock.nif", "A"), "picked {picked}");
+        let mut h = harness(m);
+        h.run();
+        let cell = h.query_all_by_label("A").next().unwrap();
+        cell.hover();
+        h.run();
+        h.get_by_label("wins: B");
+    }
 }

@@ -34,7 +34,6 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - Use at most one target dir per active worktree, or one shared `CARGO_TARGET_DIR`. Never give each subagent its own.
 - Check free space before a full gate, and stop below ~20 GB.
 - Delete a worktree's target dir before removing the worktree.
-- `cargo clean` also needs `--target x86_64-pc-windows-msvc`, or it misses the real build folder.
 
 ## Hard rules
 - **Goldens are byte-identical.** Encoded output must not change unless a DECISIONS note says why. If a golden would change, stop and say so.
@@ -48,9 +47,10 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - **Schemas:** after adding a code, shader or config field, regenerate with `sdc presets schema all --out schema` and commit only real diffs. A `///` doc comment on an enum variant turns that schema into `oneOf`, so use `//` there.
 
 ## How work is recorded
-- **Every judgement call becomes a ruling in `docs/DECISIONS.md`.** Append a new `## Note XX — <topic> (<who>, <date>)` at the end with the next free letters. Number the items XX1, XX2, and so on.
-- **Note letters are split by team (owner, 2026-10-28).** The main team uses the F block (FA, FB, ... FZ), then H, J and so on; the NIF team uses G, then I, K and so on. Each team takes the next free letter in its own block, so the two never collide. Parallel branches of one team can still collide: pick the next free letter in your block as it stands on `main` at merge time, and rename the note if it's taken. A merge must leave no duplicate headings. Check with `grep -oE '^## Note [A-Z]+' docs/DECISIONS.md | sort | uniq -d`, which must print nothing.
-- **Older notes are history:** don't rewrite them. Add a pointer when a new note supersedes one.
+- **Every judgement call becomes a ruling in `.claude/DECISIONS.md`.** Append a new `## Note XX — <topic> (<who>, <date>)` at the end with the next free letters. Number the items XX1, XX2, and so on.
+- **Note letters are split by team (owner, 2026-10-28).** The main team uses the F block (FA, FB, ... FZ), then H, J and so on; the NIF team uses G, then I, K and so on. Each team takes the next free letter in its own block, so the two never collide. Parallel branches of one team can still collide: pick the next free letter in your block as it stands on `main` at merge time, and rename the note if it's taken. A letter is free only when neither `.claude/DECISIONS.md` nor `.claude/DECISIONS-ARCHIVE.md` uses it. A merge must leave no duplicate headings in either file. Check each with `grep -oE '^## Note [A-Z]+' <file> | sort | uniq -d`, which must print nothing.
+- **DECISIONS.md holds live rulings only.** A fully reverted or superseded ruling moves verbatim to `.claude/DECISIONS-ARCHIVE.md` under its original ID; a partly superseded item is edited to the current rule and its old wording archived. IDs are never reused. Archived rulings are not in force: don't cite them. Details: `docs/DOCUMENTATION.md` §7.
+- **Documentation follows `docs/DOCUMENTATION.md`:** current state only (history goes in CHANGELOG.md), one home per fact (at most two mentions, three if essential, full explanation once), page size budget, generated screenshots refreshed with a difference overlay before a push. Read it before editing README.md, docs/wiki, docs/gui.md, the plugin pages or DECISIONS.md.
 - **Behaviour recorded as a ruling is intended.** Don't "fix" it without a new ruling.
 - **A comment starting `shortcut:`** marks a known limit, and says when to upgrade it.
 
@@ -59,25 +59,29 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - Commit explicit paths. Never `git add -A`.
 - Bug fixes start with a failing test. Make one commit per fix.
 - Merges into `main` are local. The owner pushes.
-- When two branches both append a note to `docs/DECISIONS.md`, keep both.
+- When two branches both append a note to `.claude/DECISIONS.md`, keep both.
+- Temporary files go in `.claude/scratch/` (gitignored; delete your own when done), never loose in the repo root or `crates/`.
 - **Every commit builds.** Don't split a shared-file registration from the code that uses it.
 - **Review conflicted merges.** After a merge that resolved conflicts, check it with `git show --remerge-diff <merge>`.
 
 ## Gotchas
-- **`SetsDoc` / `ProjectDoc` (GUI documents):** mutate first, then call `touch()`. `entries()` is cached by revision, so a mutation without `touch()` serves stale data (Note BI).
 - **Path case folding:** game-path keys (meshes, scan, BSA) fold ASCII only, while set ids and `[files]` keys fold Unicode (Note BF).
-- **Targets:** only `cs` and `vanilla`. The `cpm` target was removed and is now a hard error (Note AZ).
-- **Normal maps:** plain `_normal` / `_nrm` / `_norm` default to DirectX green, and `_normalgl` flips (Note AW).
-- **Untracking files:** merging a branch that stops tracking files (`git rm --cached`) deletes those files from the other checkout's disk. Back them up first.
-- **Line endings:** files are CRLF in the working copy (autocrlf). LF-to-CRLF warnings on commit are harmless. Never mass-normalise line endings.
-- **egui kittest:** a viewport that never goes idle (a spinner, the 3D view) needs `run_steps(n)`, not `run()`.
+
+## Mistakes log
+- Before you start, read `.claude/mistakes/<section>.md` for the area you work in, and `.claude/mistakes/general.md`. The sections are the section table of `.claude/workflows/trace-debug.js` (E1–E6, G1–G7, S1, S2, R1–R4), as lower-case file names.
+- When something goes wrong that the next agent would repeat, append one line: `- YYYY-MM-DD <what went wrong> → <what to do instead> (<where: file or command>)`. `.claude/mistakes/README.md` has the rules.
 
 ## Where things are
-- `docs/DECISIONS.md`: every ruling. Search it before changing behaviour.
-- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
+- `.claude/DECISIONS.md`: every live ruling. Search it before changing behaviour; it is too large to read whole. `.claude/DECISIONS-ARCHIVE.md`: superseded rulings, for history only.
+- `docs/DOCUMENTATION.md`: the documentation policy (what goes where, repetition limits, screenshots).
+- `docs/wiki/`: user-facing behaviour; the GUI pages are `docs/wiki/GUI-*.md` (`docs/gui.md` is a link to them). Update them when the UI changes, following `docs/DOCUMENTATION.md`. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
 - `docs/research/`: the measurements behind encoder, mip-filter and coverage choices.
 - `.claude/workflows/trace-debug.js`: a whole-repo bug hunt with skeptical review.
 - `.claude/workflows/quality-audit.js`: a whole-repo quality pass (dead code, efficiency, duplication, architecture, test gaps, shortcut debt) with skeptical checks, a delete list and refactor briefs. It uses the same section table as trace-debug.
 - `.claude/workflows/in-game-capture.js`: launch the game through MO2, take RenderDoc captures of test meshes without a keyboard, restore settings, and turn the captures into numbers.
 - `.claude/workflows/golden-capture.js` (NIF team): Phase D golden captures with a CS settings profile (A, B, A_DC). Usage and plan format are in its header comment. File work lives in `golden-capture-lib.mjs`; run `node .claude/workflows/golden-capture.test.mjs` for the offline test (no game launch).
 - `tools/package-release.ps1`: builds the release zip and SHA256SUMS.
+- `tools/doc-shots.ps1`: re-renders the documentation screenshots and writes a difference overlay for each changed one (run before a push).
+- `tools/doc-dupes.py`: finds facts repeated across the user-facing docs (one home per fact); `--lost` lists what an edit dropped.
+- `tools/doc-markers.ps1`: checks the hidden `<!-- D:ID -->` ruling markers in the user-facing docs (run before a push; `-SelfTest`).
+- `tools/decisions-archive.py`: moves superseded rulings from DECISIONS.md to DECISIONS-ARCHIVE.md from a `tools/decisions-archive/<date>.tsv` table (`--apply`, `--check --base <commit>`).

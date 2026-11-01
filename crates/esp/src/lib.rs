@@ -1,9 +1,11 @@
 //! Targeted Skyrim SE plugin reader (esp scanner spec §2.1): one plugin's bytes → the facts sdc needs (TXSTs, model
 //! paths with alternate textures, TXST references, direct texture paths). Unwanted top-level groups are skipped by
 //! size; nothing is ever written. Layouts: xEdit `wbDefinitionsTES5.pas` / `wbDefinitionsCommon.pas` (dev-4.1.6).
+pub mod mato;
 mod read;
 mod records;
 
+pub use mato::{mato_data, MatoData};
 pub use read::parse;
 
 /// TES4 header flags.

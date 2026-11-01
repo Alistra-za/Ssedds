@@ -155,7 +155,7 @@ impl AppModel {
     }
 
     /// Note CI29 / P16: where NIF edits go, handed to the Meshes model every frame by `app.rs`: `output_root()` when
-    /// an export folder is chosen for the project, else `None` (the CI3 fallback; Note FB1: never `<root>\sdc-out`).
+    /// an export folder is chosen for the project, else `None` (no fallback mod, Note GD5; Note FB1: never `<root>\sdc-out`).
     pub fn nif_export_root(&self) -> Option<PathBuf> {
         self.export_folder_chosen().map(|_| self.output_root())
     }

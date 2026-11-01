@@ -100,6 +100,24 @@ pub fn default_for(reg: u32, shader_type: u32, pbr: bool) -> [u8; 4] {
     }
 }
 
+/// The MATO layer's global textures (Note GG): register and canonical path (Lighting.hlsl:459, 479, 485, 488).
+pub const PROJECTED: [(u32, &str); 4] = [
+    (3, "textures/effects/projecteddiffuse.dds"),
+    (8, "textures/effects/projectednormal.dds"),
+    (10, "textures/effects/projectednormaldetail.dds"),
+    (11, "textures/effects/projectednoise.dds"),
+];
+
+/// Fallback of a [`PROJECTED`] register whose texture is not in the load order: t3 diffuse white, t8/t10 flat
+/// normal, t11 noise mid grey. Only for shapes the layer applies to; the others keep [`default_for`].
+pub fn projected_default(reg: u32) -> [u8; 4] {
+    match reg {
+        3 => [255, 255, 255, 255],
+        8 | 10 => [128, 128, 255, 255],
+        _ => [128, 128, 128, 255],
+    }
+}
+
 /// CS skin extra map (RFAOS, bound at t71) candidates of a FaceGen (4) or FaceGen RGB tint (5) shape, in lookup
 /// order (owner rule = pre-October CS `Skin.cpp:451-512`, 02-skin-rfaos.md §0): the canonical slot 7 `…_s.dds`, then
 /// slot 1 `…_n.dds` / `…_msn.dds`, each with that suffix replaced by `_rfaos.dds`. The first one the resolver
@@ -284,6 +302,26 @@ pub fn default_srv(
             srv_from(gpu, &b.into(), &d)
         }
     }
+}
+
+/// Immutable `w × h` RGBA32F 2D SRV, one mip, from `texels` (4 floats per texel, row by row).
+pub fn rgba32f_srv(
+    gpu: &Gpu,
+    w: u32,
+    h: u32,
+    texels: &[f32],
+) -> Result<ID3D11ShaderResourceView, String> {
+    if texels.len() != (w * h * 4) as usize {
+        return Err(format!("{w}x{h} RGBA32F needs {} floats", w * h * 4));
+    }
+    let init = D3D11_SUBRESOURCE_DATA {
+        pSysMem: texels.as_ptr() as _,
+        SysMemPitch: w * 16,
+        SysMemSlicePitch: w * h * 16,
+    };
+    let fmt = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    let t = create_texture(gpu, &tex_desc(w, h, 1, 1, fmt), &[init])?;
+    srv_from(gpu, &t.into(), &view_2d(fmt, 1))
 }
 
 /// Largest cube side accepted (D3D11's maximum cube dimension).

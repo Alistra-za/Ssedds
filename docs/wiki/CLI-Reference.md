@@ -28,7 +28,7 @@ Human-readable output from `convert` goes to stderr. The result verbs (`inspect`
 | `--preset-file <file>` | none | Load a preset file without selecting it, for example one that declares suffix aliases. Repeatable. Loading an id that is already loaded is an error. |
 | `--config <file>` | `sdc.toml` in the first input folder | The project config file. |
 | `--set <override>` | none | Override a profile field. Repeatable. See [--set syntax](#--set-syntax). |
-| `--fill ROLE=VALUE` | none | Fill value (0 to 255) for a packed channel that has no source map. Roles: `roughness`, `metallic`, `ao`, `specular`, `glossiness`, `height`, `opacity`, `fuzz`. Repeatable. Same as `--set packing.fill.<role>=<value>`, applied after every `--set`. |
+| `--fill ROLE=VALUE` | none | Same as `--set packing.fill.<role>=<value>` ([roles](Project-Config-Fields.md#packing)), applied after every `--set`. Repeatable. |
 | `--accept-suggestions none\|high` | `none` | `high` accepts every High-confidence sub-type suggestion. High-confidence alpha suggestions apply either way. With `none`, a file whose sub-type is only suggested stays unresolved. |
 | `--allow <CODE>` | none | Acknowledge a blocking warning code for the whole batch. Repeatable. An unknown code is a usage error. |
 | `--json` | off | Write JSON Lines events to stdout. Human output stays on stderr. |
@@ -37,7 +37,7 @@ How the target is chosen, highest first: `--target`, then `target` in the projec
 
 How the preset is chosen, highest first: `--preset`, then `preset` in the project `sdc.toml`, then `preset` in the user config, then the default for the target: `cs-quality` or `vanilla-quality`.
 
-The user config is `%APPDATA%\sdc\config.toml`. User presets in `%APPDATA%\sdc\presets\*.toml` are always loaded. See [Presets and targets](Presets-and-Targets.md).
+The user config and the user presets are always loaded ([where they are](Installation.md#where-tessalith-keeps-its-files)). See [Presets and targets](Presets-and-Targets.md).
 
 ### Why `--accept-suggestions high` matters
 
@@ -64,7 +64,7 @@ Values are parsed as TOML literals (`true`, `127`, `0.5`); anything that is not 
 
 File globs:
 
-- Match case-insensitively against the file's game path (from the last `textures` folder), its path relative to the input folder, and, when the glob has no `/`, its file name alone.
+- Match like a rule's [`glob`](Project-Config.md#rules).
 - `*` does not cross `/`. Use `**` for any depth.
 - Since the glob may contain dots, the field is taken as the longest known field name at the end of the key.
 
@@ -112,7 +112,7 @@ Plans the batch, then encodes every file whose status is ready.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-o, --output <dir>` | `.\sdc-out` | Output root. Each output goes to `<output>\<path relative to the input folder>` with a `.dds` extension. The output root is never read as input. With `[export] also` in the project `sdc.toml`, the folder the PBR, Vanilla and CM folders go in (see below). |
+| `-o, --output <dir>` | `.\sdc-out` | Output root ([layout](Validation-and-Output.md#output-layout)). With `[export] also` in the project `sdc.toml`, the folder the PBR, Vanilla and CM folders go in (see below). |
 | `--jobs <n>` | `0` (all cores) | Worker threads. |
 | `--mem-budget <size>` | 50% of RAM | Memory budget for files in flight. Bytes, or a `G`/`M` suffix (binary): `8G`, `512M`. `0` is an error; leave the flag out for the default. |
 | `--on-existing if-changed\|skip\|overwrite` | `if-changed` | What to do when an output exists. See below. |
@@ -365,12 +365,12 @@ Exit codes: 0; 1 if a file is unreadable or refused; 2 if `--out-dir` would writ
 sdc cubemap-marker [--color <R,G,B>] [--roughness <0..1>] -o <file.dds>
 ```
 
-Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "reflect the live scene". The file is 152 bytes: a six-face RGBA8 cube with the colour on +X and every other face black. See [Cubemaps](Cubemaps.md#dynamic-marker).
+Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "reflect the live scene". The file is 152 bytes: a six-face RGBA8 cube with the colour on +X and every other face black. See [Cubemaps](Cubemap-Sources.md#dynamic-marker).
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--color <R,G,B>` | `0,0,0` | The reflection colour as raw code values, 0 to 255 each. Community Shaders reads it as `(code/255)^1.6`. |
-| `--roughness <0..1>` | none | Stored in alpha as `min(round(r × 255), 254)`. Left out, alpha is 255 and Community Shaders uses its defaults. |
+| `--color <R,G,B>` | `0,0,0` | The reflection colour as raw code values ([how they are read](Cubemap-Sources.md#dynamic-marker)). |
+| `--roughness <0..1>` | none | Stored in alpha ([how](Cubemap-Sources.md#dynamic-marker)). |
 | `-o`, `--out <file>` | required | The DDS file to write. |
 
 ```powershell

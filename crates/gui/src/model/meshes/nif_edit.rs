@@ -24,7 +24,7 @@ use nif::model::{read_model, NifModel, ShapeModel};
 use nif::props::LightingTrailer;
 use render3d::{ParsedNif, ShapeId};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -181,6 +181,9 @@ pub struct NifEdit {
     /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
     /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
     pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
+    /// Note GH1: on Edited source, the slot paths the simulation replaces on every shape naming them (empty In game
+    /// and before the JSON lands). `MeshesModel::poll` lists the missing ones apart.
+    pub pg_supplied: Vec<String>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
@@ -199,8 +202,7 @@ struct SimCache {
 }
 
 /// Under the toggle when `show_edit_preview` failed and a plain copy shows (fix F8).
-pub const EDIT_HIDDEN: &str =
-    "Your edit could not be shown. Switch to In game (simulated) or Edited source to retry.";
+pub const EDIT_HIDDEN: &str = "Your edit could not be shown. Switch to In game or Source to retry.";
 
 /// The open guard dialog: the block diff, whether Diff is showing it, and the hash of the file it was asked about
 /// (Overwrite applies only while the file still has it).
@@ -329,6 +331,17 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
     }
 }
 
+/// Note GH7: the name the form shows for texture-set slot `slot` (0-based, the NIF's index). A True PBR set uses the
+/// set editor's card names for PGPatcher slots 3 and 7; every other slot keeps [`edit_slot_label`]'s own name (the set
+/// editor names only the True PBR slots).
+pub fn edit_slot_shown(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) -> &'static str {
+    match slot {
+        2 if slsf2 & SLSF2_TRUE_PBR != 0 => "Emissive / Skin",
+        6 if slsf2 & SLSF2_TRUE_PBR != 0 => "Coat normal / Fuzz",
+        _ => edit_slot_label(shader_type, slsf1, slsf2, slot),
+    }
+}
+
 /// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
 pub fn field_label(f: Field) -> String {
     let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
@@ -382,7 +395,8 @@ pub fn op_label(op: &Op, m: &NifModel) -> String {
         Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => {
             (field_name(m, at.block, *field), at)
         }
-        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
+        // Note GH7: slots count from 1 like the set editor.
+        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {}", slot + 1), at),
         Op::SplitAlpha { at } => ("Split alpha".into(), at),
         Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
         Op::RemoveAlpha { at } => ("Remove alpha".into(), at),
@@ -707,6 +721,7 @@ impl NifEdit {
             sim_runs: 0,
             match_tests: 0,
             in_game: None,
+            pg_supplied: vec![],
             // a recovered autosave is saved into the folder with the next save or close
             unsaved: recovered,
             drag: None,
@@ -776,14 +791,16 @@ impl NifEdit {
         if let Some(why) = &self.retarget_error {
             return Some(why.clone());
         }
+        // Note GH5: nothing edited is the idle state with or without a folder, and wins over `apply_err` too (a reloaded
+        // source that stops parsing with no ops reads idle; `error` still says why).
+        if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
+            return Some(NO_EDITS.into());
+        }
         if self.edit_mod.as_os_str().is_empty() {
             return Some(NO_EXPORT_FOLDER.into());
         }
         if let Some(e) = &self.apply_err {
             return Some(e.clone());
-        }
-        if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
-            return Some(NO_EDITS.into());
         }
         let refused = self
             .outcomes
@@ -1476,6 +1493,32 @@ impl NifEdit {
         rows
     }
 
+    /// Note GH1: the edited slot paths that `rows` (the simulation) replaces with another path, minus any path a
+    /// shape or slot keeps as it is (that one is still loaded as named).
+    pub(super) fn supplied_by(
+        &self,
+        rows: &[(ShapeId, MaterialState, Vec<String>)],
+    ) -> Vec<String> {
+        let (mut replaced, mut kept) = (BTreeSet::new(), BTreeSet::new());
+        for s in &self.parsed.shapes {
+            let sim = rows.iter().find(|(id, ..)| *id == s.id).map(|(_, m, _)| m);
+            for (i, t) in s.material.slots.iter().enumerate() {
+                if t.norm.is_empty() {
+                    continue;
+                }
+                let by = sim
+                    .and_then(|m| m.slots.get(i))
+                    .map_or("", |q| q.norm.as_str());
+                if by.is_empty() || by == t.norm {
+                    kept.insert(t.norm.as_str());
+                } else {
+                    replaced.insert(t.norm.as_str());
+                }
+            }
+        }
+        replaced.difference(&kept).map(|p| p.to_string()).collect()
+    }
+
     /// In game before the JSON lands, or when it could not be read: every shape as edited, no line.
     pub fn plain_rows(&self) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
         self.parsed
@@ -1863,7 +1906,7 @@ fn slot_paths(p: &ParsedNif) -> Vec<(u32, Vec<String>)> {
 }
 
 /// The same folder, ignoring ASCII case, `/` versus `\` and a trailing separator (MO2 paths on Windows).
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     let norm = |p: &Path| {
         let s = p.to_string_lossy().replace('/', "\\");
         s.trim_end_matches('\\').to_ascii_lowercase()
@@ -1918,6 +1961,7 @@ impl MeshesModel {
                 self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
                 self.view_source = true;
+                self.refresh_in_game(); // Note GH1: starts the JSON read for the paths PGPatcher supplies
                 if let Some(c) = content {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;
@@ -2279,6 +2323,43 @@ impl MeshesModel {
     pub fn set_nif_answer(&mut self, path: &str, choice: GuardChoice, sha256: [u8; 32]) {
         self.nif_answers
             .insert(path.to_ascii_lowercase(), (choice, sha256));
+    }
+
+    /// Note GH9 (Q2, Q4): why the 3D view's `Export this NIF` is off, which is its hover; None = on. The row is the
+    /// same one Review lists, so its `blocked` text is the reason.
+    pub fn quick_export_block(&self) -> Option<String> {
+        if self.export_running {
+            return Some("An export is running".into());
+        }
+        if self.nif_export_root.is_none() {
+            return Some(NO_EXPORT_FOLDER.into());
+        }
+        match self.nif_review_rows().into_iter().next() {
+            Some(r) => r.blocked,
+            None => Some(NO_EDITS.into()),
+        }
+    }
+
+    /// Final review Minor 2: the click on `Export this NIF` opens Review instead of writing, because the file at the
+    /// export path is foreign and has no answer yet.
+    pub fn quick_export_asks(&self) -> bool {
+        self.nif_review_rows()
+            .iter()
+            .any(|r| r.foreign.is_some() && r.answer.is_none())
+    }
+
+    /// Note GH9 (Q3, Q5): writes the open edit's NIF alone, as Review's Export would. A file at the export path that
+    /// Tessalith did not write, with no Review answer that still matches it, is never overwritten: the click opens
+    /// Review on that row instead. The result waits in `quick_export_result` for the app.
+    pub fn quick_export(&mut self) {
+        if self.quick_export_block().is_some() {
+            return;
+        }
+        if self.quick_export_asks() {
+            self.open_review_request = true;
+            return;
+        }
+        self.quick_export_result = Some(self.export_nif_edits());
     }
 
     /// Note GD29: drops every Review answer, so each foreign row asks again. Review calls it when it closes and when

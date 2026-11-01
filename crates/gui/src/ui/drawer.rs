@@ -1,6 +1,6 @@
 //! The Files tab of the bottom panel (M3a spec 2.5, layout v2 A1): progress and the report of the last export, by file.
 //! Open export folder, Show in Explorer, the progress line with pace, and a virtualised Files list with filters.
-//! DECISIONS AG34-AG38. A file's warnings show on hover of its row (R9).
+//! DECISIONS AG34-AG37, CA16. A file's warnings show on hover of its row (R9).
 use crate::model::export::{cli_command, warning_line, FileFilter, FilesIndex, RowState};
 use crate::model::picker::{self, PickerKind, PickerPurpose, PickerSpec};
 use crate::model::shell::StatCache;

@@ -96,6 +96,19 @@ impl CbWriter {
         self.put(var, data.iter().map(|u| u.to_le_bytes()))
     }
 
+    /// ORs `bits` into the `uint` at `var` (a flag added after the field was written). False if not in this build.
+    pub fn or_u32(&mut self, var: &str, bits: u32) -> bool {
+        let Some(f) = self.resolve(var) else {
+            return false;
+        };
+        let at = f.off as usize;
+        if let Some(d) = self.data.get_mut(at..at + 4) {
+            let v = u32::from_le_bytes([d[0], d[1], d[2], d[3]]) | bits;
+            d.copy_from_slice(&v.to_le_bytes());
+        }
+        true
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.data
     }

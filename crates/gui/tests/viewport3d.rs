@@ -14,7 +14,9 @@ fn harness(v: Viewport3d) -> Harness<'static, Viewport3d> {
     let h = Harness::builder()
         .with_size(eframe::egui::vec2(1000.0, 700.0))
         .build_ui_state(
-            |ui, v: &mut Viewport3d| sdc_gui::ui::viewport3d::show(ui, v),
+            |ui, v: &mut Viewport3d| {
+                sdc_gui::ui::viewport3d::show(ui, v);
+            },
             v,
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");

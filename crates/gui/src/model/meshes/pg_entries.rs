@@ -343,6 +343,8 @@ impl MeshesModel {
         if let Some(e) = self.edit.as_ref().filter(|e| e.in_game.is_some()) {
             let before = e.materials();
             self.edit_changed(before);
+        } else if self.edit.is_some() {
+            self.refresh_in_game(); // Edited source: only `pg_supplied` changes (Note GH1)
         }
         true
     }
@@ -350,15 +352,21 @@ impl MeshesModel {
     /// v2 B8: `edit.in_game` for the side shown: computed while In game shows, None on Edited source. Until the JSON
     /// lands (or when it could not be read) each shape keeps its edited material with no line. Per change, never per
     /// frame (the clock is paused In game, F21); unchanged shapes reuse their cached row (fix F1).
+    /// Note GH1: Edited source reads the JSON and simulates too, for `pg_supplied` (the same cache, so a switch to In
+    /// game simulates nothing new).
     pub(super) fn refresh_in_game(&mut self) {
-        let show = !self.view_source && self.edit.as_ref().is_some_and(|e| !e.le_mesh);
-        if show {
+        let open = self.edit.as_ref().is_some_and(|e| !e.le_mesh);
+        if open {
             self.ensure_pg();
         }
+        let show = open && !self.view_source;
         let (store, rev) = (&self.store, self.scan_rev);
         let Some(e) = self.edit.as_mut() else { return };
+        e.pg_supplied.clear();
         if !show {
             e.in_game = None;
+        }
+        if !open {
             return;
         }
         // Unknown (a store error) counts as existing: an error must never show a false skip (as set_preview).
@@ -372,9 +380,13 @@ impl MeshesModel {
                 gen,
                 state: PgState::Done(Ok(files)),
                 ..
-            }) => e.in_game_materials(files, *gen, rev, &exists),
-            _ => e.plain_rows(),
+            }) => Some(e.in_game_materials(files, *gen, rev, &exists)),
+            _ => None,
         };
-        e.in_game = Some(rows);
+        if show {
+            e.in_game = Some(rows.unwrap_or_else(|| e.plain_rows()));
+        } else if let Some(rows) = rows {
+            e.pg_supplied = e.supplied_by(&rows);
+        }
     }
 }

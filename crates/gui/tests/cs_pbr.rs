@@ -708,3 +708,20 @@ fn adding_a_texture_set_block_keeps_float_colours() {
     );
     assert_eq!(e.settings["subsurface_color"], json!([0.5, 0.5, 0.5]));
 }
+
+/// A usable scan database is opened by the first read of a frame without a RefCell double borrow (the match on the
+/// cached store held its borrow while the `None` arm stored the new one).
+#[test]
+fn the_first_read_of_a_frame_opens_a_valid_scan_db() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(d.path());
+    let db = d.path().join("scan.db");
+    drop(modscan::store::Store::open(&db).unwrap());
+    m.scan_db = Some(db);
+    m.poll();
+    let r = m.scan_records().expect("an empty scan reads");
+    assert!(r.mato.is_empty() && r.txst.is_empty());
+    m.poll();
+    let key = set_key(&rock(&m)).unwrap();
+    assert!(m.scan_facts(&key).is_ok(), "a later frame opens it again");
+}

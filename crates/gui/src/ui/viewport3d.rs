@@ -12,7 +12,7 @@ use render3d::ShapeStatus;
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
-/// A missing texture's colour, as the frame shows it (AG76).
+/// A missing texture's colour, as the frame shows it (AU3).
 const MAGENTA: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
 /// The tallest the problem list above the frame gets; it scrolls past that.
 const PROBLEMS_MAX: f32 = 100.0;
@@ -74,8 +74,9 @@ fn gated(ui: &mut egui::Ui, v: &Viewport3d, b: egui::Button<'_>) -> bool {
 }
 
 /// The Meshes view's 3D panel (AG132): one toolbar line and the warnings above, the frame in all the height left,
-/// and the collapsed Details footer under it. The set preview composes the same parts (`ui::set_preview`).
-pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
+/// and the collapsed Details footer under it. The set preview composes the same parts (`ui::set_preview`). Returns the
+/// frame's response (None for an LE mesh, which draws none), for the Meshes view's right-click menu (Note GH9).
+pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) -> Option<egui::Response> {
     prelude(ui.ctx(), v);
     egui::Panel::top("meshes-3d-bar")
         .frame(egui::Frame::new())
@@ -89,13 +90,12 @@ pub fn show(ui: &mut egui::Ui, v: &mut Viewport3d) {
         .show(ui, |ui| {
             details_footer(ui, MESHES_DETAILS, |ui| details(ui, v))
         });
-    if !le_mesh(v) {
-        image(ui, v);
-    }
+    let resp = (!le_mesh(v)).then(|| image(ui, v));
     if v.busy() || v.clock.is_some_and(|c| c.playing) {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
     }
+    resp
 }
 
 /// The animation controls of the NIF edit preview (v2 B3): Play or Pause, Loop, Speed and the Time slider.
@@ -361,7 +361,7 @@ pub fn frame_cache_id(panel: &str) -> egui::Id {
 }
 
 /// The frame, sized to the space left; asks the model for a frame of that size (physical pixels).
-pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
+pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) -> egui::Response {
     let avail = ui.available_size();
     let size = egui::vec2(avail.x.max(1.0), avail.y.max(64.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
@@ -393,7 +393,7 @@ pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, egui::Color32::BLACK);
     let Some(frame) = v.frame.clone() else {
-        return;
+        return resp;
     };
     let id = frame_cache_id(v.panel);
     let cached: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
@@ -426,6 +426,7 @@ pub fn image(ui: &mut egui::Ui, v: &mut Viewport3d) {
         egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    resp
 }
 
 fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
@@ -480,6 +481,11 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                         }
                     }
                 });
+            }
+            // Note GH1: the Meshes view's NIF edit moves the paths PGPatcher supplies here, as one weak line.
+            if !r.supplied_textures.is_empty() {
+                ui.weak(super::meshes::pg_supplied_line(r.supplied_textures.len()))
+                    .on_hover_text(r.supplied_textures.join("\n"));
             }
         });
     if show.is_some() {

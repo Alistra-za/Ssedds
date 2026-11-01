@@ -9,13 +9,13 @@ A target says which renderer the textures are for. A preset is a named bundle of
 | Community Shaders | `cs` | Everything: TruePBR materials, Advanced skin, `_SRGB` tags on PBR colour maps, BC6H and RGBA16F for HDR data, every set shader. The default. |
 | Vanilla | `vanilla` | Bethesda shaders, plus the complex-material `_m` (environment, gloss, metal, height in one map) for a set whose shader is complex material, and complex grass. No `_SRGB`, no BC6H, no PBR. |
 
-Before the first release there was a third target, `cpm`. It is gone: a vanilla set with the complex material shader packs the same `_m`. `cpm` is an error in `--target`, `sdc.toml`, the user config, `--preset cpm-quality` and `base = "cpm-quality"`. A user preset file with `target = "cpm"` is skipped with a `CFG-PRESET-SKIPPED` warning that names `cpm`.
+Before the first release there was a third target, `cpm`. It is gone: a vanilla set with the complex material shader packs the same `_m`. <!-- D:AZ --> `cpm` is an error in `--target`, `sdc.toml`, the user config, `--preset cpm-quality` and `base = "cpm-quality"`. A user preset file with `target = "cpm"` is skipped with a `CFG-PRESET-SKIPPED` warning that names `cpm`.
 
 How the target is chosen, highest first:
 
 1. `--target` on the command line.
 2. `target` in the project `sdc.toml` (the GUI's Mode menu writes this).
-3. `target` in the user config, `%APPDATA%\sdc\config.toml`.
+3. `target` in the [user config](Project-Config.md).
 4. The selected preset's own `target`.
 5. `cs`.
 
@@ -62,11 +62,11 @@ Raw maps (`_roughness`, `_metallic`, `_ao` and so on) are packed differently per
 | `cs` | `_rfaos` (Advanced skin, when a fuzz source exists or the set's shader is Advanced Skin) | R roughness, G fuzz, B AO, A specular |
 | `cs` | `_p` | height |
 | `vanilla`, set shader complex material | `_m` | R environment, G gloss, B metallic, A height; built from any roughness, glossiness, metallic, height or `_orm` source |
-| `vanilla`, any other set | `_m` (BC4) | environment mask, built only when a metallic or specular source exists |
+| `vanilla`, any other set | `_m` (BC4) | environment mask ([when it is built](Texture-Packing.md#vanilla-any-other-set)) |
 
 Under vanilla, pick **Complex Material** as the set's shader (GUI) or pass `--set set:<id>.shader=complex_material` (CLI) to get the complex `_m` from raw maps. A set that already has a complex-material `_m` file picks the shader by itself, and that file is kept unless `packing.prefer = "raw"`.
 
-See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
+See [Texture types](Texture-Packing.md#packing-raw-maps) for the details.
 
 ### Set shaders per target
 
@@ -75,7 +75,7 @@ See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
 | `pbr`, `pbr_grass`, `pbr_landscape`, `advanced_skin` | yes | no |
 | `default`, `envmap`, `complex_material`, `glow`, `parallax`, `skin`, `hair`, `eye`, `multilayer`, `landscape`, `complex_grass` | yes | yes |
 
-A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Texture-Types.md#set-shaders).
+A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Set-Shaders.md#set-shaders).
 
 ## Built-in presets
 
@@ -164,7 +164,7 @@ rmaosultrahigh = "rmaos"
 
 The `[defaults]`, `[subtypes]` and `[[rules]]` tables take the same fields as `sdc.toml`; see the [field reference](Project-Config.md#field-reference).
 
-Inheritance: all `[defaults]` tables are applied from the oldest base to the child, then all `[subtypes]` tables from the oldest base to the child. Rules from every preset in the chain are considered, base first. Within a preset (or config), every rule that matches a file applies, in file order, each overriding only the fields it sets.
+Inheritance and rule order follow [How settings layer](Project-Config.md#how-settings-layer).
 
 ### Suffix aliases
 

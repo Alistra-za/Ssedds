@@ -1936,6 +1936,23 @@ impl AppModel {
                 if self.review.is_none() {
                     return;
                 }
+                // Note GH8: no project means no texture run (`start_export_pass` needs one): the NIF export is due now,
+                // and Review closes as `start_export_pass` closes it, keeping its NIF answers for that export.
+                if self.root.is_none() {
+                    match self.review_gate() {
+                        Ok(_) => {
+                            self.review = None;
+                            self.show_tab(bottom::BottomTab::Files);
+                            self.nif_export_due = true;
+                        }
+                        Err(why) => {
+                            self.status_line = format!("Export not started: {why}");
+                            self.messages
+                                .log(messages::Severity::Info, self.status_line.clone());
+                        }
+                    }
+                    return;
+                }
                 // Never on a stale plan, whoever calls: wait again for the plan or the scan read in flight.
                 if self.planning.is_some() || self.votes_pending.is_some() {
                     self.continue_after_plan = Some(how);
@@ -2267,7 +2284,7 @@ impl AppModel {
 
     /// Saves `sdc-project.toml` after a hash was recorded, unless it already held unsaved edits (set edits and
     /// Undo stay live while an export runs; Note BD2): those are the user's to save or discard, so the record waits
-    /// for the next Save. A stale on-disk record only makes the next export ask before overwriting.
+    /// for the next Save. The hash is also recorded at write time, so the next export does not ask (Note FC11).
     fn save_hash_record(&mut self, was_dirty: bool) {
         if self.save_record(was_dirty) {
             const NOTE: &str = "hash recorded; written with the next Save";
