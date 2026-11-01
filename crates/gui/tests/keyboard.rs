@@ -1,7 +1,7 @@
 //! Task 4 (items 5 and 19): one action list for the keys, the F1 shortcut sheet and the Ctrl+K command palette.
 mod support;
 use eframe::egui::{self, Key, Modifiers};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::nav::{rank, Pick, PALETTE_CAP};
 use sdc_gui::model::view::Channel;
@@ -706,4 +706,89 @@ fn grid_keys_wait_while_a_docked_view_is_in_front() {
     assert_eq!(h.state().1, None, "no grid action ran");
     assert!(h.state().0.selected_items().is_empty());
     assert_eq!(h.state().0.centre_front(), CentreTab::Presets);
+}
+
+/// Note F?8 (D8): the palette's result rows are the buttons whose name is "label   detail".
+fn palette_rows_selected(h: &Harness<'static, AppModel>) -> usize {
+    h.query_all_by_role(egui::accesskit::Role::Button)
+        .filter(|n| {
+            let a = n.accesskit_node();
+            a.label().is_some_and(|l| l.contains("   "))
+                && a.toggled() == Some(egui::accesskit::Toggled::True)
+        })
+        .count()
+}
+
+/// An opened folder with a texture selected, so that "Clear the selection" (the first empty-query row) is enabled
+/// and would show as a change.
+fn palette_app(d: &std::path::Path) -> Harness<'static, AppModel> {
+    let mut m = opened(d);
+    m.click_item("landscape/leaf.png", false, false);
+    let mut h = app_harness(m);
+    h.run();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::K);
+    h.run();
+    h.run();
+    assert!(h.state().nav.palette.is_some(), "Ctrl+K opens the palette");
+    h
+}
+
+#[test]
+fn enter_on_an_empty_palette_does_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = palette_app(d.path());
+    let before = h.state().selected_items().len();
+    assert_eq!(before, 1, "a texture is selected");
+    assert_eq!(
+        palette_rows_selected(&h),
+        0,
+        "an empty palette highlights no row"
+    );
+    h.key_press(Key::Enter);
+    h.run();
+    h.run();
+    assert!(h.state().nav.palette.is_some(), "the palette stays open");
+    assert_eq!(h.state().selected_items().len(), before, "no action ran");
+    assert!(
+        h.state().review.is_none() && h.state().dialog.is_none(),
+        "Export did not start"
+    );
+}
+
+#[test]
+fn enter_on_a_typed_query_runs_the_top_hit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = palette_app(d.path());
+    h.state_mut().nav.palette.as_mut().unwrap().query = "keyb".into();
+    h.run();
+    h.run();
+    assert_eq!(palette_rows_selected(&h), 1, "the top hit is highlighted");
+    h.key_press(Key::Enter);
+    h.run();
+    h.run();
+    assert!(h.state().nav.palette.is_none(), "Enter closes the palette");
+    assert!(h.state().nav.sheet, "and opens the shortcut sheet");
+}
+
+#[test]
+fn arrow_then_enter_runs_the_highlight() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = palette_app(d.path());
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(palette_rows_selected(&h), 1, "the arrow highlights a row");
+    h.key_press(Key::Enter);
+    h.run();
+    h.run();
+    assert!(h.state().nav.palette.is_none(), "Enter runs it and closes");
+    // The second row is Export, not the first row (Clear the selection).
+    assert_eq!(
+        h.state().selected_items().len(),
+        1,
+        "the first row did not run"
+    );
+    assert!(
+        h.state().review.is_some() || h.state().dialog.is_some(),
+        "the second row, Export, ran"
+    );
 }

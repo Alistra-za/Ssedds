@@ -749,6 +749,7 @@ fn sheet(ctx: &egui::Context, model: &mut AppModel) {
                         });
                 }
             });
+        ui.weak("Ctrl+K command palette: Enter runs the highlighted result once you type or move with the arrows.");
         close = ui.button("Close").clicked();
     });
     if close || k.cancel || k.enter {
@@ -817,6 +818,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
         });
         if r.changed() {
             p.sel = 0;
+            p.moved = false;
         }
         let hits = model.palette_hits(&p.query, &offered);
         let last = hits.len().saturating_sub(1);
@@ -827,6 +829,9 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
             p.sel = (p.sel + 1).min(last);
         }
         p.sel = p.sel.min(last);
+        p.moved |= up || down;
+        // Note F?8: an empty palette has no default row, so Enter never starts Export by chance.
+        let active = !p.query.trim().is_empty() || p.moved;
         if hits.is_empty() {
             ui.weak("Nothing matches.");
         }
@@ -838,8 +843,8 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
                 for i in range {
                     let h = &hits[i];
                     let text = format!("{}   {}", h.label, h.detail);
-                    let r = ui.selectable_label(i == p.sel, text);
-                    if i == p.sel && (up || down) {
+                    let r = ui.selectable_label(active && i == p.sel, text);
+                    if active && i == p.sel && (up || down) {
                         r.scroll_to_me(None);
                     }
                     if r.clicked() {
@@ -847,7 +852,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
                     }
                 }
             });
-        if enter {
+        if enter && active {
             chosen = chosen
                 .take()
                 .or_else(|| hits.get(p.sel).map(|h| h.pick.clone()));
