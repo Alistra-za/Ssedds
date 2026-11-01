@@ -347,6 +347,7 @@ impl eframe::App for SdcApp {
         self.sync_renderer();
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
+        self.meshes.set_project_root(self.model.root.as_deref());
         // Note GD5: an export folder change's lines about the open NIF edit go to Messages.
         for line in self.meshes.messages.drain(..) {
             self.model
@@ -365,9 +366,19 @@ impl eframe::App for SdcApp {
         if let Some((path, choice, sha)) = self.model.nif_answer_request.take() {
             self.meshes.set_nif_answer(&path, choice, sha);
         }
+        // Note GH9: the 3D view's menu reads these and leaves its click for the next frame.
+        self.meshes.export_running = self.model.export.running.is_some();
+        if std::mem::take(&mut self.meshes.pick_export_folder_request) {
+            self.model.pick_export_folder(&ctx);
+        }
+        let mut written = vec![];
         if self.model.take_nif_export_due() {
+            written.push(self.meshes.export_nif_edits());
+        }
+        written.extend(self.meshes.quick_export_result.take());
+        for r in written {
             // FC5 adds its own "NIF edits skipped: " prefix.
-            let r = self.meshes.export_nif_edits().map_err(|e| {
+            let r = r.map_err(|e| {
                 e.strip_prefix("NIF edits skipped: ")
                     .map_or(e.clone(), str::to_string)
             });

@@ -3,8 +3,9 @@
 //! `ui::viewport3d::show`. No logic beyond mapping input to model calls.
 use crate::model::set_preview::{
     badge_text, builtin_name, cap_text, count_text, followed_set, Candidates, EncState, MeshChoice,
-    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, GRASS_APPROX, JSON_WINS, MODE_LABEL_ENCODED,
-    MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, TILING, WAITS_FOR_EXPORT,
+    Outcome, Pick, PreviewMode, SetPreview, BUILTINS, GRASS_APPROX, JSON_WINS, MATO_HOVER,
+    MATO_TOGGLE, MODE_LABEL_ENCODED, MODE_LABEL_SOURCE, NEEDS_CS, NO_MATCH, OFF_FEATURES, TILING,
+    WAITS_FOR_EXPORT,
 };
 use crate::model::AppModel;
 use eframe::egui;
@@ -104,8 +105,15 @@ pub fn draw(ui: &mut egui::Ui, m: &mut AppModel, s: &mut SetPreview) {
                 } else {
                     mesh_picker(ui, s);
                 }
+                if s.mato_available() {
+                    mato_toggle(ui, s);
+                }
                 crate::ui::viewport3d::toolbar(ui, &mut s.v3);
             });
+            for line in s.mato_lines() {
+                ui.add(egui::Label::new(egui::RichText::new(&line).weak()).truncate())
+                    .on_hover_text(&line);
+            }
             if !simulated {
                 ui.colored_label(AMBER, NEEDS_CS);
             }
@@ -262,6 +270,18 @@ fn mode_toggle(ui: &mut egui::Ui, s: &mut SetPreview) {
     ui.radio_value(&mut mode, PreviewMode::Source, MODE_LABEL_SOURCE);
     if mode != s.mode() {
         s.set_mode(mode);
+    }
+}
+
+/// Note GG: the snow/ash layer of the followed set's `cs_mato` block, drawn over the PBR shapes. Session only.
+fn mato_toggle(ui: &mut egui::Ui, s: &mut SetPreview) {
+    let mut on = s.mato_layer;
+    if ui
+        .checkbox(&mut on, MATO_TOGGLE)
+        .on_hover_text(MATO_HOVER)
+        .changed()
+    {
+        s.set_mato_layer(on);
     }
 }
 

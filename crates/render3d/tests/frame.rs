@@ -130,10 +130,10 @@ fn resolved_fields_write_same_bytes_as_by_name() {
     let fv = feature_data(&CsSettings::default(), &Default::default(), true, false);
     for l in [layout(&names, 400), layout(&ns, 32)] {
         let mut by_name = CbWriter::new(&l);
-        write_material(&mut by_name, &m, &bound, true);
+        write_material(&mut by_name, &m, &bound, true, None);
         scene.write(&mut by_name, &view, &model, &fv);
         let mut resolved = CbWriter::new(&l);
-        write_material(&mut resolved, &m, &bound, true);
+        write_material(&mut resolved, &m, &bound, true, None);
         write_static(&mut resolved, &fv);
         let f = SceneFields::resolve(&resolved);
         assert!(f.write_lights(&mut resolved, &LightValues::new(&scene)));

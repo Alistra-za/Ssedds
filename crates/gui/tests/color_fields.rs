@@ -170,7 +170,9 @@ fn background_grey_renders_a_hex_box() {
     let mut h = Harness::builder()
         .with_size(eframe::egui::vec2(1000.0, 700.0))
         .build_ui_state(
-            |ui, v: &mut Viewport3d| sdc_gui::ui::viewport3d::show(ui, v),
+            |ui, v: &mut Viewport3d| {
+                sdc_gui::ui::viewport3d::show(ui, v);
+            },
             Viewport3d::with_state(V3State::NotFound),
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");

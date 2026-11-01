@@ -5,7 +5,8 @@ use nif::edit::validate::{new_errors, Level, Target, Warning};
 use nif::edit::{Op, Outcome};
 use nif::fields::Field;
 
-/// How a NIF row weighs: `Blocks` stops that NIF's export, `Info` is a note (hover and Messages only).
+/// How a NIF row weighs: `Blocks` stops that NIF's export, `Info` is a note that never blocks; Problems
+/// still lists it as an Info row with its tab's fix button (Note FC3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NifLevel {
     Blocks,

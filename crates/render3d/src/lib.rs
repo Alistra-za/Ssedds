@@ -8,6 +8,7 @@ pub mod cs_settings;
 pub mod debug;
 pub mod device;
 pub mod draw;
+pub mod glint_noise;
 pub mod golden;
 pub mod hdri;
 pub mod includes;
@@ -26,7 +27,9 @@ pub mod textures;
 pub use builtin::{builtin_mesh, Builtin};
 pub use composite::Composite;
 pub use debug::{Availability, DebugOutput};
-pub use material::{classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Pipe};
+pub use material::{
+    classify, pbr_bit_meaning, pbr_flags, Bound, EditKind, Glint, Pipe, ProjectedLayer,
+};
 pub use parse::{parse, ParsedNif, ParsedShape, ShapeId};
 pub use pool::{run_job, CompileDone, CompileJob, CompilePool};
 pub use replay::{load_fixture, Replay, ReplayOut};
@@ -37,7 +40,7 @@ use cs_settings::CsSettings;
 use device::{Gpu, Target};
 use draw::{cbuffers, create_program, FrameInputs, Program, ShapeDraw};
 use locate::Fingerprint;
-use material::{perm_material, pipe, write_material, write_skin_flags};
+use material::{perm_material, pipe, projected_eligible, write_material, write_skin_flags};
 use nif::material::MaterialState;
 use permutation::{defines, Defines, Stage};
 pub use scene::Background;
@@ -83,6 +86,9 @@ pub struct LoadReport {
     pub pending: usize,
     /// Texture paths (canonical `textures/…`) the resolver did not return; their registers get defaults.
     pub missing_textures: Vec<String>,
+    /// Paths the caller moved out of `missing_textures` because another tool supplies them at run time (the GUI's
+    /// NIF edit Source side: PGPatcher's JSON names a replacement, Note GH1). Never filled here; drawn the same.
+    pub supplied_textures: Vec<String>,
     /// Per-shape permutation compile errors (the shape is skipped, the others still draw).
     pub compile_errors: Vec<String>,
     /// Other per-shape problems: NIF scan/geometry errors, an invalid `Mesh`, unreadable DDS, GPU errors.
@@ -396,6 +402,16 @@ pub struct Renderer {
     env_builds: usize,
     /// Side of the env cube ([`hdri::ENV_SIZE`]; a test hook can make it invalid to fake a failed build).
     env_size: u32,
+    /// [`Renderer::set_projected_layer`]: the MATO layer every eligible shape compiles and writes. Not cleared by a load.
+    projected: Option<ProjectedLayer>,
+    /// The layer's textures that resolved, by register (bytes kept to re-upload on a new device).
+    projected_tex: Vec<(u32, Arc<[u8]>, textures::Texture)>,
+    /// [`Renderer::projected_missing`].
+    projected_missing: Vec<String>,
+    /// CS's glint noise map at t20 ([glint_noise]), uploaded on the first GLINT draw.
+    glint_noise: Option<ID3D11ShaderResourceView>,
+    /// The glint-noise failure was already logged ([glint_noise_or_fallback]).
+    glint_noise_logged: bool,
 }
 
 impl Renderer {
@@ -501,6 +517,11 @@ impl Renderer {
             env: None,
             env_builds: 0,
             env_size: hdri::ENV_SIZE,
+            projected: None,
+            projected_tex: vec![],
+            projected_missing: vec![],
+            glint_noise: None,
+            glint_noise_logged: false,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -666,7 +687,7 @@ impl Renderer {
                     &d.fields,
                     &s.material,
                 );
-                d.rewrite_material(&s.material, ll, &fv, fixed);
+                d.rewrite_material(&s.material, ll, &fv, fixed, self.projected.as_ref());
             }
         }
     }
@@ -689,6 +710,84 @@ impl Renderer {
         if !self.async_compile {
             self.settle();
         }
+    }
+
+    /// The CS PBR material-object (MATO) layer for every shape it applies to ([`material::projected_eligible`]; Note GG).
+    /// Some ↔ None, or glint Some ↔ None, is a permutation change: every shape through `begin_all`, the old draws
+    /// stay on screen while programs compile. Any other value change rewrites the cbuffers of every `Drawing` shape in
+    /// place, no compile. `textures` is asked for the four [`textures::PROJECTED`] paths only when the layer turns on;
+    /// a path it does not return, or bytes that are not a 2D DDS, shows its fallback ([`textures::projected_default`])
+    /// and is listed by [`Renderer::projected_missing`].
+    pub fn set_projected_layer(
+        &mut self,
+        layer: Option<ProjectedLayer>,
+        textures: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) {
+        let old = std::mem::replace(&mut self.projected, layer);
+        if self.projected.is_none() {
+            self.projected_tex.clear();
+            self.projected_missing.clear();
+        } else if old.is_none() {
+            for (reg, path) in textures::PROJECTED {
+                let t = textures(path).and_then(|b| {
+                    let t = textures::load_dds(&self.gpu, &b).ok()?;
+                    (t.kind == SrvKind::Tex2D).then(|| (reg, Arc::from(b), t))
+                });
+                match t {
+                    Some(t) => self.projected_tex.push(t),
+                    None => self.projected_missing.push(path.to_string()),
+                }
+            }
+        }
+        let shape = |l: &Option<ProjectedLayer>| l.as_ref().map(|l| l.glint.is_some());
+        if shape(&old) != shape(&self.projected) {
+            self.begin_all();
+        } else if old != self.projected {
+            self.rewrite_static();
+        }
+    }
+
+    /// The canonical paths of the projected textures the last [`Renderer::set_projected_layer`] could not resolve
+    /// (empty while the layer is off).
+    pub fn projected_missing(&self) -> Vec<String> {
+        self.projected_missing.clone()
+    }
+
+    /// The glint noise map, generated and uploaded once per device.
+    fn glint_noise_srv(&mut self) -> Result<ID3D11ShaderResourceView, String> {
+        if let Some(v) = &self.glint_noise {
+            return Ok(v.clone());
+        }
+        let s = glint_noise::SIZE;
+        let v = textures::rgba32f_srv(&self.gpu, s, s, &glint_noise::noise_map())
+            .map_err(|e| with_context("glint noise map", e))?;
+        self.glint_noise = Some(v.clone());
+        Ok(v)
+    }
+
+    /// The MATO layer's view at `reg` for a draw of `m`: its texture, else the register's fallback; `None` when the
+    /// layer is off, does not apply to `m`, or `reg` is not one of its registers.
+    fn projected_srv(
+        &mut self,
+        m: &MaterialState,
+        reg: u32,
+        kind: SrvKind,
+    ) -> Result<Option<ID3D11ShaderResourceView>, String> {
+        if self.projected.is_none()
+            || !projected_eligible(m)
+            || !textures::PROJECTED.iter().any(|(r, _)| *r == reg)
+        {
+            return Ok(None);
+        }
+        if let Some((.., t)) = self
+            .projected_tex
+            .iter()
+            .find(|(r, _, t)| *r == reg && t.kind == kind)
+        {
+            return Ok(Some(t.srv.clone()));
+        }
+        self.default_srv(kind, textures::projected_default(reg))
+            .map(Some)
     }
 
     /// Replaces the shaders (a moved or updated CS): the expansion memo and the device programs are dropped (`compiled` is content-addressed and stays valid). The loaded model still uses the old programs until the next [`Renderer::load`].
@@ -1062,8 +1161,21 @@ impl Renderer {
             }
         }
         let mut srvs = vec![];
-        for (_, reg, kind) in &program.ps.reflection.srvs {
+        for (srv_name, reg, kind) in &program.ps.reflection.srvs {
+            // Every GLINT permutation reads it (Glints2023.hlsli:230); a 1×1 default would give no glints.
+            if *reg == 20 && *kind == SrvKind::Tex2D && srv_name.ends_with("Glint2023NoiseMap") {
+                let r = self.glint_noise_srv();
+                if let Some(v) = glint_noise_or_fallback(r, &mut self.glint_noise_logged)? {
+                    srvs.push((20, v));
+                    continue;
+                }
+            }
             if let Some(v) = self.override_at(m, *reg, *kind) {
+                srvs.push((*reg, v));
+                continue;
+            }
+            // Not in `Bound`: no PBR flag or EnvmapData bit reads t3/t8/t10/t11.
+            if let Some(v) = self.projected_srv(m, *reg, *kind)? {
                 srvs.push((*reg, v));
                 continue;
             }
@@ -1144,7 +1256,7 @@ impl Renderer {
         let fields = program_fields(program);
         let fv = values_for(&self.settings, self.features_on, self.head_part, &fields, m);
         for cb in vs_cbs.iter_mut().chain(ps_cbs.iter_mut()) {
-            write_material(&mut cb.writer, m, &bound, ll);
+            write_material(&mut cb.writer, m, &bound, ll, self.projected.as_ref());
             scene::write_static(&mut cb.writer, &fv);
             write_skin_flags(&mut cb.writer, m, &bound);
         }
@@ -1176,7 +1288,10 @@ impl Renderer {
 
     /// The program `m` needs: both stage keys over the shared expansion of `Lighting.hlsl`.
     fn wanted(&self, m: &MaterialState) -> Result<Wanted, String> {
-        let pm = perm_material(m);
+        let mut pm = perm_material(m);
+        pm.projected = self.projected.is_some() && projected_eligible(m);
+        pm.projected_glint =
+            pm.projected && self.projected.as_ref().is_some_and(|l| l.glint.is_some());
         let old_ll = self.old_ll();
         // Old LL: ENABLE_LL is the shader's own alias of the cbuffer flag (Color.hlsli:7), never a -D (P1-D).
         let f: Vec<&str> = self
@@ -1421,6 +1536,14 @@ impl Renderer {
         n.missing_fill = self.missing_fill;
         n.debug = self.debug;
         n.deferred = self.deferred;
+        n.projected = self.projected.take();
+        n.projected_missing = std::mem::take(&mut self.projected_missing);
+        for (reg, bytes, _) in std::mem::take(&mut self.projected_tex) {
+            match textures::load_dds(&n.gpu, &bytes) {
+                Ok(t) => n.projected_tex.push((reg, bytes, t)),
+                Err(e) => eprintln!("render3d: projected t{reg} dropped on the new device: {e}"),
+            }
+        }
         // Device objects do not move: upload each override again (it decoded before, so a failure is not expected).
         for (slot, (bytes, _)) in std::mem::take(&mut self.overrides) {
             match textures::load_dds(&n.gpu, &bytes) {
@@ -1618,6 +1741,16 @@ impl Renderer {
                 &features,
                 self.deferred && !self.fixed_pipeline,
             );
+            // `classify` cannot see the layer: an edit that makes it apply or stop applying (type 0 ↔ 14, SLSF2.24)
+            // changes PROJECTED_UV without any other define.
+            let kind = if self.projected.is_some()
+                && kind != EditKind::Same
+                && projected_eligible(&state.material) != projected_eligible(&m)
+            {
+                EditKind::Permutation
+            } else {
+                kind
+            };
             let rebuild = state.draw.is_none()
                 || state.status != ShapeStatus::Drawing
                 || kind == EditKind::Permutation;
@@ -1728,7 +1861,7 @@ impl Renderer {
             &d.fields,
             m,
         );
-        d.rewrite_material(m, ll, &fv, fixed);
+        d.rewrite_material(m, ll, &fv, fixed, self.projected.as_ref());
         Ok(())
     }
 
@@ -2023,7 +2156,7 @@ impl Renderer {
                     &d.fields,
                     &material,
                 );
-                d.rewrite_material(&material, ll, &fv, fixed);
+                d.rewrite_material(&material, ll, &fv, fixed, self.projected.as_ref());
             }
             if !under {
                 touched.push((id, reg));
@@ -2716,10 +2849,51 @@ fn with_context(what: &str, e: String) -> String {
     device::gpu_error(Ok(()), what, e)
 }
 
+/// The glint noise map, or `None` when its upload failed: the shape then keeps the 1x1 default at t20 as before
+/// Note GG, and the failure is logged once. A lost device is still an error, for the GUI to rebuild on.
+fn glint_noise_or_fallback<T>(
+    r: Result<T, String>,
+    logged: &mut bool,
+) -> Result<Option<T>, String> {
+    match r {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.starts_with(device::DEVICE_REMOVED) => Err(e),
+        Err(e) => {
+            if !std::mem::replace(logged, true) {
+                eprintln!("render3d: {e}; glint shapes keep the default noise map");
+            }
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod context_tests {
     use super::*;
 
+    /// Final review M4: a glint-noise upload that fails leaves the shape on the old 1x1 default and is logged once;
+    /// a lost device still fails so the GUI rebuilds. (Tested on the decision itself: no seam makes the real upload fail.)
+    #[test]
+    fn a_failed_glint_noise_falls_back_and_logs_once() {
+        let mut logged = false;
+        assert_eq!(glint_noise_or_fallback(Ok(7), &mut logged), Ok(Some(7)));
+        assert!(!logged);
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err("oom".into()), &mut logged),
+            Ok(None)
+        );
+        assert!(logged);
+        // The second failure is still a fallback; `logged` stays set (the line was printed once).
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err("oom".into()), &mut logged),
+            Ok(None)
+        );
+        let lost = format!("{}: hung", device::DEVICE_REMOVED);
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err(lost.clone()), &mut false),
+            Err(lost)
+        );
+    }
     #[test]
     fn a_device_removed_error_keeps_its_prefix() {
         let lost = format!("{}: hung (CreateTexture2D: x)", device::DEVICE_REMOVED);
