@@ -42,21 +42,22 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         | Subtype::PbrNormal
         | Subtype::Msn
         | Subtype::CoatNormal
-        | Subtype::Envmask
         | Subtype::ComplexMaterial
         | Subtype::Rmaos
         | Subtype::SkinRfaos
-        | Subtype::Flow
-        | Subtype::Height
-        | Subtype::MsnSpecular
-        | Subtype::GenericTwoChannel
         | Subtype::GenericData
-        | Subtype::SkinSk
         | Subtype::SkinWet
         | Subtype::ComplexGrass => "1.0.0",
         Subtype::Cubemap => "1.1.0",
         // Note FF4: the two sub-types whose default is BC6H; Slowest/Max use the peak mode.
         Subtype::PbrEmissive | Subtype::HdrSky => "1.2.0",
+        // Note F?: BC4 search (BC4/BC5 defaults)
+        Subtype::Envmask
+        | Subtype::Flow
+        | Subtype::Height
+        | Subtype::MsnSpecular
+        | Subtype::GenericTwoChannel
+        | Subtype::SkinSk => "1.2.0",
     }
 }
 
@@ -69,8 +70,10 @@ pub const MANIFEST_SCHEMA: u32 = 2;
 const BC7E_PATCH: &[u8] =
     include_bytes!("../../encoders-sys/vendor/bc7e/patches/0001-exact-opaque-alpha.patch");
 
-/// The patched vendored `rgbcx.h` (the patch is applied in place, so the whole header is hashed; DECISIONS T13).
+/// The patched vendored `rgbcx.h` and `rgbcx.cpp` (the patches are applied in place, so both files are hashed,
+/// header first; DECISIONS T13).
 const RGBCX_H: &[u8] = include_bytes!("../../encoders-sys/vendor/bc7enc_rdo/rgbcx.h");
+const RGBCX_CPP: &[u8] = include_bytes!("../../encoders-sys/vendor/bc7enc_rdo/rgbcx.cpp");
 
 /// Git commit of the source tree at build time (12 hex digits, plus `-dirty` when tracked files had uncommitted
 /// changes when the build script last ran), or `unknown` (no git, or not a checkout; see `build.rs`).
@@ -109,7 +112,7 @@ pub struct EncoderVersions {
     pub ispc: String,
     /// `<patch name>@sha256:<hash of the patch file>`; `None` when the vendored bc7e is unpatched.
     pub bc7e_patch: Option<String>,
-    /// `<patch name>@sha256:<hash of the patched rgbcx.h>`; `None` before the patch, so BC3/BC4/BC5 re-encode.
+    /// `<patch name>@sha256:<hash of the patched rgbcx.h and rgbcx.cpp>`; `None` before the patch, so BC3/BC4/BC5 re-encode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rgbcx_patch: Option<String>,
     /// M5 (DECISIONS Note NV10): the NVTT version that encoded this output; only on records of a profile on
@@ -125,9 +128,17 @@ impl EncoderVersions {
             bc7enc_rdo: v.bc7enc_rdo.into(),
             ispctc: v.ispctc.into(),
             ispc: v.ispc.into(),
-            rgbcx_patch: v
-                .rgbcx_patch
-                .map(|name| format!("{name}@sha256:{}", hex::encode(Sha256::digest(RGBCX_H)))),
+            rgbcx_patch: v.rgbcx_patch.map(|name| {
+                format!(
+                    "{name}@sha256:{}",
+                    hex::encode(
+                        Sha256::new()
+                            .chain_update(RGBCX_H)
+                            .chain_update(RGBCX_CPP)
+                            .finalize()
+                    )
+                )
+            }),
             bc7e_patch: v
                 .bc7e_patch
                 .map(|name| format!("{name}@sha256:{}", hex::encode(Sha256::digest(BC7E_PATCH)))),

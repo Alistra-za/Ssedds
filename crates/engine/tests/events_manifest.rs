@@ -5,6 +5,7 @@ use engine::manifest::*;
 use engine::policy::{JobStatus, ResolvedJob};
 use engine::presets::PresetRegistry;
 use engine::shader::{Shader, ShaderOrigin, ShaderPick};
+use sha2::Digest;
 use std::sync::Arc;
 
 fn record(
@@ -324,16 +325,35 @@ fn encoder_versions_come_from_the_encoders_crate() {
     assert_eq!(patch, format!("{}@sha256:{hash}", v.bc7e_patch.unwrap()));
     // A manifest from before the rgbcx BC4 round-to-nearest patch must not match, so its BC3/BC4/BC5 re-encode.
     // The tag hashes the patched rgbcx.h, so an in-place change to the rounding code also re-encodes (T13).
-    let rgbcx = sha256_file(std::path::Path::new(concat!(
+    let mut both = std::fs::read(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../encoders-sys/vendor/bc7enc_rdo/rgbcx.h"
-    )))
+    ))
     .unwrap();
-    assert_eq!(v.rgbcx_patch, Some("bc4-round-to-nearest"));
+    both.extend(
+        std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../encoders-sys/vendor/bc7enc_rdo/rgbcx.cpp"
+        ))
+        .unwrap(),
+    );
+    let rgbcx = hex::encode(sha2::Sha256::digest(&both));
+    assert_eq!(v.rgbcx_patch, Some("bc4-round-to-nearest+bc4-search"));
     assert_eq!(
         e.rgbcx_patch.as_deref(),
-        Some(format!("bc4-round-to-nearest@sha256:{rgbcx}").as_str())
+        Some(format!("bc4-round-to-nearest+bc4-search@sha256:{rgbcx}").as_str())
     );
+    // Note F?: the BC4/BC5-default sub-types re-encode once (BC4 search).
+    for st in [
+        Subtype::Envmask,
+        Subtype::Flow,
+        Subtype::Height,
+        Subtype::MsnSpecular,
+        Subtype::GenericTwoChannel,
+        Subtype::SkinSk,
+    ] {
+        assert_eq!(encode_version(st), "1.2.0", "{st:?}");
+    }
 }
 
 #[test]

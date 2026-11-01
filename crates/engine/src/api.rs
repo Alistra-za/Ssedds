@@ -3704,6 +3704,15 @@ mod tests {
                 !stale,
                 "{format:?} pre-patch record"
             );
+            // The tag from before the BC4 search (round-to-nearest only) is stale the same way.
+            let mut older = entry_for(&job);
+            older.encoders.as_mut().unwrap().rgbcx_patch =
+                Some("bc4-round-to-nearest@sha256:00".into());
+            assert_eq!(
+                up(&older, &job, Bc1Model::Ideal),
+                !stale,
+                "{format:?} old-tag record"
+            );
         }
         // M5 (DECISIONS Note NV10): a record written before M5 has no `nvtt` key and stays current for built-in
         // profiles, whatever NVTT is found now.

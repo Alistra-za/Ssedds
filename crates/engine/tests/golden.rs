@@ -4068,7 +4068,7 @@ fn cube_vstrip_bc7() {
 
 /// The encode-versions guard (`encode_versions.rs`) re-pins every sub-type's encode input and fails a changed hash
 /// unless that sub-type's `encode_version` arm was bumped. Every other 2D arm staying at 1.0.0 is what makes it fail
-/// on any 2D change; only the cube arm (DECISIONS DS6, DS10) and the BC6H-capable arms (Note FF) moved.
+/// on any 2D change; only the cube arm (DECISIONS DS6, DS10), the BC6H-capable arms (Note FF) and the BC4/BC5 arms (Note F?) moved.
 #[test]
 fn two_d_outputs_unchanged() {
     use engine::config::Subtype;
@@ -4077,6 +4077,32 @@ fn two_d_outputs_unchanged() {
     let bc6h = |st: Subtype| matches!(st, Subtype::PbrEmissive | Subtype::HdrSky);
     for st in [Subtype::PbrEmissive, Subtype::HdrSky] {
         assert_eq!(encode_version(st), "1.2.0", "{st:?}: a BC6H arm (Note FF)");
+    }
+    // Note F?: the sub-types whose default format is BC4 or BC5 moved with the BC4 search.
+    let bc4 = |st: Subtype| {
+        matches!(
+            st,
+            Subtype::Envmask
+                | Subtype::Flow
+                | Subtype::Height
+                | Subtype::MsnSpecular
+                | Subtype::GenericTwoChannel
+                | Subtype::SkinSk
+        )
+    };
+    for st in [
+        Subtype::Envmask,
+        Subtype::Flow,
+        Subtype::Height,
+        Subtype::MsnSpecular,
+        Subtype::GenericTwoChannel,
+        Subtype::SkinSk,
+    ] {
+        assert_eq!(
+            encode_version(st),
+            "1.2.0",
+            "{st:?}: a BC4/BC5 arm (Note F?)"
+        );
     }
     let pins: BTreeMap<String, serde_json::Value> = serde_json::from_str(
         &std::fs::read_to_string(
@@ -4087,7 +4113,7 @@ fn two_d_outputs_unchanged() {
     .unwrap();
     for (key, pin) in &pins {
         let st: engine::config::Subtype = serde_json::from_value(pin["subtype"].clone()).unwrap();
-        if st != Subtype::Cubemap && !bc6h(st) {
+        if st != Subtype::Cubemap && !bc6h(st) && !bc4(st) {
             assert_eq!(
                 encode_version(st),
                 LEGACY_ENCODE_VERSION,
