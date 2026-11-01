@@ -16,3 +16,15 @@ fcbde32bd80e	design overview (dated record) and the Home intro list the same inp
 3516332c62f2	the study names the NVTT build it measured; NVTT-Backend states the tested version
 457d348cbcca	within one dated study: false match on a file path sentence
 d8ee38c56046	within one dated study: summary restates its own record
+4184c4aef876	Texture-Packing: the same R and G fill rows in three recipe tables (one row per recipe)
+ed249c92808f	design overview (dated record) summarises the cs target; Presets-and-Targets is the home
+118c50cd506a	design overview (dated record) summarises the vanilla target; Presets-and-Targets is the home
+82ccc5232949	the study states the threshold it chose; Project-Config holds the key
+7dc8478f9be4	the survey conclusion (dated record) and the config home of the encoder per format
+42de1f72faf4	CLI-Reference command index row and the command section it links
+fbbe797a2bdc	validate flag lists the same value names as the alpha.policy key (false match on the value list)
+92f497604312	two different schemas (event and manifest); false match on the command form
+9b8122b6cbbc	false match on the generated-file pattern; different facts
+2bfceb582906	FAQ question heading; Home answers it with a link
+f44f25a20df4	two see-also link lines to the GUI guide
+0df5213cabe1	the verbatim error message, in the key row and in the error-message table

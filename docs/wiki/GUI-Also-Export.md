@@ -29,7 +29,7 @@ A PBR set with a map still undecided (or blocked by a code you have not acknowle
 
 Every Also export (not a dry run) writes `<project> conversion-report.md` next to the three folders: the counts per folder, the recipe settings, a row per PBR set (suggested NIF Glossiness, Specular Strength, whether the Environment Map shader is needed and the env `_m` was written), the sets not converted and why, and the install lines.
 
-- With the zip on, each folder that ran becomes `<folder>.zip`, with a line per zip in `<project> SHA256SUMS.txt`.
+- With the zip on, each folder that ran is zipped ([`zip`](Project-Config.md#export)).
 - A zip the ZIP format cannot hold (65,535 files or more, or 4 GiB, counted from the planned outputs' sizes) is a Review blocker before anything is written: "Zip too large for the ZIP format (n files, size); untick "Also write a zip" or split the export".
 - The zips and the report are written after the PGPatcher, CS PBR and complex-material JSON, so the PBR zip holds the JSON this export wrote. The export stays running (and can be cancelled) until they are done.
 

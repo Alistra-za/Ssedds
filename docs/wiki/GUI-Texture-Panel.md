@@ -13,7 +13,7 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 | Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered, plus the texture's current sub-type. The list opens under the field with a search box and the suggested type on top, the same picker as the Problems tab's **Set type…**. |
 | Content | sRGB-encoded colour, or Linear data. |
 | DDS tag | _SRGB or UNORM (linear), limited to what the format and Mode allow. |
-| Alpha | The alpha policy ([values](Project-Config.md#alpha)). |
+| Alpha | The alpha policy ([values](Project-Config-Fields.md#alpha)). |
 | Threshold, Comparison | Slider 1 to 254; Greater than, or Greater than or equal. |
 | Coverage, Exact opaque alpha | Auto / On / Off; on or off. |
 | Normal handling, Normal base level | Renormalise or Renormalise and bake; Renormalise to unit length or Keep as authored. |

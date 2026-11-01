@@ -33,7 +33,7 @@ Look for `CHK-GREEN-GUESS` on its normal map (the ⓘ badge on the set card, or 
 
 ### A surface looks too shiny or plastic
 
-Look for `CHK-PLASTIC` on its `_n`. On a vanilla `_n` the alpha is the specular: with no alpha, or an alpha that is almost all white, the whole surface gets full specular. Add an alpha that varies, or ignore the warning when the mesh sets its own specular. It never applies to an `_msn`, and on hair and Advanced Skin the message says Community Shaders does not read that alpha. Also check `CHK-RANGE` on an `_rmaos` (extreme roughness) or on an albedo that is too bright; the preview's **Range** toggle shows which texels break the rule.
+Look for `CHK-PLASTIC` on its `_n` ([plastic `_n` alpha](Set-Shaders.md#height-maps-and-the-artist-checks)). Add an alpha that varies, or ignore the warning when the mesh sets its own specular. Also check `CHK-RANGE` on an `_rmaos` (extreme roughness) or on an albedo that is too bright; the preview's **Range** toggle shows which texels break the rule.
 
 ### Dark seams at a distance
 
@@ -41,7 +41,7 @@ Look for `CHK-UV-GUTTER`. UV islands that sit closer than 8 texels let a smaller
 
 ### UV coverage is greyed out
 
-The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason: a scan that is running ("Wait for the Meshes scan to finish") or was stopped ("The Meshes scan was stopped: scan again to check UV coverage"), no scan database, or a scan with no rows (an empty scan counts as none). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out. The toggle is also off while a pin is compared ("Hidden while comparing") and after a failed read (its hover lists the errors), and **Check all UV coverage** stays off until the **UV coverage** check is turned on ("Turn on UV coverage check first").
+The overlay and the check read your Meshes scan, so scan first: scan your MO2 instance in the Meshes view. The toggle's hover gives the reason ([UV coverage](GUI-Artist-Checks.md#check-all-uv-coverage)). Only colour textures (diffuse, PBR albedo, skin albedo) have UV coverage, and landscape diffuses are left out. The toggle is also off while a pin is compared ("Hidden while comparing") and after a failed read (its hover lists the errors), and **Check all UV coverage** stays off until the **UV coverage** check is turned on ("Turn on UV coverage check first").
 
 ### Review asks "half or full size"
 
@@ -93,7 +93,7 @@ If the file is not listed as a helper at all, its name has no term Tessalith kno
 | `TAG-UNORM-PBR` | A PBR colour map under `cs` must be `_SRGB`. Remove the `color.tag = "unorm"` override. |
 | `TAG-SRGB-NONPBR` | Under `cs`, only PBR colour maps take `_SRGB`. Remove the `color.tag = "srgb"` override, or set the sub-type to the PBR one. |
 | `TAG-SRGB-VANILLA` | `vanilla` has no `_SRGB`. |
-| `TAG-SRGB-LOD` | Files under a `lod` folder must be UNORM. |
+| `TAG-SRGB-LOD` | [Diagnostic codes](Diagnostic-Codes.md#format-and-tag). |
 
 ### The GUI is read-only
 
@@ -105,7 +105,7 @@ It needs the Windows system font Segoe UI (`segoeui.ttf`) and says so if it is m
 
 ### The 3D preview shows plain textures
 
-The PGPatcher simulation needs the `cs` target and a PBR set, and a scanned mesh that uses the diffuse. Built-in shapes cannot match an entry's match keys. Meshes from Skyrim LE are not drawn. If "Community Shaders not found" shows, use **Shader folder…** to point at your Community Shaders mod folder.
+What the PGPatcher simulation needs is in [What it assumes](GUI-Set-Preview-3D.md#what-it-assumes). If "Community Shaders not found" shows, use **Shader folder…** to point at your Community Shaders mod folder.
 
 ### NVTT problems
 
@@ -113,7 +113,7 @@ See [NVTT backend](NVTT-Backend.md#codes).
 
 ### Leftover .sdc-*.tmp files
 
-A hard abort (a second Ctrl-C, a crash) can leave temporary files in the output folders. They are safe to delete. Leftover `%TEMP%\sdc-nvtt-*` folders are also safe to delete.
+A hard abort can leave temporary files in the output folders ([atomic writes](Validation-and-Output.md#atomic-writes)); they are safe to delete. Leftover `%TEMP%\sdc-nvtt-*` folders are also safe to delete.
 
 ## Error messages
 

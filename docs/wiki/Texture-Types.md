@@ -54,7 +54,7 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 
 A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`; a set whose shader you set to Advanced Skin (GUI, or `--set set:<id>.shader=advanced_skin`) builds one unless `packing.recipe` says otherwise or it has only a metallic map, and its diffuse is `skin_albedo` either way (also when written as plain `diffuse`). In the GUI, pinning the set's Diffuse slot turns this off: the set then reads and packs as it would without the shader choice, unless its diffuse is already written as `skin_albedo`. In an Advanced skin set a plain `_f` is the skin fuzz mask: a greyscale map packed into the `_rfaos` G channel and not converted on its own. A `_f` never makes a set Advanced skin by itself, and one you give a sub-type converts alone as fuzz.
 
-Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI, and on the command line with `--accept-suggestions high`.
+Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI; for the command line see [`--accept-suggestions`](CLI-Reference.md#why---accept-suggestions-high-matters).
 
 A file whose name does not fit these rules is read as a colour map. A normal map saved as `rock_nm.png` would become a diffuse. Fix it by renaming, by an `[inputs]` alias, or by setting `subtype` in a `[files]` entry.
 
@@ -73,7 +73,7 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_roughness`, `_rough` | Raw roughness | packed |
 | `_metallic`, `_metalness`, `_metal` | Raw metallic | packed |
 | `_ao`, `_ambientocclusion`, `_occlusion` | Raw AO | packed |
-| `_orm` | Channel-packed AO (R), roughness (G), metallic (B) | packed |
+| `_orm` | Channel-packed AO, roughness and metallic ([channels](Texture-Packing.md#packing-raw-maps)) | packed |
 | `_specular`, `_spec` | Raw specular | packed |
 | `_glossiness`, `_gloss` | Raw glossiness | packed (inverted into roughness) |
 | `_height`, `_displacement`, `_disp` | Raw height | packed |
@@ -121,7 +121,7 @@ There are 30 sub-types in five categories.
 | `generic_data` | MixedPacked | BC7 | UNORM | data | Use for any data map Tessalith has no type for. |
 | `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](Set-Shaders.md#complex-grass). |
 | `hdr_sky` | Hdr | BC6H | n/a | | `cs` only. |
-| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross, a strip, a 360° panorama, a mirror ball, an angular map or a single photo in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
+| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube ([Cubemaps](Cubemaps.md)). BC1, BC3, BC7 or RGBA8 only. |
 
 Notes on the defaults:
 
@@ -147,7 +147,7 @@ The full list of format, tag and target rules is on [Presets and targets](Preset
 | RG8 | `rg8` | Uncompressed, two channels | |
 | RGBA16F | `rgba16f` | Uncompressed half-float | `cs` only. |
 
-Encoders: bc7e for BC7, rgbcx for BC1/BC3/BC4/BC5, the ISPC Texture Compressor for BC6H. NVTT can replace bc7e and the ISPC encoder for BC7 and BC6H; see [NVTT backend](NVTT-Backend.md).
+Which encoder each format uses is in [Format and encoder](Project-Config.md#format-and-encoder); see also [NVTT backend](NVTT-Backend.md).
 
 ## Packing, helpers and shaders
 

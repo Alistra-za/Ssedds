@@ -57,7 +57,7 @@ The product is called Tessalith, and the GUI program is `tessalith.exe`. The com
 2. Groups files into texture sets by base name (`rock01.png`, `rock01_n.png`, `rock01_rmaos.png` form one set).
 3. Works out a sub-type for each file from its suffix or name, for example `_n` is a normal map.
 4. Resolves the settings for each file from built-in defaults, the preset, your config files, rules and command-line overrides.
-5. Packs raw maps (roughness, metallic, AO and so on) into the packed layout the target expects.
+5. Packs raw maps into the packed layout the target expects ([packing](Presets-and-Targets.md#packed-maps-per-target)).
 6. Builds mipmaps, encodes with the chosen encoder, writes the DDS atomically.
 7. Decodes the result again and validates it, then records it in the manifest.
 

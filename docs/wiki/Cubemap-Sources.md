@@ -90,7 +90,7 @@ One photo can't show what is behind you, so this mode makes a believable reflect
 
 ### Face size
 
-The face size is `cubemap.face_size`, or the largest power of two that fits inside one cell of the source, at most 4096. A 1536×1152 cross has 384-pixel cells and becomes 256. For a panorama the cell is a quarter of the width, for a mirror ball or angular map half the width, and for a photo half the photo's width. Larger values scale up. Tessalith notes `DIM-RESIZED` when the face differs from the cell. A cube is never checked for `DIM-NPOT`.
+The face size defaults to the largest power of two that fits one source cell ([`cubemap.face_size`](Project-Config-Fields.md#cubemap)). A 1536×1152 cross has 384-pixel cells and becomes 256. For a panorama the cell is a quarter of the width, for a mirror ball or angular map half the width, and for a photo half the photo's width. Larger values scale up. Tessalith notes `DIM-RESIZED` when the face differs from the cell. A cube is never checked for `DIM-NPOT`.
 
 ### An existing cube DDS
 

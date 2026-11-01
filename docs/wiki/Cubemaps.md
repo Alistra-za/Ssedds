@@ -71,16 +71,16 @@ The kinds of source a cube can be made from, and how each is read: [Cubemap sour
 
 ## Settings
 
-All are optional and set per file or in `sdc.toml`, under `[defaults]`, `[subtypes.cubemap]`, a rule or a `[files]` entry. They also work with `--set`. Ranges and defaults are in [Project config](Project-Config.md#cubemap).
+All are optional and set per file or in `sdc.toml`, under `[defaults]`, `[subtypes.cubemap]`, a rule or a `[files]` entry. They also work with `--set`. Ranges and defaults are in [Project config](Project-Config-Fields.md#cubemap).
 
 | Key | What it does |
 |---|---|
 | `cubemap.style` | Starting point for size, format and blur (below) |
 | `cubemap.layout` | Source layout, when the shape doesn't settle it |
-| `cubemap.face_size` | Face size in pixels (a power of two, 4 to 4096) |
+| `cubemap.face_size` | Face size in pixels |
 | `cubemap.yaw`, `cubemap.mirror` | Turn the cube about the up axis (degrees, -360 to 360); swap east and west |
 | `cubemap.face_rotate`, `cubemap.face_flip` | Turn or flip single faces: six entries in face order (0, 90, 180, 270; `h`, `v`) |
-| `cubemap.vcross_negz_rotate` | Whether the vertical cross's bottom cell is turned 180° |
+| `cubemap.vcross_negz_rotate` | Turn the vertical cross's bottom cell ([values](Project-Config-Fields.md#cubemap)) |
 | `cubemap.blur` | 0 (sharp) to 1 (very soft) |
 | `cubemap.exposure`, `brightness`, `contrast`, `midtones`, `saturation`, `tint` | Colour adjustments |
 | `cubemap.highlight_clamp` | Soft-compresses bright highlights so a chosen level becomes full white |

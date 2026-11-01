@@ -14,7 +14,7 @@ An `_orm` file counts as three raw maps at once: AO from its R channel, roughnes
 
 | Channel | Source | Default when missing |
 |---|---|---|
-| R | roughness, or 1 minus glossiness | `packing.roughness_default` (0.5) |
+| R | roughness, or 1 minus glossiness | `packing.roughness_default` |
 | G | metallic | 0 |
 | B | AO | 1 |
 | A | specular | 1 |
@@ -23,7 +23,7 @@ An `_orm` file counts as three raw maps at once: AO from its R channel, roughnes
 
 | Channel | Source | Default when missing |
 |---|---|---|
-| R | roughness, or 1 minus glossiness | 0.5 |
+| R | roughness, or 1 minus glossiness | `packing.roughness_default` |
 | G | fuzz | 0 |
 | B | AO | 1 |
 | A | specular | 1 |
@@ -116,7 +116,7 @@ A set can add detail normal maps that are blended into its base normal (`_n`, or
 
 Any of these can be prefixed `n_` or `cnr_` (for example `iron_cnr_bump.png`) to say which base it feeds. Without a prefix it feeds `_n`, or `_cnr` when the set has no `_n`. Override with `rnm.target` on the layer file.
 
-The default blend order is bent, bump, bump2, detail, detail2. The `bent` layer by default weights itself by occlusion read from a raw `_ao` map, the R channel of an `_orm`, or the B channel of `_rmaos`/`_rfaos`; supply normal AO (white = open), Tessalith inverts it.
+The blend order is [`rnm.order`](Project-Config-Fields.md#rnm-normal-layers). The `bent` layer by default weights itself by occlusion read from a raw `_ao` map, the R channel of an `_orm`, or the B channel of `_rmaos`/`_rfaos`; supply normal AO (white = open), Tessalith inverts it.
 
 How the layers are blended (code: `crates/engine/src/rnm/`):
 
@@ -135,4 +135,4 @@ Ways to put a detail normal on a base normal, and why RNM is used:
 | Whiteout | Adds xy, multiplies z, renormalise | More detail than UDN | Still approximate on steep bases | Low | Cheap shader blends |
 | RNM (Barré-Brisebois and Hill) | Rotates the detail into the base normal's frame | Detail as seen on the tilted surface; flat inputs leave the other unchanged | None in normal use; needs unit vectors | A little more | Highest quality: baking or high-end shaders |
 
-Settings are in [Project config](Project-Config.md#rnm-normal-layers). `sdc inspect` prints one `rnm` line per layer. Codes: `RNM-NO-BASE`, `RNM-IGNORED-EYE` (eye normals are model-space), `RNM-MASK-ORPHAN`, `RNM-LAYER-SHADOWED`, `RNM-AO-MISSING`.
+Settings are in [Project config](Project-Config-Fields.md#rnm-normal-layers). `sdc inspect` prints one `rnm` line per layer. Codes: `RNM-NO-BASE`, `RNM-IGNORED-EYE` (eye normals are model-space), `RNM-MASK-ORPHAN`, `RNM-LAYER-SHADOWED`, `RNM-AO-MISSING`.

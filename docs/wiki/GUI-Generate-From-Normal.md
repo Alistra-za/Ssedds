@@ -37,11 +37,11 @@ The same dialog makes an ambient-occlusion map from the normal (a horizon march 
 - **Where:** on the `_rmaos` row, the same menus as the height; from the set card it is the dialog's **AO** checkbox; and Regenerate.
   - It is offered only for PBR, PBR landscape and PBR grass sets on the `cs` target, whose `_rmaos` reads it. Elsewhere the entry and the checkbox say "AO is generated only for PBR sets under Community Shaders".
   - It is greyed out when slot 6 is pinned, when the set already has an AO source (a real `_ao`, or a pre-packed `_rmaos`/`_rfaos` image whose blue channel already holds AO, named with "(B)" in the reason, or one beside a loose roughness, metallic, specular or `_orm`), or when its `_rmaos` is a DDS (never re-encoded).
-  - A pre-packed image whose blue is flat white gets the generated AO in B, with R, G and A kept from the image.
+  - A pre-packed image whose blue is flat white: see [Generated height maps](Set-Shaders.md#generated-height-maps).
 - **The AO group:** Radius (1.5625–25 % of the width, default 6.25 %, with its size in texels), Quality (8, 16 or 32 slices; 16 steps), Depth (0.25–4) and Intensity (0.5–3). The file holds raw visibility, and Community Shaders applies AO to indirect light itself, so 0.7–1.0 is a good Intensity. The preview runs at 8 slices × 8 steps and adds "AO: mean …, … % of texels below 0.5".
 - **Size:** with only AO ticked, the Size is AO's own default. One Size serves all ticked maps, each capped at its own limit (the height at 1024, or the albedo's size up to 2048 on a `cs` PBR set; AO at 2048). When the set has other `_rmaos` sources (roughness, metallic, specular), the AO takes their size, shown read-only, because a packed `_rmaos` needs one size; a normal smaller than them disables AO with the reason. The path lines show each file's size.
 - **The file** becomes the `_rmaos` B channel on the next plan, with the Info note `GEN-AO` in place of `PACK-DEFAULTED`. It fills no row of its own: the `_rmaos` row's File hover says "AO generated from {normal}" (no **generated** marker, because the packed `_rmaos` itself is not generated), its AO fill line says "Generated from {normal}", a stale AO turns that row's dot amber, and that row's menu offers **Delete generated file…**.
-- **Bent normals:** when the set's normal has an RNM bent layer and AO can be generated for it, the dialog says at the top that a generated AO also changes the normal map, which is weighted by AO.
+- **Bent normals:** with an RNM bent layer, the dialog warns at the top that a generated AO also changes the normal map ([why](Set-Shaders.md#generated-height-maps)).
 
 ## Curvature
 

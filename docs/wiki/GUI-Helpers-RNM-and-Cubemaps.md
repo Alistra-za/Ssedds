@@ -62,7 +62,7 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 - The normal (or `_cnr`) card has an outline in the accent colour (teal) while RNM is active (layers present and enabled). A slot the shader cannot use keeps its amber outline instead.
 - When the set has both an `_n` and a `_cnr`, each layer has a **target** switch (*Normal*, *CNR* or *Both*), written as `rnm.target` on the layer file's `[files]` entry. The layer's helper panel (**Blends into**) edits the same key.
 - Under the RNM switch, **Blended normal** shows the result at 128 px: the normal with every enabled layer blended in, drawn as `(n + 1) / 2`. It is made in the background with the same blend the export uses, and refreshes when a strength slider is released or the layer order changes; the old picture stays until the new one is ready. It is a small-size look, not the final pixels. When the blend fails it says "Preview unavailable: {reason}", with the reason from the failed read or blend.
-- The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says Tessalith inverts the AO for you: supply normal AO (white = open) and do not invert it yourself.
+- The `_bent` AO line shows the AO source (a raw AO map, or the B channel of `_rmaos`/`_rfaos`) as an inverted thumbnail, with a *use AO* tick. The note under it says Tessalith inverts the AO for you ([RNM layers](Texture-Packing.md#rnm-normal-layers)).
 - Set-level notes (no base for a layer, a layer ignored on an eye set, an orphan mask) appear under the set grid.
 
 ## Cubemaps
@@ -79,7 +79,7 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
 |---|---|
 | **Source** | Layout, face size, and for a face, cross or strip source the per-face rotation and flip, plus *Turn -Z upright* on a vertical cross. |
 | **Orientation** | Yaw, *Mirror east and west*. |
-| **Colour grade** | Exposure, brightness, contrast, midtones, saturation, tint, highlight clamp. |
+| **Colour grade** | The colour filters ([settings](Cubemaps.md#settings)). |
 | **Ground** | *Ground fill* and *Horizon*. |
 | **Look** | Style and blur. |
 
@@ -99,7 +99,7 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
 
 **Make marker cube…** in **Export to ▾** (**More ▾** until a folder is chosen) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
 
-- **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked, it starts at 0.5; unticked, the alpha is 255. The alpha it will store is shown under the controls.
+- **Colour** is raw codes ([how they are read](Cubemap-Sources.md#dynamic-marker)). **Roughness** is optional (the *Set roughness* tick): ticked, it starts at 0.5; unticked, the alpha is 255. The alpha it will store is shown under the controls.
 - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
 - It never overwrites a file Tessalith did not write: it says it kept it and leaves the dialog open, so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.
 

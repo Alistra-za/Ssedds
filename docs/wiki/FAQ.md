@@ -10,7 +10,7 @@ No. Tessalith is Windows-only (x86-64, built with MSVC). The GUI also uses Direc
 
 ### Is there an installer or a prebuilt download?
 
-There is a prebuilt zip, but no installer. Download `Tessalith-<version>-win-x64.zip` from the Releases page, unzip it anywhere and run `tessalith.exe`. See [Installation](Installation.md).
+There is a prebuilt zip, but no installer: unzip it anywhere and run `tessalith.exe` ([Installation](Installation.md#the-release-zip)).
 
 ### Can I save DDS straight from Photoshop, GIMP, Paint.NET or chaiNNer?
 
@@ -34,7 +34,7 @@ Yes. Point `sdc convert` (with `--recursive`) or the GUI at the folder. Files wh
 
 ### Will it re-encode my existing DDS files?
 
-No, not by default. DDS inputs are skipped (`IN-DDS-SKIPPED`) because re-encoding loses quality. Set `reencode = true` on a file to convert it anyway. To fix only a broken header, use `sdc patch-header`.
+No, not by default ([why, and what to do](Troubleshooting.md#dds-files-in-the-folder-are-skipped)).
 
 ### Does it change my source files?
 
@@ -72,7 +72,7 @@ Whether a colour map's alpha is a cutout, a blend or unused depends on the mesh,
 
 ### Does the CLI use the GUI's set edits or mod scan?
 
-No. The CLI reads `sdc.toml` but not `sdc-project.toml` or the scan database. Set moves, borrows, shader choices and output names made in the GUI's Sets column, alpha taken from scanned meshes, and the complex-grass auto-tag apply to GUI exports only. Per-texture decisions, which go into `sdc.toml`, apply to both.
+No. The CLI reads `sdc.toml` but not `sdc-project.toml` or the scan database. What that leaves out is listed under [Review](GUI-Review-and-Export.md#review).
 
 ### Does it write the PGPatcher JSON?
 
@@ -104,4 +104,4 @@ See the table in [GUI settings](GUI-Settings.md#where-settings-live).
 
 ### What licence is it under?
 
-See the licence line on [Home](Home.md) and, for the plugins, [Host plugins](Host-Plugins.md#licences). The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`.
+See the licence line on [Home](Home.md) and, for the plugins, [Host plugins](Host-Plugins.md#licences). The vendored encoder libraries keep their own licences ([vendored files](Installation.md#ispc-objects)).

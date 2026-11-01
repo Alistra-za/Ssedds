@@ -9,6 +9,7 @@ Using it
 - [CLI reference](CLI-Reference.md)
 - [GUI guide](GUI-Guide.md)
 - [Project config](Project-Config.md)
+- [Project config fields](Project-Config-Fields.md)
 - [Presets and targets](Presets-and-Targets.md)
 - [NIF editing](GUI-NIF-Edit.md)
 - [Host plugins](Host-Plugins.md)
