@@ -13,7 +13,7 @@ In the Textures or Sets column:
 | **Ctrl+click** | Adds or removes one entry. |
 | **Shift+click** | Selects the range from the last clicked entry, in the order shown (search and filters applied). |
 | **Ctrl+A** | Selects everything shown (in the Sets column, the visible sets only). With nothing shown, because a filter hides everything, it does nothing and keeps the selection. |
-| **Esc** | Closes a popup, the preview or a dialog. It never clears the selection; *Clear the selection* is in the command palette (Ctrl+K), with no key. |
+| **Esc** | Closes a popup, the preview or a dialog. It never clears the selection; *Clear the selection* is in the command palette (Ctrl+K), with no key. <!-- D:FB11 --> |
 
 Helper rows take Ctrl+click and Shift+click; a Shift+click range runs over the tiles, then the helper rows shown, and skips a collapsed Helpers group. Ctrl+A and the arrow keys (with or without Shift) cover tiles only.
 

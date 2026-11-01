@@ -20,7 +20,7 @@ A row is one line and does not wrap. The fix buttons sit at the panel's right ed
 | Export pitfalls, texture and set warnings | **Go to set** on a set's row. |
 | A file's export warnings, once the export has ended | Click the file to select it. |
 | Artist-check warnings ([Artist checks](GUI-Artist-Checks.md)) | A grey **check** dot that does not change "ready". A **Checks** pill narrows the list to them. |
-| Info rows, last, with a grey **info** dot | **Undo this change** while that step is still the last one. |
+| Info rows, last, with a grey **info** dot | **Undo this change** while that step is still the last one. <!-- D:FC3 --> |
 
 Info rows never count against "ready", but the tab's number counts every row shown, these included. Each is something Tessalith changed for you that you may want back: a packing fill dropped because a helper now fills the channel, a format or tag reset when a texture's type changed, the types it set automatically. A `_curves`, `_curvature` or `_cavity` map no recipe reads is an info row too, with no button: "Read only by Also export; not written on its own".
 
@@ -52,11 +52,11 @@ A row you must act on never just reports; its fix is its button:
 | A PGPatcher path error | **Fix path**, which selects the set and puts the keyboard in that field (a `rename` or match path). A slot path error has **Go to set** instead, because slot paths are edited in the JSON editor. |
 | A NIF problem from the Meshes view | **Open the {tab} tab**, with the edit panel's own tab name (*Shader*, *Alpha*, *Controllers*, *Extra data*). |
 | *sdc-project.toml cannot be read: TOML parse error at line n…* | A red Project row (the parser's whole message on hover) with **Open in editor**, which opens the file with Windows' default program for it, and **Reload**, which reads both files again (it asks first when something is unsaved). Sets and the JSON stay read-only until the file is fixed, and the banner says why. |
-| *sdc.toml is read-only: changes cannot be saved* (or `sdc-project.toml`), when a save is refused because the file has Windows' read-only flag | **Clear read-only flag**, on that file only. With nothing unsaved the files are then reloaded; with unsaved edits they are kept, and the status line says to Save. |
-| *also.json cannot be read* (the Also export's record, `<PBR folder>\_sdc\also.json`) | **Reset also.json**, outlined in red: it deletes that file only. The manifests do not list the report, zips or sums file, so nothing rebuilds the record: the next Also export writes a new one, and each report, zip or sums file already there counts as one Tessalith did not write. That export keeps each one and says so; delete them to have them written again. |
+| *sdc.toml is read-only: changes cannot be saved* (or `sdc-project.toml`), when a save is refused because the file has Windows' read-only flag | **Clear read-only flag**, on that file only. With nothing unsaved the files are then reloaded; with unsaved edits they are kept, and the status line says to Save. <!-- D:FC10 --> |
+| *also.json cannot be read* (the Also export's record, `<PBR folder>\_sdc\also.json`) | **Reset also.json**, outlined in red: it deletes that file only. The manifests do not list the report, zips or sums file, so nothing rebuilds the record: the next Also export writes a new one, and each report, zip or sums file already there counts as one Tessalith did not write. That export keeps each one and says so; delete them to have them written again. <!-- D:FC10 --> |
 | *Preset {id} was skipped: it clashes with {other} on aliases* | **Remove aliases from {id}** ([below](#skipped-presets)). |
-| *Looks like complex grass, but is not tagged as grass* (Info: a diffuse with the 1:2 complex-grass shape and a normal-map bottom half that no grass record of a scan names) | **Tag as grass**, which writes `subtype = "complex_grass"`. |
-| *Colour divided by alpha on load (premultiplied EXR)* (Info: an OpenEXR source with partial alpha) | **Straight alpha**, which writes `alpha.exr_straight = true`. An OpenEXR source's settings have the same **Straight alpha** in the Alpha group. |
+| *Looks like complex grass, but is not tagged as grass* (Info: a diffuse with the 1:2 complex-grass shape and a normal-map bottom half that no grass record of a scan names) | **Tag as grass**, which writes `subtype = "complex_grass"`. <!-- D:FC10 --> |
+| *Colour divided by alpha on load (premultiplied EXR)* (Info: an OpenEXR source with partial alpha) | **Straight alpha**, which writes `alpha.exr_straight = true`. An OpenEXR source's settings have the same **Straight alpha** in the Alpha group. <!-- D:FC10 --> |
 | *matchN is empty and matches nothing* (Info: a set's stored `matchN = ""`, N from 2) | **Remove match**, which removes the key. |
 | *Preset <id> is not installed* (red) | **Choose preset…**, which opens the header's **Preset** menu ([Presets](GUI-Presets.md#saving)). |
 

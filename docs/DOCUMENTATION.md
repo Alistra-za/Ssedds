@@ -113,3 +113,11 @@ DECISIONS.md is the ruling log: why the code behaves as it does. It keeps only r
 5. If the GUI changed, run the screenshot refresh and compare (section 5).
 6. If a ruling was reverted, move it to the archive (section 7).
 7. Preview the wiki with `tools\publish-wiki.ps1 -Out <dir>`. Publish only when the owner asks.
+8. Run `tools\doc-markers.ps1` and fix every marker it lists (section 9).
+
+## 9. Ruling markers
+A statement of Tessalith behaviour that a ruling decided carries a hidden marker at that fact's one home (§2), so the ruling behind it can be found and a stale sentence is caught when the ruling is archived.
+- **Syntax:** `<!-- D:<ID>[,<ID>…] -->` at the end of the sentence or table row it governs, one space before it. `<ID>` is a DECISIONS item ID (`FC5`, `AG126`, `DM8`), or a note letter alone (`FE`) when the whole note is the ruling. A placeholder `F?n` is allowed only on a branch.
+- **Scope:** only the home is marked. Short references that link to the home are not. DECISIONS.md, DECISIONS-ARCHIVE.md, CHANGELOG.md, docs/research/ and this file are never marked.
+- **Never invent a ruling:** a statement no ruling decided stays unmarked.
+- **The check:** run `tools\doc-markers.ps1` before a push, with `tools\doc-shots.ps1`. It fails a marker that names an unknown ID, an archived one (the sentence is stale), one whose item says "(superseded by X)", one inside a code block, and an `F?` placeholder on `main`. Fix a stale sentence to the current ruling and cite its ID, or delete it if it is no longer true (§1). `-ListUnmarked` lists live rulings with no marker, for information.

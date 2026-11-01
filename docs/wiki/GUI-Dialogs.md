@@ -8,7 +8,7 @@ How the GUI's dialogs behave: which key does what, how the buttons are laid out,
 
 **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings** and **Fill from names** ignore a click outside, so a stray click cannot lose what you typed or chose.
 
-**Enter** takes the safe default and never saves, deletes or exports:
+**Enter** takes the safe default and never saves, deletes or exports: <!-- D:FC5 -->
 - Cancel in the close and open unsaved-changes dialogs (back to the app; **Save** and **Don't save** need a click);
 - Cancel in the reload, changed-on-disk and Reset all dialogs;
 - **Keep exporting** in the export-running dialog;

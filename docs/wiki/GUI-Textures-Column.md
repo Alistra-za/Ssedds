@@ -46,7 +46,7 @@ Ties go by name. The arrow keys, Shift+click ranges and Ctrl+A follow the order 
 
 The **−** and **+** buttons after **Filter ▾** (hover *Smaller tiles*, *Larger tiles*) step the tiles by 16 points:
 
-- from 64 points up to the thumbnail's own size, which is 128 points at 100 % scaling (fewer on a scaled screen, never below 96);
+- from 64 points up to the thumbnail's own size, which is 128 points at 100 % scaling (fewer on a scaled screen, never below 96); <!-- D:FC13 -->
 - 96 points to start;
 - **+** is greyed out at the top.
 

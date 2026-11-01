@@ -8,7 +8,7 @@ A helper fills one channel of another output of its set and is never written as 
 
 ### The Helpers group
 
-Under the tiles, the Textures column has a **Helpers (n)** heading and one compact row per helper, sorted by set, then name. A row shows:
+Under the tiles, the Textures column has a **Helpers (n)** heading and one compact row per helper, sorted by set, then name. <!-- D:FB12 --> A row shows:
 
 - a small thumbnail and the file name;
 - where it goes: **→ <targets>** (for example *→ iron_rmaos R, iron alpha*), or **not used**. Hover for the full list or the reason (for example "iron.png already has alpha", "512x512, target 1024x1024: sizes differ", "no colour texture planned under vanilla", "rmaos.b is filled by iron_ao.png");

@@ -12,14 +12,14 @@ What **Export** does, the Review panel that opens when something needs a look fi
 4. The bottom panel opens on its [Files tab](#the-files-tab).
 5. After a complete export, the PGPatcher JSON is written ([The JSON file](GUI-PGPatcher-JSON.md#the-json-file)). NIF edits are written after the textures ([NIF edits](#review)).
 
-**The header button.** **Export** reads "Review n files" in the plain button colour until the project is clean (a folder chosen, files to write, planning finished, nothing undecided), then "Export n files" in the accent colour. With no folder open it reads plain "Export". Hover it for "N files, M problems" and what Review still has open.
+**The header button.** **Export** reads "Review n files" in the plain button colour until the project is clean (a folder chosen, files to write, planning finished, nothing undecided), then "Export n files" in the accent colour. <!-- D:FB1 --> With no folder open it reads plain "Export". Hover it for "N files, M problems" and what Review still has open.
 
 **Copy CLI command** (Files tab) copies the `sdc convert` command that reproduces this export from the command line: the same folder (with `--recursive`), output, BC1 decoder and thread count, and `--accept-suggestions high`, as the GUI plans. Because Export saved `sdc.toml` first, that command gives the same manifest records and the same DDS bytes for everything `sdc.toml` decides. Check two things it does not carry over:
 
 - It has no `--nvtt`. If you chose an NVTT path in Advanced, add `--nvtt <path>`.
 - The CLI reads neither `sdc-project.toml` nor the scan. Set edits (moved files, created sets, borrows, set renames, output names, set shaders) and the mesh and grass evidence from the scan do not apply to `sdc convert`, so sets that depend on them come out differently. The sub-types and alpha meanings that evidence decided are written to `sdc.toml`, so those carry over.
 
-The hash of each JSON Tessalith writes is recorded at once in `_sdc/generated.json` beside `sdc-project.toml`, so discarding unsaved edits after an export, a crash, or a read-only `sdc-project.toml` does not make the next export ask about Tessalith's own JSON.
+The hash of each JSON Tessalith writes is recorded at once in `_sdc/generated.json` beside `sdc-project.toml`, so discarding unsaved edits after an export, a crash, or a read-only `sdc-project.toml` does not make the next export ask about Tessalith's own JSON. <!-- D:FC11 -->
 
 With [Also export as Vanilla and CM](GUI-Also-Export.md) on, Export always opens Review, and Review's Export writes three folders.
 
@@ -49,7 +49,7 @@ Each column's heading carries its count: **Blockers (n)**, **Undecided (n)**, **
 
 **NIF edits (n)**, at the top of the footer, lists each NIF with pending edits: `path · mod · n unused blocks removed · written to <export folder>`. A NIF edit that cannot be exported is a warning instead: "NIF edit skipped: <reason>" in amber in the Warnings column, counted in its number; it never holds back the textures. The NIF edits are written once the texture export (and, with Also on, its zips) has ended; a cancelled export writes none. The result is a line in Messages and in the export notes.
 
-**Stale outputs (n)**, under the NIF edits: the files an earlier export wrote into the export folder that this project no longer writes, from its manifest. That covers a renamed set's old files, a skin set's old `_f.dds` or its old files under `textures\pbr\`, the old `_rmaos.dds` after a recipe switch, and the output of a source you deleted.
+**Stale outputs (n)**, under the NIF edits: the files an earlier export wrote into the export folder that this project no longer writes, from its manifest. <!-- D:FC11 --> That covers a renamed set's old files, a skin set's old `_f.dds` or its old files under `textures\pbr\`, the old `_rmaos.dds` after a recipe switch, and the output of a source you deleted.
 
 - Each row is `path · no longer written` (or `· its source is gone`). A file that still has the size and time Tessalith recorded when it wrote it has **Delete** (red outline). A file changed since, or one written before Tessalith recorded those, reads `edited since Tessalith wrote it: left alone` and has no button.
 - **Delete** acts on a mouse click only, never on Enter or Space, never on Export, and not while an export runs. It checks the file again when you click, and a file changed in the meantime is left alone.

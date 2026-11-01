@@ -48,7 +48,7 @@ See also [Troubleshooting](Troubleshooting.md).
 
 If Tessalith itself crashes, the error goes to `%LOCALAPPDATA%\sdc\logs\crash-<time>.log`, and unsaved edits are written beside their file as `sdc.toml.recovery` / `sdc-project.toml.recovery`. The originals are not touched.
 
-When you next open the folder, a `.recovery` file that is newer than its original is loaded into the document by itself:
+When you next open the folder, a `.recovery` file that is newer than its original is loaded into the document by itself: <!-- D:FB5 -->
 - It counts as an unsaved change and is one Undo step called "Restore crash edits".
 - A toast says "Restored unsaved edits from the crash" with an Undo button. The toast's Undo takes the edits back and deletes the `.recovery` file, because you turned the edits down. Ctrl+Z takes them back too, but keeps the file, so the next open restores them again.
 - Saving the document (Save, or Overwrite when it changed on disk) deletes the file. The saves Tessalith makes on its own, such as recording an export folder or a JSON hash, keep it.

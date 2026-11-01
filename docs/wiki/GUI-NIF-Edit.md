@@ -5,7 +5,7 @@ How to edit a mesh's shader, alpha, controllers and extra data in the Meshes vie
 ## Before you start
 
 - Scan your mods first, so the Meshes view lists your meshes ([Mod scanning](Mod-Scanning.md)).
-- Pick an export folder with **Export to ▾** in the header ([Export to](GUI-Main-Window.md#export-to)). Edited NIFs go there, next to your textures.
+- Pick an export folder with **Export to ▾** in the header ([Export to](GUI-Main-Window.md#export-to)). Edited NIFs go there, next to your textures. <!-- D:GD5 -->
 
 ## Editing a NIF
 
@@ -48,7 +48,7 @@ Values are never clamped. A value outside the range the game expects, or a flag 
 
 The bottom of the edit panel, under the tabs, stays there however long a tab is. Its first line is a status: a green dot and **Ready**, a grey dot and "No edits to export." while nothing is edited, or a red dot and **Blocked:** with the reason. The reason is one of: an edit cannot be applied, conflicts are open, an edit introduced an error, or no export folder ("No export folder chosen"). When a pending row is red, **Show** opens the pending list. When a file Tessalith did not write is already at the export path, **Diff…** opens a list of the blocks that differ between that file and what the export writes, under the status line (it is read at the click; **Close** shuts it). Then "Writes meshes\…\x.nif to <export folder>\meshes\…\x.nif" (cut in the middle when long; hover for the full path) and "The source file is never changed. Change the folder with Export to ▾ in the header."
 
-**Review…** opens Review in the bottom panel: NIF edits export from there, with the textures, when you press Review's Export. The button itself never writes. In Review each NIF with edits is a row: its mod, how many unused blocks the export leaves out, and the result after the export (written, or skipped and why). A blocked NIF row is skipped and never blocks the texture export. Each write puts "Exported <path> to <mod>." in Messages, with a placement line when the mod order is wrong: when the export folder is a mod folder in the MO2 instance's `mods`, the export checks the mod order and says whether that mod must be enabled, or dragged below the highest source or above the lowest PGPatcher output; any other folder says "The export folder is not an MO2 mod here: load order not checked." and still exports.
+**Review…** opens Review in the bottom panel: NIF edits export from there, with the textures, when you press Review's Export. <!-- D:GD2 --> The button itself never writes. In Review each NIF with edits is a row: its mod, how many unused blocks the export leaves out, and the result after the export (written, or skipped and why). A blocked NIF row is skipped and never blocks the texture export. Each write puts "Exported <path> to <mod>." in Messages, with a placement line when the mod order is wrong: when the export folder is a mod folder in the MO2 instance's `mods`, the export checks the mod order and says whether that mod must be enabled, or dragged below the highest source or above the lowest PGPatcher output; any other folder says "The export folder is not an MO2 mod here: load order not checked." and still exports.
 
 ### Changing the export folder
 

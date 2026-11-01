@@ -69,7 +69,7 @@ The header is one row from about 1340 points of window width; in a narrower wind
 
 ![The Export to menu.](../img/gui/GUI-Main-Window/export-to-menu.png)
 
-It is not drawn until a folder is chosen for the project: a project never takes over the folder you picked for another mod. The same menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one.
+It is not drawn until a folder is chosen for the project: a project never takes over the folder you picked for another mod. <!-- D:FB1 --> The same menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one.
 
 The menu holds:
 - **Choose export folder…**;
@@ -90,7 +90,7 @@ Either way a click opens Review, or exports a clean project. While an export run
 
 The window title shows the folder, with a dot when there are unsaved edits. The line under the header is the status line: the file and set counts, a VRAM estimate for the selection and for the folder, and the progress of anything running. Under it a banner appears when something needs attention, for example an `sdc.toml` that failed to load, with a **Reload** button. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
 
-**Messages** is a tab of the bottom panel, not a header button. Its label counts the entries you have not seen. **Ctrl+M** opens it, and again collapses the panel.
+**Messages** is a tab of the bottom panel, not a header button. <!-- D:CD5 --> Its label counts the entries you have not seen. **Ctrl+M** opens it, and again collapses the panel.
 
 ## The three columns
 

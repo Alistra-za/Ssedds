@@ -48,7 +48,7 @@ A small **TruePBR JSON editor…** button beside the Material tab opens the [JSO
 
 **Colours.** Every colour input has a swatch that opens a colour square and a `#RRGGBB` box (the `#` is optional, case is ignored). The box commits on Enter or focus loss; invalid text gets a red outline and is not applied.
 
-- Beside a TruePBR swatch (the coat colour included) are three number boxes, one float per channel (3 decimals) from 0 to 10. A channel above 1.0 is real (fuzz colour 1.25 is common).
+- Beside a TruePBR swatch (the coat colour included) are three number boxes, one float per channel (3 decimals) from 0 to 10. <!-- D:AG133 --> A channel above 1.0 is real (fuzz colour 1.25 is common).
 - The swatch and the hex box show the colour clamped to 1.0, and write 0–1 values only when you change the colour through them, so opening the colour square and closing it leaves a stored 1.25 alone. The JSON gets the value as stored (0.08 stays 0.08).
 - A colour saved as 0–255 whole numbers reads as value/255 and is written unchanged until you edit it.
 - Switching **Fuzz** on starts from colour 0.08, 0.08, 0.08 and weight 1.
