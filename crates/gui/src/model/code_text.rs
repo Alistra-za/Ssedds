@@ -115,6 +115,20 @@ pub fn code_line(code: Code) -> &'static str {
     }
 }
 
+/// The Acknowledge button's text for `code` (Note FI14): acknowledging `LossAlphaData` exports the texture without its
+/// alpha (the profile stays `remove`, or the format cannot store it), so the button says that.
+pub fn ack_label(code: Code) -> &'static str {
+    match code {
+        Code::LossAlphaData => "Drop the alpha anyway",
+        _ => "Acknowledge",
+    }
+}
+
+/// [`ack_label`] with " for this texture", for the panels that act on the one texture.
+pub fn ack_label_for_texture(code: Code) -> String {
+    format!("{} for this texture", ack_label(code))
+}
+
 /// Every code `text` names, as `(start, end, code)`: a whole token (`LOSS-ALPHA-DATA`), never a part of a longer one.
 fn code_spans(text: &str) -> Vec<(usize, usize, Code)> {
     let token = |c: char| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-';

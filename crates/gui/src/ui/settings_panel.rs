@@ -34,6 +34,7 @@ enum Action {
     PatchAsk,
     PatchDo,
     PatchCancel,
+    Reencode(bool),
 }
 
 /// The groups the compact strip keeps (Task 17's preview).
@@ -643,34 +644,53 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
     if let Some(v) = set {
         edit = Some(RowEdit::Set(v));
     }
-    if cx.compact {
-        ui.label("");
-    } else if let Some(reason) = f.lock {
-        ui.label(egui::RichText::new(reason).small().weak());
-    } else if let Some(why) = (f.field == "subtype")
-        .then(|| auto_subtype_reason(cx.job))
-        .flatten()
-    {
-        // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
-        ui.label(egui::RichText::new("(auto)").small().weak())
-            .on_hover_text(why);
-    } else {
-        ui.label(
-            egui::RichText::new(provenance_text(&f.provenance))
-                .small()
-                .weak(),
-        );
-    }
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    let hint = |ui: &mut egui::Ui| {
+        if cx.compact {
+            ui.label("");
+        } else if let Some(reason) = f.lock {
+            hint_label(ui, reason);
+        } else if let Some(why) = (f.field == "subtype")
+            .then(|| auto_subtype_reason(cx.job))
+            .flatten()
+        {
+            // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
+            ui.label(egui::RichText::new("(auto)").small().weak())
+                .on_hover_text(why);
+        } else {
+            hint_label(ui, &provenance_text(&f.provenance));
+        }
+    };
+    if hint_and_reset(ui, f.edited, hint) {
         edit = Some(RowEdit::Clear);
     }
     ui.end_row();
     edit
+}
+
+/// A row's hint, cut to the room left with the whole text on one tooltip (Note FI12, rule 3.4).
+fn hint_label(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(egui::RichText::new(text).small().weak())
+            .truncate()
+            .show_tooltip_when_elided(false),
+    )
+    .on_hover_text(text);
+}
+
+/// The last cell of a field row: ↺ (when `edited`) is laid out first on the right, the hint takes what is left
+/// (Note FI12, rule 3.3), so the reset never leaves the panel. Returns true when ↺ is clicked.
+fn hint_and_reset(ui: &mut egui::Ui, edited: bool, hint: impl FnOnce(&mut egui::Ui)) -> bool {
+    egui::Sides::new()
+        .shrink_left()
+        .truncate()
+        .show(ui, hint, |ui| {
+            edited
+                && ui
+                    .small_button("↺")
+                    .on_hover_text("Use the inherited value")
+                    .clicked()
+        })
+        .1
 }
 
 /// The Sub-type field (Note FB9, owner amendment J): a button showing the type that opens the type picker, the
@@ -710,6 +730,8 @@ fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
             json!(if on { "full" } else { "none" }),
         ));
     }
+    // The hint sits in the editor column, so the third cell holds only ↺.
+    // Kept whole, as before: the count is short and this is not the last cell.
     match mips_count(&f.value) {
         Some(n) if !cx.compact => ui.label(format!("({n} levels — see Advanced)")),
         _ if cx.compact => ui.label(""),
@@ -719,13 +741,7 @@ fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
                 .weak(),
         ),
     };
-    ui.label("");
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    if hint_and_reset(ui, f.edited, |_| {}) {
         actions.push(Action::Clear(f.field));
     }
     ui.end_row();
@@ -780,21 +796,14 @@ fn filter_row(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
     if let Some(m) = picked {
         actions.push(Action::Set(f.field, json!(m)));
     }
-    if cx.compact {
-        ui.label("");
-    } else {
-        ui.label(
-            egui::RichText::new(provenance_text(&f.provenance))
-                .small()
-                .weak(),
-        );
-    }
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    let hint = |ui: &mut egui::Ui| {
+        if cx.compact {
+            ui.label("");
+        } else {
+            hint_label(ui, &provenance_text(&f.provenance));
+        }
+    };
+    if hint_and_reset(ui, f.edited, hint) {
         actions.push(Action::Clear(f.field));
     }
     ui.end_row();
@@ -805,7 +814,7 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
         .default_open(true)
         .show(ui, |ui| {
             egui::Grid::new((cx.key, name))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     if name == "Mipmaps" {
                         mipmaps_rows(ui, cx, actions);
@@ -910,7 +919,11 @@ fn decision_box(
                             ui.label(m);
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("Acknowledge for this texture").clicked() {
+                            if ui
+                                .button(crate::model::code_text::ack_label_for_texture(*code))
+                                .on_hover_text(code_line(*code))
+                                .clicked()
+                            {
                                 actions.push(Action::Decide(Answer::Acknowledge(*code)));
                             }
                             if *code == Code::DimNpot
@@ -1033,8 +1046,20 @@ fn dds_header_panel(
     if v.issues.is_empty() && matches!(v.patch, Ok(None)) {
         ui.label("Header: valid");
     }
-    for i in &v.issues {
-        ui.label(egui::RichText::new(i).small());
+    // Note FI3 (A23): one plain line; the raw header fields are on hover (rule 4.5).
+    if !v.issues.is_empty() {
+        let patch = if matches!(v.patch, Ok(Some(_))) {
+            " Patch header… writes a copy with a fixed header."
+        } else {
+            ""
+        };
+        ui.label(
+            egui::RichText::new(format!(
+                "The DDS header has fields other tools may misread.{patch}"
+            ))
+            .small(),
+        )
+        .on_hover_text(v.issues.join("\n"));
     }
     ui.horizontal(|ui| {
         ui.label("Tag on patch:");
@@ -1172,6 +1197,18 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
     let last = model.dds_patch.last_for(key).map(str::to_string);
     let export_folder_chosen = model.export_folder_chosen().is_some();
+    // Note FI3: why the re-encode button is off (read-only first), and whether it would write over its source. Only a
+    // skipped DDS draws that button, so nothing else pays for the scan or the file-system check each frame.
+    let skipped_dds = kind == ItemKind::Dds && job.is_none();
+    let reencode_off = toml_read_only
+        .clone()
+        .or_else(|| skipped_dds.then(|| model.reencode_blocker(key)).flatten());
+    let into_source = skipped_dds
+        && engine::dds::same_file(
+            &model.item(key).map(|i| i.input.clone()).unwrap_or_default(),
+            &model.output_root().join(&job_key),
+        );
+    let reencoding = model.reencode_on(key);
     let mut actions = vec![];
     if !compact {
         let set_key = model.item(key).and_then(|i| i.set_key.clone());
@@ -1183,6 +1220,24 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
         }
         ui.heading(&name);
         ui.weak(if job_key.is_empty() { key } else { &job_key });
+        // Note FI3: a DDS re-encoded by `sdc.toml` (it has a job, or failed at plan) offers the way back.
+        if reencoding {
+            let r = ui
+                .add_enabled(
+                    toml_read_only.is_none(),
+                    egui::Button::new("Stop re-encoding"),
+                )
+                .on_hover_text(
+                    "Leave the DDS file as it is again: it is not written to the export.",
+                );
+            let r = match &toml_read_only {
+                Some(why) => r.on_disabled_hover_text(why),
+                None => r,
+            };
+            if r.clicked() {
+                actions.push(Action::Reencode(false));
+            }
+        }
         // Note DY17: a file the user made "Not a helper" (`helper.role = "none"`) says so, with the way back.
         let not_helper = model
             .project
@@ -1243,8 +1298,23 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             };
             if kind == ItemKind::Dds {
                 ui.label(
-                    "Already a DDS file; it is not converted (opt in with reencode in sdc.toml).",
+                    "Already a DDS file: it is left as it is and not written to the export.",
                 );
+                // Note FI3: the S6 `reencode` selector from a button, not a hand edit.
+                let mut hover = String::from("Decode it and encode it again with this project's settings. Block-compressed files lose some quality.");
+                if into_source {
+                    hover.push_str(" It cannot be written into the folder it comes from.");
+                }
+                let r = ui
+                    .add_enabled(reencode_off.is_none(), egui::Button::new("Re-encode this file"))
+                    .on_hover_text(hover);
+                let r = match &reencode_off {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r,
+                };
+                if r.clicked() {
+                    actions.push(Action::Reencode(true));
+                }
                 if let Some(v) = &header {
                     dds_header_panel(
                         ui,
@@ -1366,6 +1436,7 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
             Action::PatchTag(t) => model.set_dds_patch_tag(key, t),
             Action::PatchAsk => model.dds_patch.confirming = Some(key.to_string()),
             Action::PatchCancel => model.dds_patch.confirming = None,
+            Action::Reencode(on) => model.set_reencode(&[key.to_string()], on),
             Action::PatchDo => {
                 // The result line lands in `dds_patch.last`, shown under the panel.
                 let _ = model.patch_dds_header(key);

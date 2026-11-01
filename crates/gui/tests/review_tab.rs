@@ -131,6 +131,53 @@ fn the_review_headings_count_and_the_warnings_column_says_what_does_not_block() 
     assert!(h.query_by_label_contains("see Problems").is_none());
 }
 
+fn nif_row(blocked: Option<&str>) -> sdc_gui::model::meshes::NifReviewRow {
+    sdc_gui::model::meshes::NifReviewRow {
+        path: r"meshes\x.nif".into(),
+        mod_name: "My Mod".into(),
+        blocked: blocked.map(String::from),
+        foreign: None,
+        answer: None,
+        compaction: None,
+    }
+}
+
+/// Note FI7 (4b, O5): a NIF edit waiting only for the export folder is listed under its own footer heading, not warned.
+#[test]
+fn a_nif_edit_waiting_for_a_folder_is_listed_not_warned() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened_unchosen(d.path());
+    assert!(m.export_folder_chosen().is_none());
+    m.open_review();
+    let blockers =
+        pbr_export::export_blocks(&m).len() + usize::from(m.export_folder_chosen().is_none());
+    m.set_nif_review_rows(vec![nif_row(Some(
+        sdc_gui::model::review::NO_EXPORT_FOLDER,
+    ))]);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("NIF edits skipped until an export folder is chosen (1)");
+    h.get_by_label(r"meshes\x.nif");
+    assert!(h.query_by_label_contains("NIF edits (").is_none());
+    h.get_by_label("Warnings (0)");
+    h.get_by_label(&format!("Blockers ({blockers})"));
+}
+
+/// Note FI7 (4b): any other blocked reason stays a Warning (FC5).
+#[test]
+fn another_blocked_nif_reason_is_still_a_warning() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.open_review();
+    m.set_nif_review_rows(vec![nif_row(Some("Resolve the conflicts first."))]);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Warnings (1)");
+    assert!(h
+        .query_by_label_contains("until an export folder")
+        .is_none());
+}
+
 #[test]
 fn review_export_is_disabled_with_the_blocker_count() {
     let d = tempfile::tempdir().unwrap();
@@ -255,6 +302,35 @@ fn accept_all_suggestions_is_off_when_no_texture_has_one() {
     h.get_by_label("No undecided texture has a suggestion");
 }
 
+/// Note FI11 (A11): an undecided texture that only asks its alpha meaning is not accepted here; the hover says why.
+#[test]
+fn accept_all_explains_an_alpha_proposal() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    // The alpha question only follows a sub-type.
+    m.decide(
+        "landscape/leaf.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Diffuse),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = harness(m);
+    h.run();
+    press_export(&mut h);
+    press(&mut h, "Accept all suggestions");
+    settle(&mut h);
+    let asks_alpha = h.state().undecided_keys().iter().any(|k| {
+        let it = h.state().item(k).unwrap();
+        it.decisions
+            .iter()
+            .any(|d| matches!(d, sdc_gui::model::items::Decision::AlphaMeaning))
+    });
+    assert!(asks_alpha, "a texture still asks its alpha meaning");
+    assert!(disabled(&h, "Accept all suggestions"));
+    h.get_by_label("Accept all suggestions").hover();
+    h.run();
+    h.get_by_label("Only type suggestions are accepted here; an alpha meaning needs your answer");
+}
+
 /// Review Focus 3.
 #[test]
 fn review_export_is_disabled_with_the_reason_while_read_only() {
@@ -375,6 +451,9 @@ fn the_columns_stay_above_the_footer() {
     );
     h.set_size(egui::vec2(1400.0, 700.0));
     h.run();
+    // set_size applies on the next pass and nothing asks for another, so run() stops after one pass at the new size
+    // (the old wide-card layout happened to request two more); the panels settle on the pass after it.
+    h.run_steps(1);
     let footer = h.get_by_label("What will be written").rect().top();
     let mut labels: Vec<String> = pbr_export::export_asks(h.state())
         .into_iter()

@@ -712,6 +712,22 @@ fn enter_in_unsaved_dialog_cancels() {
     assert!(h.state().is_dirty(), "OpenUnsaved: the edits are kept");
 }
 
+/// Note FI4: the unsaved dialog names only the documents with unsaved changes.
+#[test]
+fn the_unsaved_dialog_names_only_dirty_files() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.set_field("landscape/odd.png", "resize", json!("pot-down"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(!m.sets_doc.as_ref().unwrap().is_dirty());
+    assert!(!m.request_close());
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.get_by_label("sdc.toml");
+    assert!(h.query_by_label_contains("sdc-project.toml").is_none());
+}
+
 /// The rest of `every_dialogs_enter_still_presses_what_it_pressed`.
 fn every_other_dialogs_enter() {
     use sdc_gui::model::AfterExport;

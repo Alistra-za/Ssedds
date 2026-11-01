@@ -1,9 +1,9 @@
-//! Note AO: the set header's input name text box: gray Tab completion, the path lock and the commit keys.
+//! Note AO: the set header's input name text box: gray Tab completion, path segments (Note FI17) and the commit keys.
 mod support;
 use eframe::egui::{self, accesskit::Role, Key, Modifiers};
 use egui_kittest::kittest::{by, NodeT as _, Queryable};
 use egui_kittest::Harness;
-use sdc_gui::model::input_name::{completion, in_form_of, lock_cut, separator_stops, tab_part};
+use sdc_gui::model::input_name::{completion, in_form_of, tab_part};
 use sdc_gui::model::known_paths::KnownPaths;
 use sdc_gui::model::pbr_export::json_entries;
 use sdc_gui::model::AppModel;
@@ -57,39 +57,43 @@ fn a_set_named_without_textures_is_offered_paths_without_it() {
     assert_eq!(in_form_of(list.clone(), "Textures\\clutter/saw02"), list);
 }
 
-#[test]
-fn the_lock_stops_are_the_separators() {
-    assert_eq!(separator_stops("textures\\landscape/rock01"), vec![8, 18]);
-    assert!(separator_stops("rock01").is_empty());
-    // Lock n keeps everything up to the n-th separator.
-    assert_eq!(lock_cut("textures/landscape/rock01", 0), 0);
-    assert_eq!(lock_cut("textures/landscape/rock01", 1), 9);
-    assert_eq!(lock_cut("textures/landscape/rock01", 2), 19);
-    assert_eq!(lock_cut("textures/landscape/rock01", 9), 19);
-}
-
 type H = Harness<'static, (AppModel, State)>;
+
+/// The folder of the rock set's name.
+const DIR: &str = "textures/landscape/";
+const ROCK01: &str = "textures/landscape/rock01";
 
 fn harness() -> (tempfile::TempDir, H) {
     harness_dt(0.25)
 }
 
 fn harness_dt(dt: f32) -> (tempfile::TempDir, H) {
+    harness_with(
+        dt,
+        &[
+            "textures/landscape/rock02",
+            "textures/landscape/rocks/big",
+            "textures/landscape/rocks/small",
+            "textures/other/thing",
+        ],
+    )
+}
+
+fn harness_with(dt: f32, known: &[&str]) -> (tempfile::TempDir, H) {
     let d = tempfile::tempdir().unwrap();
     let mut m = pbr_opened(d.path());
     m.set_known(KnownPaths {
-        textures: [
-            ("textures/landscape/rock02.dds".to_string(), 1u16),
-            ("textures/landscape/rocks/big.dds".to_string(), 1u16),
-            ("textures/landscape/rocks/small.dds".to_string(), 1u16),
-            ("textures/other/thing.dds".to_string(), 1u16),
-        ]
-        .into(),
+        textures: known.iter().map(|p| (format!("{p}.dds"), 1u16)).collect(),
         mesh_dirs: vec![],
     });
+    (d, harness_on(m, ROCK_SET, dt))
+}
+
+/// The app on `m` with set `set` selected.
+fn harness_on(mut m: AppModel, set: &str, dt: f32) -> H {
     let key = json_entries(&m)
         .into_iter()
-        .find(|(v, _)| v.id == ROCK_SET)
+        .find(|(v, _)| v.id == set)
         .unwrap()
         .0
         .key;
@@ -106,10 +110,10 @@ fn harness_dt(dt: f32) -> (tempfile::TempDir, H) {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    (d, h)
+    h
 }
 
-/// The free (editable) part of the box: the only text input whose value is under `textures/landscape/`.
+/// The box's text.
 fn free(h: &H) -> String {
     h.get(
         by().role(Role::TextInput)
@@ -131,21 +135,28 @@ fn focus(h: &mut H) {
     key(h, Key::End, Modifiers::NONE);
 }
 
+/// A key press and its release (egui marks a press of a key still down as a repeat).
 fn key(h: &mut H, key: Key, modifiers: Modifiers) {
-    h.input_mut().events.push(egui::Event::Key {
-        key,
-        physical_key: None,
-        pressed: true,
-        repeat: false,
-        modifiers,
-    });
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        });
+    }
     h.run();
 }
 
+/// Replaces the whole text (Ctrl+A, then typing) with the rock set's folder followed by `s`.
 fn clear_and_type(h: &mut H, s: &str) {
-    for _ in 0..12 {
-        key(h, Key::Backspace, Modifiers::NONE);
-    }
+    type_all(h, &format!("{DIR}{s}"));
+}
+
+/// Replaces the whole text with `s`.
+fn type_all(h: &mut H, s: &str) {
+    key(h, Key::A, ctrl());
     h.input_mut().events.push(egui::Event::Text(s.into()));
     h.run();
 }
@@ -158,34 +169,297 @@ fn ctrl() -> Modifiers {
     }
 }
 
+fn ctrl_shift() -> Modifiers {
+    Modifiers {
+        shift: true,
+        ..ctrl()
+    }
+}
+
+/// The box's selection as (secondary, primary) char indices: (anchor, head).
+fn sel(h: &H) -> (usize, usize) {
+    let r = egui::TextEdit::load_state(&h.ctx, sdc_gui::ui::input_name::edit_id(ROCK_SET))
+        .and_then(|s| s.cursor.char_range())
+        .expect("a cursor");
+    (r.secondary.index.0, r.primary.index.0)
+}
+
+/// `sel` sorted.
+fn sel_sorted(h: &H) -> (usize, usize) {
+    let (a, b) = sel(h);
+    (a.min(b), a.max(b))
+}
+
+fn box_rect(h: &H) -> egui::Rect {
+    h.get(
+        by().role(Role::TextInput)
+            .label(sdc_gui::ui::input_name::HINT),
+    )
+    .rect()
+}
+
+/// The screen x of char boundary `prefix.len()` in the box (its text starts after a 4 pt margin).
+fn x_after(h: &H, prefix: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(&h.ctx.global_style());
+    let w = h.ctx.fonts_mut(|f| {
+        f.layout_no_wrap(prefix.to_string(), font, egui::Color32::WHITE)
+            .size()
+            .x
+    });
+    box_rect(h).left() + 4.0 + w
+}
+
+fn pointer(h: &mut H, p: egui::Pos2, pressed: bool, modifiers: Modifiers) {
+    h.input_mut().events.push(egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers,
+    });
+}
+
+/// Note FI17: Ctrl+Left / Ctrl+Right jump to the previous segment start / the next segment end; with Shift they
+/// extend the selection. `.` and `-` are not boundaries (egui's word jump stops at them).
 #[test]
-fn the_lock_defaults_to_the_folder_and_ctrl_arrows_move_it() {
+fn ctrl_arrows_jump_by_segment() {
     let (_d, mut h) = harness();
-    // The folder is locked (drawn as a label), the file name is free.
-    assert_eq!(free(&h), "rock01");
-    h.get_by_label("textures/landscape/");
     focus(&mut h);
+    type_all(&mut h, "textures/landscape/rock-02.v2");
+    key(&mut h, Key::End, Modifiers::NONE);
     key(&mut h, Key::ArrowLeft, ctrl());
-    assert_eq!(free(&h), "landscape/rock01");
+    assert_eq!(sel(&h), (19, 19));
     key(&mut h, Key::ArrowLeft, ctrl());
+    assert_eq!(sel(&h), (9, 9));
     key(&mut h, Key::ArrowLeft, ctrl());
-    assert_eq!(free(&h), "textures/landscape/rock01", "no lock left of 0");
+    assert_eq!(sel(&h), (0, 0));
+    key(&mut h, Key::ArrowLeft, ctrl());
+    assert_eq!(sel(&h), (0, 0), "nothing left of 0");
     key(&mut h, Key::ArrowRight, ctrl());
+    assert_eq!(sel(&h), (8, 8));
     key(&mut h, Key::ArrowRight, ctrl());
+    assert_eq!(sel(&h), (18, 18));
     key(&mut h, Key::ArrowRight, ctrl());
-    assert_eq!(free(&h), "rock01", "no lock right of the last separator");
+    assert_eq!(sel(&h), (29, 29));
+    key(&mut h, Key::ArrowLeft, ctrl_shift());
+    assert_eq!(sel(&h), (29, 19), "Shift extends");
+    key(&mut h, Key::ArrowLeft, ctrl_shift());
+    assert_eq!(sel(&h), (29, 9));
+    assert_eq!(free(&h), "textures/landscape/rock-02.v2", "no text change");
+}
+
+/// Note FI17: a double-click selects the path segment under the pointer, not egui's word (`.` and `-` split words).
+#[test]
+fn double_click_selects_the_segment() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    type_all(&mut h, "textures/landscape/rock-02.v2");
+    let p = egui::pos2(
+        x_after(&h, "textures/landscape/roc"),
+        box_rect(&h).center().y,
+    );
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for _ in 0..2 {
+        pointer(&mut h, p, true, Modifiers::NONE);
+        pointer(&mut h, p, false, Modifiers::NONE);
+        h.step();
+    }
+    h.run();
+    assert_eq!(sel_sorted(&h), (19, 29));
+    // On a folder: the folder only, not its `/`s.
+    let p = egui::pos2(x_after(&h, "textures/lan"), box_rect(&h).center().y);
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for _ in 0..2 {
+        pointer(&mut h, p, true, Modifiers::NONE);
+        pointer(&mut h, p, false, Modifiers::NONE);
+        h.step();
+    }
+    h.run();
+    assert_eq!(sel_sorted(&h), (9, 18));
+}
+
+/// Press at `from`, move to `to` in four steps, release.
+fn drag(h: &mut H, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(egui::Event::PointerMoved(from));
+    h.run();
+    pointer(h, from, true, modifiers);
+    h.step();
+    for i in 1..=4 {
+        h.input_mut()
+            .events
+            .push(egui::Event::PointerMoved(from.lerp(to, i as f32 / 4.0)));
+        h.step();
+    }
+    pointer(h, to, false, modifiers);
+    h.step();
+    h.run();
+}
+
+/// Note FI17: a drag whose head crosses a `/` selects whole segments, in either direction.
+#[test]
+fn a_drag_across_a_slash_snaps_to_segments() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    let y = box_rect(&h).center().y;
+    let land = egui::pos2(x_after(&h, "textures/lands"), y);
+    let rock = egui::pos2(x_after(&h, "textures/landscape/ro"), y);
+    drag(&mut h, land, rock, Modifiers::NONE);
+    assert_eq!(sel(&h), (9, 25), "right: landscape's start to rock01's end");
+    drag(&mut h, rock, land, Modifiers::NONE);
+    assert_eq!(sel(&h), (25, 9), "left: rock01's end to landscape's start");
+    assert_eq!(free(&h), ROCK01);
+}
+
+/// Note FI17: a drag that stays inside one segment selects characters (egui's default).
+#[test]
+fn a_drag_inside_one_segment_selects_characters() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    let y = box_rect(&h).center().y;
+    let a = egui::pos2(x_after(&h, "textures/la"), y);
+    let b = egui::pos2(x_after(&h, "textures/landsc"), y);
+    drag(&mut h, a, b, Modifiers::NONE);
+    let (lo, hi) = sel_sorted(&h);
+    assert!(lo > 9 && hi < 18 && lo < hi, "{lo}..{hi}");
+}
+
+/// Note FI17: Ctrl+A selects the whole path.
+#[test]
+fn ctrl_a_selects_the_whole_path() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    key(&mut h, Key::A, ctrl());
+    assert_eq!(sel_sorted(&h), (0, ROCK01.len()));
+}
+
+/// Note FI17: Backspace on a `/` highlights it first (with a hint), a second press deletes it.
+#[test]
+fn backspace_on_a_slash_highlights_first_then_deletes() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    for _ in 0.."rock01".len() {
+        key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    }
+    assert_eq!(sel(&h), (19, 19));
+    key(&mut h, Key::Backspace, Modifiers::NONE);
+    assert_eq!(free(&h), ROCK01, "the first press keeps the /");
+    assert_eq!(sel_sorted(&h), (18, 19), "and highlights it");
+    h.get_by_label("Backspace again to remove the folder separator");
+    key(&mut h, Key::Backspace, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/landscaperock01");
+    assert!(h
+        .query_by_label("Backspace again to remove the folder separator")
+        .is_none());
+}
+
+/// Note FI17: Delete mirrors Backspace for a `/` after the cursor.
+#[test]
+fn delete_on_a_slash_highlights_first_then_deletes() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    for _ in 0.."/rock01".len() {
+        key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    }
+    assert_eq!(sel(&h), (18, 18));
+    key(&mut h, Key::Delete, Modifiers::NONE);
+    assert_eq!(free(&h), ROCK01);
+    assert_eq!(sel_sorted(&h), (18, 19));
+    h.get_by_label("Delete again to remove the folder separator");
+    key(&mut h, Key::Delete, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/landscaperock01");
+}
+
+/// A key press with no release: while the key stays down, egui marks each further press a repeat (as a held key's
+/// auto-repeat arrives).
+fn key_down(h: &mut H, key: Key) {
+    h.input_mut().events.push(egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+}
+
+fn key_up(h: &mut H, key: Key) {
+    h.input_mut().events.push(egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run();
+}
+
+/// Note FI17: a held Backspace (repeat key events) deletes characters but stops at a `/`, without highlighting it.
+#[test]
+fn held_backspace_stops_at_a_slash() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    // The first press, then 12 repeats.
+    for _ in 0..13 {
+        key_down(&mut h, Key::Backspace);
+    }
+    assert_eq!(free(&h), DIR, "stopped at the /");
+    assert_eq!(sel(&h), (19, 19), "nothing highlighted");
+    // Released and pressed again: the two-press rule.
+    key_up(&mut h, Key::Backspace);
+    key_down(&mut h, Key::Backspace);
+    assert_eq!(sel_sorted(&h), (18, 19));
+    // Still held: the repeat never deletes the highlighted /.
+    key_down(&mut h, Key::Backspace);
+    assert_eq!(free(&h), DIR);
+    key_up(&mut h, Key::Backspace);
+}
+
+/// Note FI17 (supersedes BH2): no padlock, no lock slider; the box is still there.
+#[test]
+fn the_box_has_no_path_lock() {
+    let (_d, h) = harness();
+    assert_eq!(free(&h), ROCK01, "the box holds the whole path");
+    assert!(h.query_by_label("Path lock").is_none());
 }
 
 /// Note FC12: the selector starts at the set's lowest unused match (2 here); the rename list is Match 1's.
 fn match1(h: &mut H) {
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 1 · diffuse").click();
+    h.get_by_label("Match 1 · Diffuse").click();
     h.run();
 }
 
+/// Note FI11 (A15): the Match menu and Slot commands name a slot as the set editor's card does; the key is on hover.
 #[test]
-fn the_dropdown_lists_only_paths_under_the_lock() {
+fn the_match_menu_uses_the_sets_slot_names() {
+    let (_d, mut h) = harness();
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.get_by_value("Match 2").click();
+    h.run();
+    h.get_by_label("Match 6 · RMAOS").hover();
+    h.run();
+    h.run();
+    h.get_by_label("match6");
+    h.get_by_label("Match 3 · Emissive / Skin");
+    h.key_press(Key::Escape);
+    h.run();
+    h.get_by_label("Slot commands…").click();
+    h.run();
+    // The set editor's empty slot-3 card reads "Emissive / Skin (slot 3)"; the number is already in the text.
+    h.get_by_label("Slot 3 (Emissive / Skin)");
+    h.get_by_label("Slot 6 (RMAOS)");
+    h.get_by_label("Slot 7 (Coat normal / Fuzz)");
+}
+
+/// Note FI17 (was the path lock's filter): the ▾ list and the live list show the paths under the folder before the
+/// segment being edited.
+#[test]
+fn the_list_filters_by_the_folder_before_the_cursor_segment() {
     let (_d, mut h) = harness();
     match1(&mut h);
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
@@ -193,6 +467,15 @@ fn the_dropdown_lists_only_paths_under_the_lock() {
     h.get_by_label("Read this set's textures as");
     h.get_by_label("textures/landscape/rock02");
     assert!(h.query_by_label("textures/other/thing").is_none());
+    h.key_press(Key::Escape);
+    h.run();
+    // The live list: no path starts with the text, so the paths under its folder that contain the last segment's words.
+    focus(&mut h);
+    clear_and_type(&mut h, "big");
+    h.get_by_label("textures/landscape/rocks/big");
+    assert!(h.query_by_label("textures/other/thing").is_none());
+    type_all(&mut h, "textures/thing");
+    h.get_by_label("textures/other/thing");
 }
 
 /// Note FC12 (supersedes DO5's auto-switch and DO6's unstored selector): the Match selector starts from the set's lowest
@@ -235,7 +518,7 @@ fn match_selector_starts_from_the_set_and_stays() {
     // The user's choice is stored, and a new window starts from it.
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 4 · parallax").click();
+    h.get_by_label("Match 4 · Height _p").click();
     h.run();
     h.get_by_value("Match 4");
     assert_eq!(
@@ -266,7 +549,7 @@ fn the_match_selector_is_per_project() {
     let (_d, mut h) = harness();
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 4 · parallax").click();
+    h.get_by_label("Match 4 · Height _p").click();
     h.run();
     h.get_by_value("Match 4");
     let d2 = tempfile::tempdir().unwrap();
@@ -344,21 +627,21 @@ fn tab_accepts_the_ghost_and_with_no_ghost_moves_focus() {
     focus(&mut h);
     clear_and_type(&mut h, "rocks");
     key(&mut h, Key::Tab, Modifiers::NONE);
-    assert_eq!(free(&h), "rocks/");
+    assert_eq!(free(&h), format!("{DIR}rocks/"));
     key(&mut h, Key::Tab, Modifiers::NONE);
-    assert_eq!(free(&h), "rocks/big");
+    assert_eq!(free(&h), format!("{DIR}rocks/big"));
     // Nothing to complete: Tab leaves the box; a|b is refused, so the box reverts. The ghost never commits.
     let steps = h.state().0.history.undo.len();
     clear_and_type(&mut h, "a|b");
     key(&mut h, Key::Tab, Modifiers::NONE);
-    assert_eq!(free(&h), "rock01");
+    assert_eq!(free(&h), ROCK01);
     assert_eq!(h.state().0.history.undo.len(), steps);
     // Right arrow at the end takes the whole ghost.
     focus(&mut h);
     clear_and_type(&mut h, "rocks");
     key(&mut h, Key::End, Modifiers::NONE);
     key(&mut h, Key::ArrowRight, Modifiers::NONE);
-    assert_eq!(free(&h), "rocks/big");
+    assert_eq!(free(&h), format!("{DIR}rocks/big"));
 }
 
 /// Trace #8 (AO2): Shift+Tab leaves the box; it never takes the ghost.
@@ -368,7 +651,7 @@ fn shift_tab_does_not_accept_the_ghost() {
     focus(&mut h);
     clear_and_type(&mut h, "rocks");
     key(&mut h, Key::Tab, Modifiers::SHIFT);
-    assert_ne!(free(&h), "rocks/", "Shift+Tab took the ghost");
+    assert_ne!(free(&h), format!("{DIR}rocks/"), "Shift+Tab took the ghost");
 }
 
 #[test]
@@ -380,7 +663,7 @@ fn enter_commits_one_step_esc_reverts_and_invalid_text_does_not_commit() {
     // The first Esc closes the live list, the second reverts (AO4).
     key(&mut h, Key::Escape, Modifiers::NONE);
     key(&mut h, Key::Escape, Modifiers::NONE);
-    assert_eq!(free(&h), "rock01", "Esc reverts");
+    assert_eq!(free(&h), ROCK01, "Esc reverts");
     assert_eq!(h.state().0.history.undo.len(), steps);
     // leaf.png already has that name: invalid, shown red with its reason, and never committed.
     focus(&mut h);
@@ -396,7 +679,7 @@ fn enter_commits_one_step_esc_reverts_and_invalid_text_does_not_commit() {
     assert!(why.contains("already has this name"), "{why}");
     key(&mut h, Key::Enter, Modifiers::NONE);
     assert_eq!(h.state().0.history.undo.len(), steps);
-    assert_eq!(free(&h), "rock01");
+    assert_eq!(free(&h), ROCK01);
     focus(&mut h);
     clear_and_type(&mut h, "rock02");
     key(&mut h, Key::Enter, Modifiers::NONE);
@@ -429,11 +712,9 @@ fn pbr_output_paths_are_never_offered() {
         "{list:?}"
     );
     assert_eq!(completion(&list, "Textures\\PBR"), None);
-    // Unlocked to `textures/`, the list still has no pbr row.
+    // The ▾ list has no pbr row. (With no path lock it lists the name's own folder, so this no longer reaches `textures/`
+    // as a whole: the `input_name_candidates` check above carries the rule.)
     h.run();
-    focus(&mut h);
-    key(&mut h, Key::ArrowLeft, ctrl());
-    key(&mut h, Key::Escape, Modifiers::NONE);
     match1(&mut h);
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();
@@ -518,9 +799,9 @@ fn esc_closes_the_live_list_then_reverts() {
     h.get_by_label(BIG);
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert!(h.query_by_label(BIG).is_none(), "closed");
-    assert_eq!(free(&h), "rocks");
+    assert_eq!(free(&h), format!("{DIR}rocks"));
     key(&mut h, Key::Escape, Modifiers::NONE);
-    assert_eq!(free(&h), "rock01");
+    assert_eq!(free(&h), ROCK01);
 }
 
 fn push_key(h: &mut H, key: Key) {
@@ -546,20 +827,7 @@ fn the_ghost_follows_a_keystroke_by_the_next_frame() {
     push_key(&mut h, Key::Tab);
     h.step();
     h.step();
-    assert_eq!(free(&h), "rocks/big");
-}
-
-/// Review fix: a pasted full path that starts with the locked part replaces the free part, not doubled after the lock.
-#[test]
-fn a_pasted_full_path_drops_the_locked_part() {
-    let (_d, mut h) = harness();
-    focus(&mut h);
-    clear_and_type(&mut h, "");
-    h.input_mut()
-        .events
-        .push(egui::Event::Paste("Textures\\Landscape\\rock02".into()));
-    h.run();
-    assert_eq!(free(&h), "rock02");
+    assert_eq!(free(&h), format!("{DIR}rocks/big"));
 }
 
 /// Trace-debug #11: a click on another set in the Sets column commits the typed name first (AO1). Move, press and
@@ -623,7 +891,7 @@ fn a_press_dragged_off_a_live_row_commits_nothing() {
     h.run();
     assert_eq!(h.state().0.history.undo.len(), steps, "nothing committed");
     // A drag is no click: the box keeps its text and focus. Enter then takes the typed text, not the pressed row.
-    assert_eq!(free(&h), "rocks");
+    assert_eq!(free(&h), format!("{DIR}rocks"));
     key(&mut h, Key::Enter, Modifiers::NONE);
     settle(&mut h);
     assert!(h.state().0.input_name_of("landscape/rocks/small").is_none());
@@ -646,59 +914,6 @@ fn the_set_header_shows_the_name_only_in_the_box() {
         .filter(|n| (n.rect().center().y - edit.center().y).abs() < 12.0)
         .count();
     assert_eq!(on_row, 0);
-}
-
-/// Note BH2: the lock handle is an accessible slider; dragging it moves the lock to the nearest separator.
-#[test]
-fn the_lock_icon_drags_to_a_separator() {
-    let (_d, mut h) = harness();
-    assert_eq!(free(&h), "rock01");
-    let handle = h.get_by_label(sdc_gui::ui::input_name::LOCK_LABEL);
-    assert_eq!(handle.accesskit_node().role(), Role::Slider);
-    let from = handle.rect().center();
-    // BH13: the padlock sits on the box's lower edge, on the track under the text, not over it.
-    let edit = h
-        .get(
-            by().role(Role::TextInput)
-                .label(sdc_gui::ui::input_name::HINT),
-        )
-        .rect();
-    assert!(from.y >= edit.bottom() - 0.5, "{from:?} vs {edit:?}");
-    // The first stop: the box's left edge.
-    let to = egui::pos2(
-        h.get(
-            by().role(Role::TextInput)
-                .label(sdc_gui::ui::input_name::HINT),
-        )
-        .rect()
-        .left()
-            - 200.0,
-        from.y,
-    );
-    h.input_mut().events.push(egui::Event::PointerMoved(from));
-    h.run();
-    h.input_mut().events.push(egui::Event::PointerButton {
-        pos: from,
-        button: egui::PointerButton::Primary,
-        pressed: true,
-        modifiers: Modifiers::NONE,
-    });
-    h.run();
-    for i in 1..=4 {
-        h.input_mut()
-            .events
-            .push(egui::Event::PointerMoved(from.lerp(to, i as f32 / 4.0)));
-        h.run();
-    }
-    h.input_mut().events.push(egui::Event::PointerButton {
-        pos: to,
-        button: egui::PointerButton::Primary,
-        pressed: false,
-        modifiers: Modifiers::NONE,
-    });
-    h.run();
-    h.run();
-    assert_eq!(free(&h), "textures/landscape/rock01");
 }
 
 /// Presses and releases the primary button at `p`: in separate frames, as a mouse click is, or in one frame, as a
@@ -896,4 +1111,330 @@ fn the_path_list_shows_at_once_when_typing_reopens_it() {
         }
     }
     panic!("the list never reopened");
+}
+
+/// From the end of the text, Ctrl+Left `n` times: the cursor at the start of the `n`-th segment from the end.
+fn segment_back(h: &mut H, n: usize) {
+    key(h, Key::End, Modifiers::NONE);
+    for _ in 0..n {
+        key(h, Key::ArrowLeft, ctrl());
+    }
+}
+
+fn selected(h: &H, label: &str) -> bool {
+    // A selectable button's highlight is its AccessKit toggled state.
+    h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)
+}
+
+fn y(h: &H, label: &str) -> f32 {
+    h.get_by_label(label).rect().center().y
+}
+
+/// Note FI17: Ctrl+Down lists the known names for the segment under the cursor; Up/Down then Enter replace only that
+/// segment, and nothing is committed until the box itself commits.
+#[test]
+fn ctrl_down_opens_the_segment_list_and_enter_replaces_only_that_segment() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    focus(&mut h);
+    segment_back(&mut h, 2);
+    assert_eq!(sel(&h), (9, 9), "in `landscape`");
+    key(&mut h, Key::ArrowDown, ctrl());
+    // The folders beside `landscape` under `textures/`; landscape also holds the rest of the path (rock01).
+    assert!(
+        selected(&h, "landscape, has rock01"),
+        "the current folder is highlighted"
+    );
+    assert!(y(&h, "landscape, has rock01") < y(&h, "other"));
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/other/rock01");
+    assert_eq!(
+        h.state().0.history.undo.len(),
+        steps,
+        "a pick only edits the text"
+    );
+    // The next segment's list is open: the textures in `other`, none of them rock01, so none highlighted.
+    assert!(!selected(&h, "textures/other/thing"));
+    assert_eq!(
+        segment_at_cursor(&h),
+        (15, 21),
+        "the cursor is in that segment"
+    );
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.query_by_label("textures/other/thing").is_none());
+    assert_eq!(free(&h), "textures/other/rock01", "Esc keeps the tail");
+}
+
+/// The bounds of the segment the cursor is in.
+fn segment_at_cursor(h: &H) -> (usize, usize) {
+    let r = sdc_gui::model::input_name::segment_at(&free(h), sel(h).1);
+    (r.start, r.end)
+}
+
+/// Note FI17: Esc closes the segment list and changes nothing; the box keeps its focus.
+#[test]
+fn esc_closes_the_segment_list_unchanged() {
+    let (_d, mut h) = harness();
+    let steps = h.state().0.history.undo.len();
+    focus(&mut h);
+    segment_back(&mut h, 2);
+    key(&mut h, Key::ArrowUp, ctrl());
+    h.get_by_label("landscape, has rock01");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.query_by_label("landscape, has rock01").is_none());
+    assert_eq!(free(&h), ROCK01);
+    assert_eq!(h.state().0.history.undo.len(), steps);
+    let edit = sdc_gui::ui::input_name::edit_id(ROCK_SET);
+    assert!(
+        h.ctx.memory(|m| m.has_focus(edit)),
+        "the box keeps its focus"
+    );
+}
+
+/// Note FI17 (rule 10, controller ruling R2): with the whole text selected, Ctrl+Down opens the ▾ list unfiltered
+/// (another folder's rows too); a plain ▾ click afterwards keeps the folder filter.
+#[test]
+fn ctrl_down_with_all_selected_opens_the_full_list() {
+    let (_d, mut h) = harness();
+    match1(&mut h);
+    focus(&mut h);
+    key(&mut h, Key::A, ctrl());
+    key(&mut h, Key::ArrowDown, ctrl());
+    h.get_by_label("Read this set's textures as");
+    h.get_by_label("textures/landscape/rock02");
+    h.get_by_label("textures/other/thing");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.query_by_label("Read this set's textures as").is_none());
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+    h.run();
+    h.get_by_label("textures/landscape/rock02");
+    assert!(
+        h.query_by_label("textures/other/thing").is_none(),
+        "a ▾ click is filtered"
+    );
+}
+
+/// Review fix (FI17 rule 9): a click on a segment row replaces only that segment and commits nothing, whether the
+/// press and the release land in separate frames or in one.
+#[test]
+fn a_click_on_a_segment_row_replaces_only_that_segment() {
+    for one_frame in [false, true] {
+        let (_d, mut h) = harness();
+        let steps = h.state().0.history.undo.len();
+        focus(&mut h);
+        segment_back(&mut h, 2);
+        key(&mut h, Key::ArrowDown, ctrl());
+        let p = h.get_by_label("other").rect().center();
+        press_release(&mut h, p, one_frame);
+        h.run();
+        assert_eq!(free(&h), "textures/other/rock01", "{one_frame}");
+        assert_eq!(
+            h.state().0.history.undo.len(),
+            steps,
+            "{one_frame}: a pick only edits the text"
+        );
+        assert_eq!(
+            h.state().0.input_name_of(ROCK_SET).as_deref(),
+            Some(ROCK01),
+            "{one_frame}: nothing committed"
+        );
+        let edit = sdc_gui::ui::input_name::edit_id(ROCK_SET);
+        assert!(
+            h.ctx.memory(|m| m.has_focus(edit)),
+            "{one_frame}: the box keeps its focus"
+        );
+    }
+}
+
+/// Note FI17 (rule 1): a triple-click still selects the whole path (egui's line select).
+#[test]
+fn triple_click_selects_the_whole_path() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    let p = egui::pos2(x_after(&h, "textures/lan"), box_rect(&h).center().y);
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for _ in 0..3 {
+        pointer(&mut h, p, true, Modifiers::NONE);
+        pointer(&mut h, p, false, Modifiers::NONE);
+        h.step();
+    }
+    h.run();
+    assert_eq!(sel_sorted(&h), (0, ROCK01.len()));
+}
+
+/// Note FI17 (rule 5): a held Delete deletes characters but stops at a `/`, without highlighting it.
+#[test]
+fn held_delete_stops_at_a_slash() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    segment_back(&mut h, 2);
+    assert_eq!(sel(&h), (9, 9));
+    // The first press, then 12 repeats: `landscape` is 9 characters.
+    for _ in 0..13 {
+        key_down(&mut h, Key::Delete);
+    }
+    key_up(&mut h, Key::Delete);
+    assert_eq!(free(&h), "textures//rock01", "stopped at the /");
+    assert_eq!(sel(&h), (9, 9), "nothing highlighted");
+}
+
+const ARMOR: &str = "textures/armor/iron/shield";
+
+/// Note FI17: in a folder list, folders that also hold the rest of the path are marked and listed first; picking one
+/// opens the next segment's list with the old tail highlighted, and Enter keeps it.
+#[test]
+fn picking_a_folder_opens_the_next_segment_with_the_tail_highlighted() {
+    let (_d, mut h) = harness_with(
+        0.25,
+        &[
+            "textures/armor/bronze/helmet",
+            "textures/armor/iron/shield",
+            "textures/armor/steel/shield",
+        ],
+    );
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    focus(&mut h);
+    type_all(&mut h, ARMOR);
+    segment_back(&mut h, 2);
+    key(&mut h, Key::ArrowDown, ctrl());
+    assert!(selected(&h, "iron, has shield"));
+    assert!(y(&h, "iron, has shield") < y(&h, "steel, has shield"));
+    assert!(y(&h, "steel, has shield") < y(&h, "bronze"));
+    h.get_by_label("steel, has shield").hover();
+    h.run();
+    h.get_by_label("Has shield");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/armor/steel/shield");
+    assert!(
+        selected(&h, "textures/armor/steel/shield"),
+        "the old tail is highlighted"
+    );
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/armor/steel/shield", "Enter keeps it");
+    assert!(
+        h.query_by_label("textures/armor/steel/shield").is_none(),
+        "closed"
+    );
+}
+
+/// Note FI17: when the new folder lacks the old tail, its closest names come first, none is highlighted, and Esc keeps
+/// the old tail's text.
+#[test]
+fn a_missing_tail_keeps_its_text_and_lists_close_names_first() {
+    let (_d, mut h) = harness_with(
+        0.25,
+        &[
+            "textures/armor/iron/shield",
+            "textures/armor/steel/apron",
+            "textures/armor/steel/shield_d",
+        ],
+    );
+    focus(&mut h);
+    type_all(&mut h, ARMOR);
+    segment_back(&mut h, 2);
+    key(&mut h, Key::ArrowDown, ctrl());
+    // steel has no shield: no mark.
+    h.get_by_label("steel");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/armor/steel/shield");
+    let (d, a) = (
+        "textures/armor/steel/shield_d",
+        "textures/armor/steel/apron",
+    );
+    assert!(y(&h, d) < y(&h, a), "shield_d first");
+    assert!(!selected(&h, d) && !selected(&h, a), "nothing highlighted");
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(free(&h), "textures/armor/steel/shield");
+}
+
+/// The amber sections of the box's own galley (other panels use amber too).
+fn amber_text(h: &H) -> Vec<String> {
+    fn walk(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) if t.galley.job.text.starts_with("textures/") => {
+                for sec in &t.galley.job.sections {
+                    if sec.format.color == sdc_gui::ui::status::AMBER {
+                        let r = sec.byte_range.start.0..sec.byte_range.end.0;
+                        out.push(t.galley.job.text[r].to_string());
+                    }
+                }
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    h.output()
+        .shapes
+        .iter()
+        .for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+/// UI-D final review Important 2: the offered names leave out `textures/pbr/` (Note AO8), but a set whose own
+/// diffuse sits there is a known texture: its name is never amber, while a name the folder lacks still is.
+#[test]
+fn a_set_under_textures_pbr_is_not_amber() {
+    use engine::config::{GreenConvention, Subtype};
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let tex = d.path().join("textures");
+    std::fs::create_dir_all(tex.join("pbr")).unwrap();
+    std::fs::rename(tex.join("landscape"), tex.join("pbr/landscape")).unwrap();
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.decide(
+        "pbr/landscape/rock01.png",
+        Answer::Subtype(Subtype::PbrAlbedo),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::PbrNormal),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_known(KnownPaths {
+        textures: [("textures/landscape/rock02.dds".to_string(), 1u16)].into(),
+        mesh_dirs: vec![],
+    });
+    let mut h = harness_on(m, "pbr/landscape/rock01", 0.25);
+    assert_eq!(free(&h), "textures/pbr/landscape/rock01");
+    assert!(amber_text(&h).is_empty(), "{:?}", amber_text(&h));
+    focus(&mut h);
+    clear_and_type(&mut h, "nothere");
+    assert_eq!(amber_text(&h), vec!["nothere".to_string()]);
+}
+
+/// Note FI17: a name that is no known texture draws its last segment amber, with a hover; it stays editable.
+#[test]
+fn an_unknown_tail_is_amber_with_a_hover() {
+    let (_d, mut h) = harness();
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    assert!(amber_text(&h).is_empty(), "rock01 is known");
+    focus(&mut h);
+    clear_and_type(&mut h, "nothere");
+    assert_eq!(amber_text(&h), vec!["nothere".to_string()]);
+    h.get(
+        by().role(Role::TextInput)
+            .label(sdc_gui::ui::input_name::HINT),
+    )
+    .hover();
+    h.run();
+    h.get_by_label("No known texture at textures/landscape/nothere");
+    assert_eq!(free(&h), format!("{DIR}nothere"), "still editable");
 }

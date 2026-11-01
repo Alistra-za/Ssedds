@@ -23,7 +23,7 @@ A PBR set under `cs` has the settings PGPatcher reads in the set editor's **Mate
 | CS PBR records | Community Shaders' PBR texture set and material object blocks ([Set materials](GUI-Set-Materials.md#community-shaders-pbr-records)). |
 | Advanced TruePBR settings | Path contains, Mesh path contains, Rename; UV and cubemap (Smooth angle, Auto UV, UV scale, Cubemap path); vertex colours and depth; Texture locks. Starts closed. |
 
-A small **TruePBR JSON editor…** button beside the Material tab opens the [JSON editor](#the-json-editor).
+A small **PGPatcher JSON editor…** button beside the Material tab opens the [JSON editor](#the-json-editor).
 
 **Headers.** A header shows the group title and, right-aligned, its value: Subsurface Off / Standard / Foliage, Coat / Emissive / Parallax / Glint / Fuzz "on" or "off", NiAlphaProperty "set" or "off", Matching "2 matches" or an amber "matches nothing", CS PBR records "N records". Click a title to open or close it.
 
@@ -90,7 +90,7 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 
 ## The JSON editor
 
-Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** until a folder is chosen), the **TruePBR JSON editor…** button beside the Material tab, or the command palette. It shows the whole PGPatcher JSON as a tab of the centre column, with **Pop out**, **Dock** and **Close** as the preset creator has ([Presets](GUI-Presets.md#presets)): one entry per TruePBR set, then the delete sections. A popped-out editor is a window titled "TruePBR JSON — Tessalith". Advanced skin sets have no entry.
+Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** with no project open), the **PGPatcher JSON editor…** button beside the Material tab, or the command palette. It shows the whole PGPatcher JSON as a tab of the centre column, with **Pop out**, **Dock** and **Close** as the preset creator has ([Presets](GUI-Presets.md#presets)): one entry per TruePBR set, then the delete sections. A popped-out editor is a window titled "PGPatcher JSON — Tessalith". Advanced skin sets have no entry.
 
 ![The JSON editor.](../img/gui/GUI-PGPatcher-JSON/json-editor.png)
 
@@ -100,7 +100,7 @@ Its top field, **JSON name:**, is the JSON's file name (by default the folder na
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
 - A texture match pill picks how it matches: *Match: exact, slot N (diffuse)* (`matchN`) or *path contains*. A set's own diffuse path reads *derived from the set*. A lock key reads *Keep the original texture (PGPatcher won't replace it): diffuse* (`lock_diffuse`, shown on hover).
 - The **▾** [path picker](GUI-Set-Editor.md#path-pickers) on a match lists the scan's textures for that slot, or every known texture path. The *mesh path contains* pill (`nif_filter`) has a picker of folders that hold scanned meshes. Without a scan, the pickers list only the project's own paths.
-- **+ Delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
+- **+ Add a delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
 - A delete section that hits one of your sets (by exact match on the set's texture, or `path_contains` in its diffuse path) strikes that set's pill through, outlines it amber and warns. The set editor shows the same warning, with a button to the editor.
 - The header reads "N errors, M warnings". Errors are what blocks Export (a red line under the entry they belong to); warnings are what Export asks about (an amber line). A problem that belongs to no entry (the JSON name, a set that matches nothing) is listed in a **General** box at the top.
 - **Next error** and **Prev** (F8 and Shift+F8) jump to the next or previous entry with an error, unfold it and scroll to it. They wrap at the end.

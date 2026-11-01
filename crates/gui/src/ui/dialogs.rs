@@ -189,8 +189,16 @@ pub fn short_name(name: &str) -> String {
 }
 
 /// The weak line under a body that names the files an unsaved-changes question is about.
-fn files_hint(ui: &mut egui::Ui) {
-    ui.weak("sdc.toml, sdc-project.toml");
+/// Only the documents with unsaved changes (Note FI4).
+fn files_hint(ui: &mut egui::Ui, model: &AppModel) {
+    let toml =
+        model.project.as_ref().is_some_and(|p| p.is_dirty()) || model.tentative_edits().is_some();
+    let sets = model.sets_doc.as_ref().is_some_and(|s| s.is_dirty());
+    let files: Vec<&str> = [(toml, "sdc.toml"), (sets, "sdc-project.toml")]
+        .into_iter()
+        .filter_map(|(dirty, f)| dirty.then_some(f))
+        .collect();
+    ui.weak(files.join(", "));
 }
 
 /// F3a D4: the copy checklist, every field ticked to start. The ticks live in the dialog itself.
@@ -330,7 +338,7 @@ fn close_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         &buttons,
         |ui| {
             ui.label("Your edits are not saved.");
-            files_hint(ui);
+            files_hint(ui, model);
         },
     );
     if clicked == Some(0) {
@@ -371,7 +379,7 @@ fn reload_unsaved(ctx: &egui::Context, model: &mut AppModel) {
         &buttons,
         |ui| {
             ui.label("Reload drops your unsaved edits and Undo.");
-            files_hint(ui);
+            files_hint(ui, model);
         },
     );
     if clicked == Some(0) {
@@ -436,7 +444,7 @@ fn open_unsaved(ctx: &egui::Context, model: &mut AppModel, root: std::path::Path
         &buttons,
         |ui| {
             ui.label("Your edits are not saved. Opening another folder would lose them.");
-            files_hint(ui);
+            files_hint(ui, model);
         },
     );
     if clicked == Some(0) {

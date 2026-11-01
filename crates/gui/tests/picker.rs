@@ -17,6 +17,8 @@ use support::*;
 /// A dialog that stays open until the test answers it.
 struct Fake {
     answers: Mutex<Receiver<Option<PathBuf>>>,
+    /// The `start` of every spec the dialog was asked with.
+    starts: Mutex<Vec<Option<PathBuf>>>,
 }
 
 fn fake() -> (Arc<Fake>, Sender<Option<PathBuf>>) {
@@ -24,13 +26,15 @@ fn fake() -> (Arc<Fake>, Sender<Option<PathBuf>>) {
     (
         Arc::new(Fake {
             answers: Mutex::new(rx),
+            starts: Mutex::new(vec![]),
         }),
         tx,
     )
 }
 
 impl PickerBackend for Fake {
-    fn pick(&self, _: &PickerSpec) -> Option<PathBuf> {
+    fn pick(&self, spec: &PickerSpec) -> Option<PathBuf> {
+        self.starts.lock().unwrap().push(spec.start.clone());
         self.answers
             .lock()
             .unwrap()
@@ -338,6 +342,46 @@ fn the_export_folder_cannot_change_while_an_export_runs() {
     // run(), not run_steps: the tooltip waits out its delay.
     h.run();
     h.get_by_label(sdc_gui::ui::header::EXPORT_RUNNING_HOVER);
+}
+
+/// Note FI10: the start folder of the Open folder dialog for a model whose recent list is `recent`.
+fn open_folder_start(recent: Vec<PathBuf>) -> Option<PathBuf> {
+    let m = AppModel::placeholder(GuiSettings {
+        recent,
+        ..GuiSettings::default()
+    });
+    let (f, tx) = fake();
+    m.picker.set_backend(f.clone());
+    assert!(m.pick(
+        &egui::Context::default(),
+        PickerPurpose::OpenFolder,
+        m.open_folder_spec()
+    ));
+    tx.send(None).unwrap();
+    wait_closed(&m.picker);
+    let starts = f.starts.lock().unwrap();
+    assert_eq!(starts.len(), 1);
+    starts[0].clone()
+}
+
+#[test]
+fn open_folder_starts_in_the_last_projects_parent() {
+    let d = tempfile::tempdir().unwrap();
+    let a = d.path().join("a");
+    let proj = a.join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    assert_eq!(open_folder_start(vec![proj]), Some(a));
+}
+
+#[test]
+fn open_folder_with_no_recent_has_no_start() {
+    assert_eq!(open_folder_start(vec![]), None);
+    // The last project's parent is gone.
+    let d = tempfile::tempdir().unwrap();
+    assert_eq!(
+        open_folder_start(vec![d.path().join("gone").join("proj")]),
+        None
+    );
 }
 
 /// Polls until the Save report worker has answered.

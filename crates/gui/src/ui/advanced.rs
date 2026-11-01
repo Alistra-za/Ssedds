@@ -145,17 +145,40 @@ fn section(ui: &mut egui::Ui, name: &str, body: impl FnOnce(&mut egui::Ui)) {
         .show(ui, body);
 }
 
-fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
+/// Slack kept off the inspector grid's width for the scroll bar and the grid's own cell padding (rule 3.7).
+const GRID_MARGIN: f32 = 24.0;
+/// The narrowest an inspector column gets.
+const MIN_COL: f32 = 60.0;
+
+/// A field's row text: the bulk panel's label, else the key as words ("alpha.compare" is "Alpha compare").
+fn field_text(field: &str) -> String {
+    let label = crate::model::bulk::field_label(field);
+    if label != field {
+        label.to_string()
+    } else {
+        crate::model::labels::readable(&field.replace('.', "_"))
+    }
+}
+
+fn inspector(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState) {
+    let mut open_presets = false;
     section(ui, "Preset inspector", |ui| {
-        ui.label(format!("Batch preset: {}", model.batch_preset));
+        // D10: the drawer names the texture first (A18).
+        // Only a texture with resolved settings is named; the body below has nothing to show for any other.
+        let heading = match selected_job(model) {
+            Some((key, _)) => format!(
+                "How {}'s settings resolve",
+                key.rsplit('/').next().unwrap_or(&key)
+            ),
+            None => "No texture selected".to_string(),
+        };
+        ui.label(egui::RichText::new(heading).strong());
+        ui.weak(format!("Batch preset: {}", model.batch_preset));
         if model.loaded_user_presets.is_empty() {
-            ui.label(
-                egui::RichText::new(
-                    "No user presets (add .toml files to %APPDATA%\\sdc\\presets).",
-                )
-                .small()
-                .weak(),
-            );
+            ui.horizontal(|ui| {
+                ui.weak("No user presets.");
+                open_presets = ui.button("Presets…").clicked();
+            });
         } else {
             ui.label("User presets:");
             for (id, file) in &model.loaded_user_presets {
@@ -180,7 +203,10 @@ fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
             ui.weak("Select a texture to see how its settings were resolved.");
             return;
         };
-        ui.checkbox(&mut state.only_differences, "Show only differences");
+        ui.checkbox(
+            &mut state.only_differences,
+            format!("Show only what differs from {}", engine::presets::BASE_ID),
+        );
         let rows: Vec<InspectorRow> = inspector_rows(&job, session.engine().registry())
             .into_iter()
             .filter(|r| !state.only_differences || r.differs_from_base)
@@ -189,9 +215,13 @@ fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
             ui.weak("Nothing differs from the base preset.");
             return;
         }
+        // Three columns share the drawer's width (the drawer's minimum keeps each above 60 px, so no side scroll).
+        let col = ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x - GRID_MARGIN) / 3.0)
+            .max(MIN_COL);
         egui::Grid::new("inspector")
             .num_columns(3)
             .striped(true)
+            .max_col_width(col)
             .show(ui, |ui| {
                 for r in rows {
                     let text = |s: String| {
@@ -201,17 +231,35 @@ fn inspector(ui: &mut egui::Ui, model: &AppModel, state: &mut AdvancedState) {
                             egui::RichText::new(s)
                         }
                     };
-                    ui.label(text(r.field.clone()));
-                    ui.label(text(value_text(&r.value)));
-                    ui.label(
-                        egui::RichText::new(provenance_text(&r.provenance))
-                            .small()
-                            .weak(),
+                    let shown = field_text(&r.field);
+                    // One tooltip: the name and its key (the automatic elided-text one is off for this label).
+                    let name = format!("{shown} ({})", r.field);
+                    let key_label = ui
+                        .add(
+                            egui::Label::new(text(shown))
+                                .truncate()
+                                .show_tooltip_when_elided(false),
+                        )
+                        .on_hover_text(&name);
+                    key_label.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name)
+                    });
+                    ui.add(egui::Label::new(text(value_text(&r.value))).truncate());
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(provenance_text(&r.provenance))
+                                .small()
+                                .weak(),
+                        )
+                        .truncate(),
                     );
                     ui.end_row();
                 }
             });
     });
+    if open_presets {
+        model.open_presets();
+    }
 }
 
 fn bc1_label(c: Bc1Choice) -> &'static str {
@@ -673,7 +721,7 @@ fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
         let f = levels_view(model.target, &job);
         ui.add_enabled_ui(!read_only, |ui| {
             egui::Grid::new(("advanced-mips", &key))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     let cx = Ctx {
                         key: &key,
@@ -710,7 +758,7 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
         let why = toml_read_only_reason(model);
         ui.add_enabled_ui(!read_only, |ui| {
             egui::Grid::new(("advanced-fields", &key))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     let cx = Ctx {
                         key: &key,

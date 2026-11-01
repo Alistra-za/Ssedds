@@ -920,6 +920,105 @@ fn the_card_shows_check_results_on_an_info_badge_outside_the_warning_count() {
     assert!(b.min.y > name.max.y, "the badge wrapped below the name row");
 }
 
+/// The painted text of the label whose whole text is `full`, row by row, whitespace removed; `None` if none is painted.
+fn painted_text(h: &Harness<'static, AppModel>, full: &str) -> Option<String> {
+    h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.job.text == full => Some(
+            t.galley
+                .rows
+                .iter()
+                .map(|r| r.text())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<String>(),
+        ),
+        _ => None,
+    })
+}
+
+/// Note FI13 (A10): at the narrowest Sets column a PBR set's pill and badges leave its name no room on one row, so
+/// the name has its own row and is painted whole, not as `…`.
+#[test]
+fn a_narrow_set_card_keeps_its_name() {
+    for (width, whole) in [(160.0, false), (210.0, true), (260.0, true)] {
+        let (h, sets, name) = mead_card(width, true);
+        assert!(
+            name.width() >= 80.0,
+            "{width}: the name is squeezed: {name:?} in {sets:?}"
+        );
+        if whole {
+            assert_eq!(
+                painted_text(&h, "test/mead_bottle").as_deref(),
+                Some("test/mead_bottle"),
+                "{width}: the name is painted whole"
+            );
+        }
+    }
+}
+
+/// A Sets column `width` wide with `mead_bottle` (a check badge, and with `warned` two ⚠ warnings): the harness, the
+/// column's rect and the card's name rect.
+fn mead_card(width: f32, warned: bool) -> (Harness<'static, AppModel>, egui::Rect, egui::Rect) {
+    use engine::codes::{Code, Warning};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_sets(d.path(), &[("mead_bottle", 20)], true);
+    if warned {
+        let key = set_key(&m, "mead_bottle");
+        m.sets.iter_mut().find(|s| s.key == key).unwrap().warnings = vec![
+            Warning::new(Code::ShaderMissingMap, "the pbr shader needs _rmaos"),
+            Warning::new(Code::LossReencode, "re-encoded"),
+        ];
+        m.invalidate_views();
+    }
+    let mut h = harness(m, 1600.0);
+    h.ctx
+        .data_mut(|d| d.insert_persisted(egui::Id::new("sets").with("chosen"), width));
+    h.run();
+    let sets = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sets"))
+        .expect("the Sets column")
+        .outer_rect;
+    assert!((sets.width() - width).abs() < 40.0, "{width}: {sets:?}");
+    let name = h
+        .query_all_by_label("test/mead_bottle")
+        .map(|n| n.rect())
+        .filter(|r| sets.contains_rect(*r))
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the card's name");
+    (h, sets, name)
+}
+
+/// Note FI13: a wide Sets column keeps the one-row heading: the pill and the ⚠ button sit on the name's row.
+#[test]
+fn a_wide_set_card_keeps_its_one_row_heading() {
+    let (h, sets, name) = mead_card(400.0, true);
+    for label in ["⚠ 2", "PBR → JSON"] {
+        let r = h
+            .query_all_by_label(label)
+            .map(|n| n.rect())
+            .find(|r| sets.contains_rect(*r))
+            .unwrap_or_else(|| panic!("{label} on the card"));
+        assert!(
+            r.center().y >= name.min.y && r.center().y <= name.max.y && r.min.x > name.max.x,
+            "{label} {r:?} is on the name's row {name:?}"
+        );
+    }
+}
+
+/// Note FI13: the drop zone's one-off hint wraps instead of eliding.
+#[test]
+fn the_drop_zone_hint_is_whole() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_sets(d.path(), &[("mead_bottle", 20)], true);
+    let mut h = harness(m, 1100.0);
+    h.ctx
+        .data_mut(|d| d.insert_persisted(egui::Id::new("sets").with("chosen"), 0.0f32));
+    h.run();
+    assert_eq!(
+        painted_text(&h, "Drop here to start a new set").as_deref(),
+        Some("Dropheretostartanewset")
+    );
+}
+
 /// Review I1: an undecided member's results are left out of the badge, as Problems leaves out its rows.
 #[test]
 fn an_undecided_members_check_results_are_not_on_the_badge() {

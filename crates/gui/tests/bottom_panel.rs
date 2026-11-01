@@ -235,6 +235,26 @@ fn a_problems_row_selects_its_texture_and_decides_in_place() {
     );
 }
 
+/// Note FI11 (D14): the Decide… menu says what it asks before the options, as Review's inline row does.
+#[test]
+fn the_decide_menu_starts_with_alpha_means() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.decide(
+        "landscape/leaf.png",
+        sdc_gui::model::Answer::Subtype(engine::config::Subtype::Diffuse),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    let mut h = harness(m);
+    h.state_mut().open_problems(None);
+    h.run();
+    h.get_by_label("Decide…").click();
+    h.run();
+    let lead = h.get_by_label("Alpha means:").rect();
+    let first = h.get_by_label("Cutout").rect();
+    assert!(lead.max.y <= first.min.y, "{lead:?} {first:?}");
+}
+
 #[test]
 fn a_read_only_project_disables_the_fix_buttons_with_the_reason() {
     let d = tempfile::tempdir().unwrap();

@@ -53,7 +53,8 @@ pub fn set_section(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView) {
                         let text = format!(
                             "{} · slot {}: {}{}",
                             record_label(t.edid.as_deref(), t.formid, "TXST", &t.plugin),
-                            t.slot,
+                            // Note FI18 (GH7): slots count from 1, as in the NIF edit form.
+                            t.slot + 1,
                             t.path,
                             overridden_text(t.n_overrides)
                         );

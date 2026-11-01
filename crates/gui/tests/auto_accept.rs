@@ -3,7 +3,7 @@
 //! the export with a row.
 mod support;
 use eframe::egui;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use engine::config::{AlphaPolicy, Subtype, Target};
 use engine::presets::ConfigFile;
 use engine::shader::{MeshAlpha, Shader};
@@ -110,7 +110,7 @@ fn auto_accepted_types_are_recorded_and_undoable() {
         (At::Project, Some(Fix::UndoLast))
     );
     assert!(
-        row.detail.as_deref().unwrap_or("").contains("a/rock_n.png"),
+        row.detail.as_deref().unwrap_or("").contains("rock_n.png: "),
         "{row:?}"
     );
     // The GUI and `sdc convert` plan the same value with the same provenance (the manifests match).
@@ -135,6 +135,29 @@ fn auto_accepted_types_are_recorded_and_undoable() {
     assert!(!m.can_redo());
 }
 
+/// Note FI11 (A17, D15): the row's hover names files and types in words and explains High confidence.
+#[test]
+fn the_automatic_row_explains_high_confidence() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    rgb(&root, "a/rock_n.png", [128, 128, 255]);
+    rgb(&root, "landscape/grass/g.png", [60, 120, 40]);
+    let m = support::opened_as_the_app(root, d.path().join("export"));
+    let detail = auto_row(&m).expect("the row").detail.unwrap_or_default();
+    assert!(
+        detail.ends_with("High confidence: the file name and the pixels agree on the type."),
+        "{detail}"
+    );
+    // The file name and the type the picker shows, not the folder and the id.
+    assert!(detail.contains("rock_n.png: normal"), "{detail}");
+    assert!(detail.contains("g.png: landscape diffuse"), "{detail}");
+    assert!(!detail.contains("textures/") && !detail.contains("a/rock_n.png"));
+    for st in Subtype::ALL {
+        let id = st.id().to_string();
+        assert!(!id.contains('_') || !detail.contains(&id), "raw id {id}");
+    }
+}
+
 /// R2: a recording a user's edit leads to is its own undo step; Undo takes back only the recording.
 #[test]
 fn a_recording_after_a_user_edit_is_its_own_step() {
@@ -155,10 +178,10 @@ fn a_recording_after_a_user_edit_is_its_own_step() {
     let row = auto_row(&m).expect("the row");
     assert_eq!(row.fix, Some(Fix::UndoLast));
     assert!(
-        row.detail
-            .as_deref()
-            .unwrap_or("")
-            .contains(&format!("a/x_mask.png: {}", st.as_str().unwrap())),
+        row.detail.as_deref().unwrap_or("").contains(&format!(
+            "x_mask.png: {}",
+            st.as_str().unwrap().replace('_', " ")
+        )),
         "{row:?}"
     );
     m.undo();
@@ -315,7 +338,7 @@ fn an_explicit_subtype_is_never_touched() {
     let row = auto_row(&m).expect("the combined row");
     let detail = row.detail.unwrap_or_default();
     assert!(
-        detail.contains("a/wall_n.png") && !detail.contains("a/rock_n.png"),
+        detail.contains("wall_n.png") && !detail.contains("rock_n.png"),
         "{detail}"
     );
 }
@@ -371,7 +394,7 @@ fn evidence_decisions_are_recorded_and_recorded_values_stay() {
     assert_eq!(m.undo_label(), Some("Set 1 value automatically"));
     let row = auto_row(&m).expect("the row");
     assert_eq!(row.text, "1 value set automatically (High confidence)");
-    assert_eq!(row.detail.as_deref(), Some("a/wall.png: cutout"));
+    assert_eq!(row.detail.as_deref(), Some("wall.png: cutout"));
     let p = cli_plan(&root, &text(&m));
     assert_eq!(
         cli_job(&p, "g.png").profile.subtype,
@@ -436,4 +459,129 @@ fn choose_preset_opens_the_preset_menu() {
     h.run();
     h.get_by_label("Presets…");
     assert!(h.state().choose_preset.is_none(), "the request was taken");
+}
+
+// ---- Note FI4 (owner O1 (b)): an automatic-only state never asks; a user edit does.
+
+const THREE: [&str; 3] = ["a/x_n.png", "a/y_n.png", "a/z_n.png"];
+
+/// Three lone normals: the plan records 3 types, and that step is on top.
+fn three_types(dir: &Path) -> (std::path::PathBuf, AppModel) {
+    let root = dir.join("textures");
+    for k in THREE {
+        rgb(&root, k, [128, 128, 255]);
+    }
+    let m = support::opened_as_the_app(root.clone(), dir.join("export"));
+    assert_eq!(m.undo_label(), Some("Set 3 types automatically"));
+    assert!(m.is_dirty() && m.only_automatic_unsaved());
+    (root, m)
+}
+
+fn saved_types(root: &Path) -> usize {
+    std::fs::read_to_string(root.join("sdc.toml"))
+        .unwrap_or_default()
+        .matches("subtype = \"normal\"")
+        .count()
+}
+
+fn harness(m: AppModel) -> egui_kittest::Harness<'static, AppModel> {
+    let h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+#[test]
+fn an_automatic_only_folder_closes_without_a_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, mut m) = three_types(d.path());
+    assert!(m.request_close());
+    assert_eq!(m.dialog, None);
+}
+
+#[test]
+fn an_automatic_only_folder_opens_another_without_a_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, mut m) = three_types(d.path());
+    let other = d.path().join("other");
+    rgb(&other, "b/w.png", [90, 60, 30]);
+    assert!(m.request_open(other.clone()));
+    assert_eq!(m.dialog, None);
+    assert_eq!(m.root.as_deref(), Some(other.as_path()));
+}
+
+#[test]
+fn an_automatic_only_folder_reloads_without_a_dialog() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, mut m) = three_types(d.path());
+    m.request_reload();
+    assert_eq!(m.dialog, None);
+    assert!(m.wait_idle(WAIT));
+    // A new history: the next plan records the same types again.
+    assert_eq!(m.undo_label(), Some("Set 3 types automatically"));
+    for k in THREE {
+        assert_eq!(subtype(&m, k), Some(json!("normal")), "{k}");
+    }
+}
+
+#[test]
+fn save_stays_live_and_writes_the_automatic_types() {
+    let d = tempfile::tempdir().unwrap();
+    let (root, m) = three_types(d.path());
+    assert!(!sdc_gui::ui::header::window_title(&m).contains('●'));
+    let mut h = harness(m);
+    h.run();
+    let save = h.get_by_label("Save");
+    assert!(!save.accesskit_node().is_disabled(), "Save is live");
+    save.click();
+    h.run();
+    assert_eq!(saved_types(&root), 3);
+    assert!(!h.state().is_dirty());
+}
+
+/// Review Focus 5: a user edit on top of the recording ends the no-dialog state; Save writes both.
+#[test]
+fn a_user_edit_after_the_recording_asks_and_saves_both() {
+    let d = tempfile::tempdir().unwrap();
+    let (root, mut m) = three_types(d.path());
+    m.set_field("a/x_n.png", "format", json!("bc7"));
+    assert!(m.wait_idle(WAIT));
+    assert!(!m.only_automatic_unsaved());
+    assert!(sdc_gui::ui::header::window_title(&m).ends_with(" ●"));
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(sdc_gui::model::Dialog::CloseUnsaved));
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.get_by_label("Your edits are not saved.");
+    h.get_by_label("sdc.toml");
+    assert!(
+        h.query_by_label_contains("sdc-project.toml").is_none(),
+        "only the dirty document is named"
+    );
+    h.state_mut().dialog = None;
+    h.state_mut().save().unwrap();
+    let t = std::fs::read_to_string(root.join("sdc.toml")).unwrap();
+    assert!(t.contains("format = \"bc7\""), "{t}");
+    assert_eq!(saved_types(&root), 3, "{t}");
+}
+
+/// Note FI3: the recording a re-encode causes joins the user's step, so the state is a user edit and asks.
+#[test]
+fn a_reencode_and_its_recording_ask_on_close() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    for k in THREE {
+        rgb(&root, k, [128, 128, 255]);
+    }
+    support::bc1_dds(&root.join("a/v.dds"));
+    let mut m = support::opened_as_the_app(root, d.path().join("export"));
+    assert!(m.only_automatic_unsaved());
+    m.set_reencode(&["a/v.dds".to_string()], true);
+    assert!(m.wait_idle(WAIT));
+    assert_eq!(m.undo_label(), Some("Re-encode 1 DDS file"));
+    assert!(m.prompts_unsaved());
+    assert!(!m.request_close());
+    assert_eq!(m.dialog, Some(sdc_gui::model::Dialog::CloseUnsaved));
 }

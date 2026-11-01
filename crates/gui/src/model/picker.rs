@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 /// What a picker is for; the model that owns the purpose handles the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerPurpose {
-    /// Header and Ctrl+O: open a folder.
+    /// The start screen, the header's Open menu and the command palette: open a folder.
     OpenFolder,
     /// Header: the export folder setting.
     ExportFolder,
@@ -263,6 +263,21 @@ impl AppModel {
     pub fn pick(&self, ctx: &egui::Context, purpose: PickerPurpose, spec: PickerSpec) -> bool {
         let scope = purpose.folder_scoped().then(|| self.root.clone()).flatten();
         self.picker.request(ctx, purpose, scope, spec)
+    }
+
+    /// The Open folder dialog: it starts in the parent of the most recent project, when that parent still exists
+    /// (Note FI10), so the next mod is usually one click away.
+    pub fn open_folder_spec(&self) -> PickerSpec {
+        match self
+            .settings
+            .recent
+            .first()
+            .and_then(|p| p.parent())
+            .filter(|p| p.is_dir())
+        {
+            Some(parent) => PickerSpec::folder().start_in(parent.to_path_buf()),
+            None => PickerSpec::folder(),
+        }
     }
 
     /// Open the export folder picker, starting in the app-wide last pick (`gui.toml`) when there is one (Note FB1:

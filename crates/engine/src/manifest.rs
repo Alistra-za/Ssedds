@@ -51,7 +51,7 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         Subtype::Cubemap => "1.1.0",
         // Note FF4: the two sub-types whose default is BC6H; Slowest/Max use the peak mode.
         Subtype::PbrEmissive | Subtype::HdrSky => "1.2.0",
-        // Note F?: BC4 search (BC4/BC5 defaults)
+        // Note FJ: BC4 search (BC4/BC5 defaults)
         Subtype::Envmask
         | Subtype::Flow
         | Subtype::Height

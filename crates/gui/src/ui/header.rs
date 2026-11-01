@@ -1,7 +1,7 @@
-//! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
+//! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… · Preset | the view tabs · the column eyes,
 //! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
 use super::meshes::UndoTarget;
-use crate::model::picker::{self, PickerPurpose, PickerSpec};
+use crate::model::picker::{self, PickerPurpose};
 use crate::model::{also, AppModel};
 use eframe::egui;
 use engine::config::Target;
@@ -21,21 +21,23 @@ pub fn shown_progress(ctx: &egui::Context, epoch: u64, frac: f32) -> f32 {
     ctx.animate_value_with_time(id, frac, super::motion::move_dur(ctx, 0.3))
 }
 
-/// What the export menu's button says while no export folder is chosen (Note FB1).
+/// What the export menu's button says with no project open (Note FI5, was Note FB1's "no folder chosen").
 const MORE_TEXT: &str = "More ▾";
+/// What it says with a project open and no export folder chosen for it (Note FI5).
+const NOT_CHOSEN_TEXT: &str = "Export to: not chosen ▾";
 /// The fewest path characters Export to ▾ shows (K1).
 const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
 pub const EXPORT_RUNNING_HOVER: &str = "An export is running: change the folder after it ends";
 
-fn target_name(t: Target) -> &'static str {
+pub(super) fn target_name(t: Target) -> &'static str {
     match t {
         Target::Cs => "cs",
         Target::Vanilla => "vanilla",
     }
 }
 
-fn target_help(t: Target) -> &'static str {
+pub(super) fn target_help(t: Target) -> &'static str {
     match t {
         Target::Cs => "Community Shaders: TruePBR sets and its packed maps",
         Target::Vanilla => {
@@ -50,7 +52,8 @@ pub fn window_title(model: &AppModel) -> String {
         Some(r) => format!("{} — {}", crate::PRODUCT_NAME, r.display()),
         None => crate::PRODUCT_NAME.to_string(),
     };
-    if model.is_dirty() {
+    // Note FI4: automatic types alone are not marked.
+    if model.prompts_unsaved() {
         t.push_str(" ●");
     }
     t
@@ -80,7 +83,7 @@ pub fn draw(
     status(ui, model);
 }
 
-/// A4, left to right: Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the eyes (Textures view only),
+/// A4, left to right: Open ▾ · Undo · Redo | MO2… · Preset | the view tabs · the eyes (Textures view only),
 /// then Export to ▾ · Save · Export pushed to the right edge.
 fn row(
     ui: &mut egui::Ui,
@@ -92,7 +95,11 @@ fn row(
     open_menu(ui, model);
     undo_redo(ui, model);
     ui.separator();
-    mode_combo(ui, model, scan);
+    // Note FI16: the Mode control is in the Presets tab; MO2… stands alone, where the app has a scan model.
+    if let Some(m) = scan {
+        fit(ui, button_width(ui, "MO2…") + ui.spacing().item_spacing.x);
+        super::meshes::mo2_button(ui, m);
+    }
     preset_combo(ui, model);
     ui.separator();
     view_toggle(ui);
@@ -108,31 +115,34 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
     let h = 2.0 * ui.spacing().interact_size.y;
     let save_w = button_width(ui, "Save");
     let glyph = button_width(ui, "0") - 2.0 * ui.spacing().button_padding.x;
-    // Note FB1: the Export to chip names the folder only once one is chosen for this project; until then the menu is
-    // a plain "More ▾" (it still holds the marker cube, the Also ticks and the JSON editor).
+    // Note FI5: with a project open the menu reads `Export to: {folder} ▾` or `Export to: not chosen ▾`; with none it
+    // is `More ▾` (the folder in `gui.toml` is not this project's, and nothing exports without a project).
     let full = model
-        .export_folder_chosen()
+        .root
+        .as_ref()
+        .and_then(|_| model.export_folder_chosen())
         .map(|p| p.display().to_string());
     // K1: what Export to's path may take is the room left after the button's own text, Save and Export.
-    let (lead, min_path) = match full {
-        Some(_) => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph),
-        None => (MORE_TEXT, 0.0),
+    let (lead, min_path, path) = match (&model.root, &full) {
+        (None, _) => (MORE_TEXT, 0.0, None),
+        (Some(_), None) => (NOT_CHOSEN_TEXT, 0.0, None),
+        (Some(_), Some(p)) => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph, Some(p)),
     };
     let fixed = button_width(ui, lead) + gap + save_w + gap + EXPORT_WIDTH;
     fit(ui, fixed + min_path);
     let mut chars =
         (((room(ui) - fixed - gap) / glyph).floor().max(0.0) as usize).max(PATH_MIN_CHARS);
     let others = gap + save_w + gap + EXPORT_WIDTH;
-    let text = loop {
-        let Some(p) = &full else {
-            break MORE_TEXT.to_string();
-        };
-        let text = format!("Export to: {} ▾", elide_middle(p, chars));
-        // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
-        if chars <= PATH_MIN_CHARS || button_width(ui, &text) + others <= room(ui) - 0.5 {
-            break text;
-        }
-        chars -= 1;
+    let text = match path {
+        None => lead.to_string(),
+        Some(p) => loop {
+            let text = format!("Export to: {} ▾", elide_middle(p, chars));
+            // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
+            if chars <= PATH_MIN_CHARS || button_width(ui, &text) + others <= room(ui) - 0.5 {
+                break text;
+            }
+            chars -= 1;
+        },
     };
     push_right(ui, button_width(ui, &text) + others);
     export_to_menu(ui, model, text, full);
@@ -141,6 +151,13 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
         model.is_dirty() || super::actions::text_field_focused(ui.ctx()),
         egui::Button::new("Save").min_size(egui::vec2(save_w, h)),
     );
+    let r = if model.only_automatic_unsaved() {
+        r.on_hover_text(
+            "Save the texture types Tessalith set automatically, so sdc.exe plans the same",
+        )
+    } else {
+        r
+    };
     // Note FC8 (supersedes BS7's refusal): the field commits first, then this click saves. That relies on the header
     // and the bottom panel drawing before the central fields (`blur_on_press` runs first); `after_commit` covers a
     // press and release in one frame.
@@ -239,6 +256,11 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         // A12: the hover counts the files and the problems. FB1: and, while it reads Review, what is still open.
         // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
+            // UI-D final review Minor 5: with no folder the button is off; Review opens from the NIF edit panel.
+            if model.root.is_none() && !model.nif_review_rows().is_empty() {
+                ui.label("Open Review from the NIF edit panel (Review…)");
+                return;
+            }
             // Note FC5 (supersedes CZ6's hover): NIF edits are Review rows, so the Meshes view's line is gone.
             ui.label(export_hover(model));
             if !clean {
@@ -493,7 +515,11 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
         }
     });
     if pick {
-        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
+        model.pick(
+            ui.ctx(),
+            PickerPurpose::OpenFolder,
+            model.open_folder_spec(),
+        );
     }
     if let Some(p) = open {
         model.request_open(p);
@@ -571,6 +597,12 @@ pub fn undo_button(nif: Option<&UndoTarget>, undo: bool, textures: Option<&str>)
 fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     // A20: the NIF history while a NIF edit is open in the Meshes view.
     let nif = super::meshes::undo_target(ui.ctx());
+    // Note FI5 (A19): a fixed slot, so a long NIF step label never moves the controls after it. `Undo NIF edit` is the
+    // widest text without a step (the Textures view draws `Undo` / `Redo`), so every no-step text fits whole.
+    let slot = egui::vec2(
+        button_width(ui, "Undo NIF edit").max(button_width(ui, "Redo NIF edit")),
+        ui.spacing().interact_size.y,
+    );
     for undo in [true, false] {
         let textures = if undo {
             model.undo_label()
@@ -578,7 +610,12 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
             model.redo_label()
         };
         let b = undo_button(nif.as_ref(), undo, textures);
-        let r = ui.add_enabled(b.enabled, egui::Button::new(&b.text));
+        // The text truncates inside the slot; the hover holds the whole step and the name stays `b.name`.
+        let r = ui
+            .add_enabled_ui(b.enabled, |ui| {
+                ui.add_sized(slot, egui::Button::new(&b.text).truncate())
+            })
+            .inner;
         r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, b.enabled, &b.name));
         if r.on_hover_text(b.hover.clone())
             .on_disabled_hover_text(b.hover)
@@ -594,58 +631,6 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// MO2… and Mode as one framed unit (Note BH6); MO2… only where the app has a scan model.
-fn mode_combo(
-    ui: &mut egui::Ui,
-    model: &mut AppModel,
-    scan: Option<&mut crate::model::meshes::MeshesModel>,
-) {
-    let gap = ui.spacing().item_spacing.x;
-    let mo2 = if scan.is_some() {
-        button_width(ui, "MO2…") + gap
-    } else {
-        0.0
-    };
-    fit(
-        ui,
-        mo2 + button_width(ui, "Mode") + gap + ui.spacing().combo_width + 8.0,
-    );
-    egui::Frame::new()
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(3, 0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(m) = scan {
-                    super::meshes::mo2_button(ui, m);
-                }
-                mode_picker(ui, model);
-            });
-        });
-}
-
-fn mode_picker(ui: &mut egui::Ui, model: &mut AppModel) {
-    ui.label("Mode");
-    let mut picked = model.target;
-    ui.add_enabled_ui(model.project.is_some(), |ui| {
-        egui::ComboBox::from_id_salt("mode")
-            .selected_text(target_name(model.target))
-            .show_ui(ui, |ui| {
-                for t in [Target::Cs, Target::Vanilla] {
-                    ui.selectable_value(&mut picked, t, target_name(t))
-                        .on_hover_text(target_help(t));
-                }
-            })
-            .response
-            .on_hover_text(
-                "The target the textures are converted for: cs or vanilla. Saved in sdc.toml as target.",
-            );
-    });
-    if picked != model.target {
-        model.set_target(picked);
-    }
-}
-
 /// The project's preset (AM12): the target's default, or a preset of this target (a user preset appears once saved).
 fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     let default = format!(
@@ -653,6 +638,7 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         engine::presets::default_preset_for(model.target)
     );
     let cur = model.project_preset();
+    let mode = target_name(model.target);
     let gap = ui.spacing().item_spacing.x;
     fit(
         ui,
@@ -693,7 +679,11 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
         .show_ui(ui, |ui| body(ui))
         .response
-        .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
+        .on_hover_ui(|ui| {
+            ui.label(format!(
+                "The preset the folder converts with. Saved in sdc.toml as preset. Mode: {mode}; the list shows this mode's presets. Change the mode in Presets…"
+            ));
+        });
     // Note FC1 (AM14): a Problems row's `Choose preset…` opens the same menu under the combo, as a popup the header
     // owns (egui 0.36 has no public way to open a combo). A request is taken by the next pass that draws this combo
     // and honoured only within two passes of the click: one left while the combo was not drawn is dropped then, as
@@ -766,7 +756,7 @@ pub fn meshes_view_active(ctx: &egui::Context) -> bool {
 }
 
 /// Export to ▾ (A4): `text` shows the folder cut in the middle; the hover and the accessible name keep all of it (K8).
-/// Without a chosen folder (`full` None, Note FB1) it is "More ▾". Entries: Choose export folder…, Open export folder
+/// Without a chosen folder (`full` None) it is "Export to: not chosen ▾", or "More ▾" with no project (Note FI5). Entries: Choose export folder…, Open export folder
 /// and, in cs mode, the PGPatcher JSON editor (R14).
 fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: Option<String>) {
     let mut choose = false;
@@ -809,7 +799,7 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             json = ui
                 .button(JSON_EDITOR)
                 .on_hover_text(
-                    "Edit the whole TruePBR JSON: its file name, every set's entry and the delete sections",
+                    "Edit the whole PGPatcher JSON: its file name, every set's entry and the delete sections",
                 )
                 .clicked();
         }
@@ -823,16 +813,21 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             ui.close();
         }
     });
-    let name = match &full {
-        Some(f) => format!("Export to: {f}"),
-        None => "More export options".to_string(),
+    let name = match (&full, model.root.is_some()) {
+        (Some(f), _) => format!("Export to: {f}"),
+        (None, true) => "Export to: not chosen".to_string(),
+        (None, false) => "More export options".to_string(),
     };
     let enabled = ui.is_enabled();
     r.response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
+    let root_open = model.root.is_some();
     r.response.on_hover_text(match full {
         Some(f) => f,
-        None => "No export folder chosen yet: choose one here or in Review".to_string(),
+        None if root_open => {
+            "No export folder chosen yet: choose one here or in Review".to_string()
+        }
+        None => "Open a folder to choose where its textures are written".to_string(),
     });
     if choose {
         model.pick_export_folder(ui.ctx());

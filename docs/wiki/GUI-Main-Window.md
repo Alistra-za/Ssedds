@@ -22,7 +22,7 @@ The Textures and Sets columns and the Advanced drawer are not drawn until a fold
 
 The status bar shows a progress bar, "Analysing 1,234 / 5,000 files…".
 - The total is the files Tessalith will plan: DDS inputs it does not re-encode and duplicate outputs are left out. Every file counts as it finishes, including files already analysed in an earlier open, so the bar fills on a re-open too. Packed outputs are assembled after the bar is full.
-- Thumbnails appear when the whole plan lands, not one by one. Settings and bulk edit stay off until then. **Export** can be clicked, and starts once the plan lands.
+- Thumbnails appear when the whole plan lands, not one by one (a DDS input Tessalith does not re-encode gets its tile image shortly after). Settings and bulk edit stay off until then. **Export** can be clicked, and starts once the plan lands.
 - **Cancel** next to the bar stops the open and goes back to the folder you had open before, with its selection and undo history (its Files tab starts fresh). If there was none, the window is empty and reads "Opening cancelled". A cancelled folder you had not opened before is left out of **Recent**.
 - The bar and **Cancel** show only while a folder opens. A re-plan after an edit shows its count as plain text.
 
@@ -42,15 +42,14 @@ The file and folder dialogs (Open folder, the export folder, MO2 instance, a fol
 
 ## Header
 
-The header is one row from about 1340 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header, and the status line and banner under it show there too.
+The header is one row from about 1280 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header, and the status line and banner under it show there too.
 
 | Control | What it does |
 |---|---|
 | **Open** | A menu: **Open folder…** (pick a source folder), a separator, then your recent folders (the last ten), or a greyed "No recent folders". |
-| **Undo** / **Redo** | Up to 200 steps (**Ctrl+Z**, **Ctrl+Y**); greyed out with nothing to undo; hover for the step ("Undo: Format"). The status line then says "Undid: Format." until your next edit, and the bulk panel's result line clears. Undoing back to the last save clears the unsaved dot. Redo of a **Duplicate** is refused, with the reason, when a file is at the copy's path. |
-| **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. Framed together with **Mode**. |
-| **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means. |
-| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. The preset entries are greyed out until a folder is open. Its last entry, after a separator, is **Presets…**, which opens the preset creator (see [Presets](GUI-Presets.md#presets)). |
+| **Undo** / **Redo** | Up to 200 steps (**Ctrl+Z**, **Ctrl+Y**); greyed out with nothing to undo; hover for the step ("Undo: Format"). Each has a fixed-width slot: a long NIF step label is cut in the slot, with the whole step on hover, so the row does not move. The status line then says "Undid: Format." until your next edit, and the bulk panel's result line clears. Undoing back to the last save clears the unsaved dot. Redo of a **Duplicate** is refused, with the reason, when a file is at the copy's path. |
+| **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
+| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode; hover names the Mode. The Mode itself (the target) is set in the **Presets** tab (see [Presets](GUI-Presets.md#presets)). Saved in `sdc.toml` as `preset`. The preset entries are greyed out until a folder is open. Its last entry, after a separator, is **Presets…**, which opens the preset creator (see [Presets](GUI-Presets.md#presets)). |
 | **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it; hover says what a click does. Right after the view tabs, Textures view with a folder open only. |
 | **Export to ▾** | The export folder chosen for this project, saved in the project's `sdc-project.toml`, so each project keeps its own. See [Export to](#export-to). |
@@ -69,22 +68,22 @@ The header is one row from about 1340 points of window width; in a narrower wind
 
 ![The Export to menu.](../img/gui/GUI-Main-Window/export-to-menu.png)
 
-It is not drawn until a folder is chosen for the project: a project never takes over the folder you picked for another mod. <!-- D:FB1 --> The same menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one.
+With a project open and no folder chosen for it, it reads **Export to: not chosen ▾**: a project never takes over the folder you picked for another mod. <!-- D:FB1 --> Review then lists "No export folder chosen" with a **Choose the export folder…** button, and offers no default folder. With no project open the same menu is a plain **More ▾**, even when `gui.toml` holds a folder. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one; **Open folder…** (the start screen, the Open menu and the command palette) opens in the parent of the most recent project, when that folder still exists.
 
 The menu holds:
 - **Choose export folder…**;
 - **Open export folder**, greyed out with the reason when the folder cannot be opened;
 - the two checkable items **Also export as Vanilla** and **Also export as Complex material** (see [Also export as Vanilla and CM](GUI-Also-Export.md#also-export-as-vanilla-and-cm));
-- under cs with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab).
+- under cs with a folder open, **PGPatcher JSON editor…** (a centre tab).
 
 ### Export
 
 The big button at the right edge, as tall as the row.
 - It reads **Review n files** in the plain button colour while anything is undecided, blocked or waiting for a tick.
 - It reads **Export n files**, filled with the accent colour, once Review would write without skipping anything.
-- It reads plain **Export** with no folder open.
+- It reads plain **Export** with no folder open, or **Review n NIF edits** while NIF edits wait for Review.
 
-Either way a click opens Review, or exports a clean project. While an export runs, the lower half of the button is a progress bar with done/total (hover it for the file being written; **Cancel** is in the Files tab).
+**Review** adds ` + k NIF edits` for every pending NIF edit (a click writes nothing); an **Export** that skips a blocked NIF edit says so: `Export 2 files (skip 1 NIF edit)`. Either way a click opens Review, or exports a clean project. While an export runs, the lower half of the button is a progress bar with done/total (hover it for the file being written; **Cancel** is in the Files tab).
 
 ### Status line and banner
 
@@ -115,12 +114,15 @@ One word for each idea, everywhere in the window. The code, where there is one, 
 - **Blocker.** A problem that stops the export (a red dot). Fix it or remove the texture and export again.
 - **Warning.** A problem that does not stop the export (an amber dot). Export writes the file anyway; Review asks you to tick the ones that need it.
 - **Check.** A hint from an artist check (Advanced → Checks): a map that will probably look wrong in game. It never blocks and never changes "ready" (a weak grey dot).
-- **Pin.** *Pin slot (sdc)* keeps a set slot's file as it is in Tessalith (saved in `sdc-project.toml`, never in the PGPatcher JSON). *Pinned* in the preview is the encode you compare against.
+- **Pin.** *Pin this slot (always use this file)* keeps a set slot's file as it is in Tessalith (saved in `sdc-project.toml`, never in the PGPatcher JSON). *Pinned* in the preview is the encode you compare against.
 - **PGPatcher lock.** PGPatcher keeps the mesh's own texture in a slot ([Slot menus](GUI-Sets-Column.md#slot-menus)).
 - **Field lock.** A field that the target or the sub-type fixes, so it is greyed with the reason (for example the format of a type that allows only one). Not the PGPatcher lock and not a pin.
 - **Half size.** Review's answer for a texture whose full size adds almost nothing: the texture is written without its top mip, half the width and height (`drop_top_mip`). The check that asks is *Low detail*.
 - **Halve if larger than 512.** The Resize option that halves a texture only when its larger side is above 512. A setting for a sub-type, not an answer to a question.
 - **Set.** The textures that belong to one material: they share a name stem (and a PGPatcher JSON entry under Community Shaders).
 - **Helper.** A source file that is not a texture of its own: it fills a channel of another output, or blends into the normal. It is never written as a DDS.
+- **PGPatcher JSON.** The editor for the JSON PGPatcher reads is *PGPatcher JSON* everywhere: the *PGPatcher JSON editor…* menu item and set button, and the tab or window title. Its *+ Add a delete section* button adds a PGPatcher "delete" section.
+- **Drop the alpha anyway.** The acknowledgement button of a texture whose varying alpha the chosen format or setting discards: the export writes the texture without its alpha. Every other blocking warning keeps *Acknowledge*.
+- **Not exported yet.** What the Files tab says before the first export of the session; the counts (*converted*, *up to date*, …) appear once there are files.
 - **Sub-type labels.** A sub-type reads as its id with spaces (*pbr albedo*); *Skin RFAOS* is the one name spelled out. The id (`skin_rfaos`) is on hover.
-- **One accent.** The window has one non-status colour (teal), for selection, the RNM outline, a slot's flash and the path lock. Red, amber and green are for status only.
+- **One accent.** The window has one non-status colour (teal), for selection, the RNM outline and a slot's flash. Red, amber and green are for status only.

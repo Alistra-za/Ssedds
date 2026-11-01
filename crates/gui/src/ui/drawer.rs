@@ -74,10 +74,13 @@ fn toolbar(ui: &mut egui::Ui, model: &mut AppModel, stats: &mut StatCache) {
             ui.label(format!("Exporting: {line}"));
             ui.ctx().request_repaint_after(Duration::from_millis(500));
         }
-        ui.label(format!(
-            "{converted} converted, {up_to_date} up to date, {skipped} skipped, {failed} failed, \
-             {validation_failed} validation failed"
-        ));
+        // Note FI14 (rule 1.7): no counts of nothing before an export.
+        if !model.export.rows.is_empty() {
+            ui.label(format!(
+                "{converted} converted, {up_to_date} up to date, {skipped} skipped, {failed} failed, \
+                 {validation_failed} validation failed"
+            ));
+        }
         if let Some(e) = &model.export.error {
             ui.colored_label(ui.visuals().error_fg_color, e);
         }
@@ -196,7 +199,7 @@ fn files(
     let n = state.index.len(&model.export, filter);
     if n == 0 {
         ui.weak(if model.export.rows.is_empty() {
-            "No files yet."
+            "Not exported yet."
         } else {
             "No files match the filters."
         });

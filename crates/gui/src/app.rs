@@ -348,6 +348,9 @@ impl eframe::App for SdcApp {
         self.meshes
             .set_nif_export_root(self.model.nif_export_root());
         self.meshes.set_project_root(self.model.root.as_deref());
+        // Note FI18 (GH3's hand-over): the rev moves only when the list does, so an idle frame builds nothing.
+        let (rev, paths) = self.model.output_game_paths();
+        self.meshes.set_project_textures(rev, paths);
         // Note GD5: an export folder change's lines about the open NIF edit go to Messages.
         for line in self.meshes.messages.drain(..) {
             self.model
@@ -422,7 +425,8 @@ impl eframe::App for SdcApp {
             // C7: the one header in both views (MO2… framed with Mode), then the bottom panel (R7), then the view.
             crate::ui::header::draw(ui, &mut self.model, Some(&mut self.meshes));
             crate::ui::record_below_header(ui);
-            crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer);
+            let nif_preview = self.meshes.selected_nif.is_some();
+            crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer, nif_preview);
             crate::ui::meshes::show(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);
@@ -482,8 +486,10 @@ impl eframe::App for SdcApp {
             // GE16: the set preview's crash lines appear when the JSON read lands, even on an idle Textures view.
             || self.meshes.pg_reading()
             || self.model.v2_jobs_pending();
-        let background =
-            self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;
+        let background = self.model.dims_pending()
+            || self.model.used_by_pending()
+            || self.model.report_saving
+            || self.model.dds_thumbs_pending();
         if let Some(d) = worker_poll(visible, background) {
             ctx.request_repaint_after(d);
         }

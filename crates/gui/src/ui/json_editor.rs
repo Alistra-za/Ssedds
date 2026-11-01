@@ -24,7 +24,7 @@ use std::cell::Cell;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-pub const WINDOW_TITLE: &str = "TruePBR JSON";
+pub const WINDOW_TITLE: &str = "PGPatcher JSON";
 const ENTRY_RADIUS: u8 = 12;
 const PILL_RADIUS: u8 = 10;
 /// The slot names of `match1`–`match8`.
@@ -169,7 +169,10 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             super::centre_tabs::controls(ui, model, crate::model::CentreTab::Json);
             let r = ui
-                .add_enabled(read_only.is_none(), egui::Button::new("+ Delete section"))
+                .add_enabled(
+                    read_only.is_none(),
+                    egui::Button::new("+ Add a delete section"),
+                )
                 .on_hover_text("An entry of its own that deletes the shapes it matches");
             if r.clicked() {
                 acts.push(Act::AddSection);
@@ -183,7 +186,7 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.colored_label(AMBER, why);
     }
     if model.target != Target::Cs {
-        ui.weak("The TruePBR JSON is written in cs mode only.");
+        ui.weak("The PGPatcher JSON is written in cs mode only.");
         return;
     }
     let built = built(ui, model);

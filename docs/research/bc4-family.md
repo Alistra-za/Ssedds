@@ -105,7 +105,7 @@ Reading: the weighting does what it says. It moves error out of luma into chroma
 
 ## What this means for Tessalith
 
-- **Shipped (engine 1.2.0, DECISIONS Note F?):** v4's search for BC4 and BC5's two channels, v5 (v4 plus the coverage guard at 128) for BC3 alpha, at every search radius (`fast` 4, `default` 5, `max` 10). It lives in the vendored rgbcx (`encode_bc4_hq`, flags `BC4_SDC_SEARCH` and `BC4_SDC_GUARD128`, set by the shim) and equals `sdc_bench::bc4ref::search` byte for byte. Existing BC3/BC4/BC5 outputs re-encode once through the manifest's `rgbcx_patch` tag. The engine end-to-end time and the re-run bench rows are in "Shipped: end to end and bench re-run" below.
+- **Shipped (engine 1.2.0, DECISIONS Note FJ):** v4's search for BC4 and BC5's two channels, v5 (v4 plus the coverage guard at 128) for BC3 alpha, at every search radius (`fast` 4, `default` 5, `max` 10). It lives in the vendored rgbcx (`encode_bc4_hq`, flags `BC4_SDC_SEARCH` and `BC4_SDC_GUARD128`, set by the shim) and equals `sdc_bench::bc4ref::search` byte for byte. Existing BC3/BC4/BC5 outputs re-encode once through the manifest's `rgbcx_patch` tag. The engine end-to-end time and the re-run bench rows are in "Shipped: end to end and bench re-run" below.
 - Owner calls (2026-11-01): the coverage guard on BC3 alpha, yes; no BC1 perceptual option; the fast presets take the new search; `max` stays the new search at radius 10, without the near-exhaustive pass ("no exhaustive", see "max: near-exhaustive").
 
 ## Limitations

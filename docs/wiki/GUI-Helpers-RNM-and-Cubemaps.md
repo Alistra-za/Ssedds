@@ -97,7 +97,7 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
 - A single-image cube's source side shows the input file itself (panorama, ball, cross, strip or photo).
 - A set that cannot be built shows the engine's reason in the encoded pane, for example "faces differ in size" (the code is not shown).
 
-**Make marker cube…** in **Export to ▾** (**More ▾** until a folder is chosen) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
+**Make marker cube…** in **Export to ▾** (**More ▾** with no project open) opens a small dialog for a 1×1 dynamic-cubemap marker. It works with or without a project open.
 
 - **Colour** is raw codes ([how they are read](Cubemap-Sources.md#dynamic-marker)). **Roughness** is optional (the *Set roughness* tick): ticked, it starts at 0.5; unticked, the alpha is 255. The alpha it will store is shown under the controls.
 - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.

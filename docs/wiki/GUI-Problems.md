@@ -26,6 +26,17 @@ Info rows never count against "ready", but the tab's number counts every row sho
 
 Each entry of the **Decide…** menu has a hover that says what it does; the same lines are on the alpha buttons in Review and in a texture's settings.
 
+### What the GUI writes on its own
+
+When a plan settles, every sub-type it took from a High-confidence suggestion (including a type the scanned meshes or a GRAS grass model gave it) and every alpha meaning it took from the meshes is written to `sdc.toml` as a `[files]` entry, as if you had chosen it.
+
+- It is one undo step, `Set {n} types automatically`, and one Info row in Problems, "{n} types set automatically (High confidence)", with **Undo this change** and the list of textures on hover. Both say *values* instead of *types* when an alpha meaning is among them.
+- The project then has unsaved changes. Save keeps them (its hover says so while they are the only ones), and `sdc convert` reads the same types without `--accept-suggestions high` and without the scan. These automatic types alone do not count as your edits: the window title shows no dot, and closing the window, opening another folder or Reload does not ask; the next plan records the same types again. Until you save, `sdc convert` on that folder does not see them. Any later Save writes them with your edits.
+- A file you already gave a sub-type or alpha policy is never touched. An Undo of the step stays undone until the folder is opened again.
+- A written type is a value of the project: it reads as a set value, without **(auto)**, and a later scan does not change it (the scan's view shows as a suggestion).
+- While it is still the type Tessalith would pick by itself, these re-type it: a set shader you pick (written to the project too, since `sdc convert` does not read set shaders) or going back to Auto, deciding a set's diffuse as a PBR albedo (its members follow), or a new preset alias. A type you changed is kept. The writing is always an undo step of its own, also when an edit of yours led to it.
+- Two decisions stay in the GUI only: a mesh *Remove* (written out, it would change the format the compact presets pick), and the environment-map `_m` that Also export derives from the meshes (`sdc convert` writes no `_m`).
+
 ## Deciding in Problems
 
 An undecided texture with a suggested type shows it as one button, **Set type: subsurface tint ✓** (a click decides it), with **▾** beside it for the type picker. With no suggestion there is a plain **Set type…** that opens the picker.

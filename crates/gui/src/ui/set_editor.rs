@@ -88,6 +88,8 @@ pub struct View {
     pub switch: bool,
     /// The 3D panel shows this set: the slot rows are left out, the TruePBR settings stay.
     pub three_d: bool,
+    /// The editor was not what the centre showed last frame: open at the top (Note FI6).
+    pub to_top: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -136,42 +138,46 @@ pub fn draw(
     }
     // Note FB2 (amendment C): one column, as the texture settings panel: the name box, the slot rows at full width,
     // then the tabs and groups. Nothing sits beside the rows, so nothing can cover them.
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            head(ui, model, v, view);
-            rows(ui, model, v, thumbs, &mut acts, drop_at, &sizes);
-            // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
-            if let Some((n, a)) = flash {
-                let id = egui::Id::new(("slot-row", &v.id, n));
-                if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(id)) {
-                    let c = ui.visuals().selection.stroke.color.gamma_multiply(a);
-                    ui.painter().rect_stroke(
-                        r,
-                        2.0,
-                        egui::Stroke::new(2.0, c),
-                        // Inside: the first row's top can be the scroll area's clip edge (final review M1).
-                        egui::StrokeKind::Inside,
-                    );
-                }
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt("centre-set")
+        .auto_shrink([false, false]);
+    if view.to_top {
+        area = area.vertical_scroll_offset(0.0);
+    }
+    area.show(ui, |ui| {
+        head(ui, model, v, view);
+        rows(ui, model, v, thumbs, &mut acts, drop_at, &sizes);
+        // R9: the changed slot's row (its rect as `row` stored it this frame), outlined in the accent.
+        if let Some((n, a)) = flash {
+            let id = egui::Id::new(("slot-row", &v.id, n));
+            if let Some(r) = ui.data(|d| d.get_temp::<egui::Rect>(id)) {
+                let c = ui.visuals().selection.stroke.color.gamma_multiply(a);
+                ui.painter().rect_stroke(
+                    r,
+                    2.0,
+                    egui::Stroke::new(2.0, c),
+                    // Inside: the first row's top can be the scroll area's clip edge (final review M1).
+                    egui::StrokeKind::Inside,
+                );
             }
-            slot_note(ui, drops, &v.id);
-            unslotted_packed(ui, model, v, &mut acts);
-            ui.add_space(6.0);
-            // A2: a normal button, not stretched across the justified column.
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(editable, |ui| {
-                    if ui.button("Slot commands…").clicked() {
-                        cmds.open = Some(v.id.clone());
-                    }
-                })
-                .response
-                .on_disabled_hover_text(&why);
-            });
-            under_grid(ui, model, v);
-            ui.add_space(6.0);
-            tabs(ui, model, v, advanced);
+        }
+        slot_note(ui, drops, &v.id);
+        unslotted_packed(ui, model, v, &mut acts);
+        ui.add_space(6.0);
+        // A2: a normal button, not stretched across the justified column.
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(editable, |ui| {
+                if ui.button("Slot commands…").clicked() {
+                    cmds.open = Some(v.id.clone());
+                }
+            })
+            .response
+            .on_disabled_hover_text(&why);
         });
+        under_grid(ui, model, v);
+        ui.add_space(6.0);
+        tabs(ui, model, v, advanced);
+    });
     let (mut select, mut expand) = (None, None);
     for a in acts {
         match a {
@@ -311,7 +317,7 @@ fn tabs(
         if json && !open {
             ui.add_space(8.0);
             if ui
-                .small_button("TruePBR JSON editor…")
+                .small_button("PGPatcher JSON editor…")
                 .on_hover_text(
                     "Every set's entry and the delete sections of the PGPatcher JSON, in one view",
                 )

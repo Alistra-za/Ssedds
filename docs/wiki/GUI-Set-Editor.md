@@ -42,7 +42,7 @@ A row has these columns:
 
 The File column takes the width the other columns leave, so the rows fill the centre. While a set is selected, the Textures and Sets columns give the centre at least 540 px, down to their own minimums, so the rows fit without clipping from a 1024 px window up.
 
-**Slot commands…** on a row offers *From this set*, *Path*, *Clear* and *Pin slot N* (the sdc pin), each one undo step. Right-click on a row opens the full [slot menu](GUI-Sets-Column.md#slot-menus), which also has *From another set*, the pin and the PGPatcher lock.
+**Slot commands…** on a row offers *From this set*, *Path*, *Clear* and *Pin slot N* (the sdc pin), each one undo step. *From this set* is off, with "This set has no file for this slot", when the set has none. Right-click on a row opens the full [slot menu](GUI-Sets-Column.md#slot-menus), which also has *From another set*, the pin and the PGPatcher lock.
 
 A row whose texture just changed (a drop, **Replace**, **Assign…**, a file from Explorer, undo or redo) outlines in the accent colour for about a third of a second, then fades. Only the first changed slot flashes, and a slot that only emptied does not. Two slot kinds share a number (Emissive and Skin 3, Coat normal and Fuzz 7), so with both filled a change to one of them may not flash. While the pointer is down on a slot's thumbnail it shrinks slightly (3 %).
 
@@ -68,7 +68,7 @@ The set's **Shader** dropdown lists the shaders the current Mode offers. The pic
 
 ## Used by plugins
 
-**Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**.
+**Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**. Slots count from 1, as in the NIF edit panel.
 
 ## Path pickers
 
