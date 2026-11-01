@@ -1702,6 +1702,8 @@ pub struct SetPreview {
     mato_cache: HashMap<MatoKey, Option<esp::MatoData>>,
     /// The record is to be picked again on the next shown frame (the layer turned on, the set changed).
     mato_due: bool,
+    /// The next pick runs even for an unchanged record (the layer turned on): its plugin may have changed on disk.
+    mato_repick: bool,
 }
 
 impl Default for SetPreview {
@@ -1776,6 +1778,7 @@ impl SetPreview {
             mato_reading: false,
             mato_cache: HashMap::new(),
             mato_due: false,
+            mato_repick: false,
         }
     }
 
@@ -2563,12 +2566,13 @@ fn slot_norms(materials: &[&MaterialState]) -> HashSet<String> {
 
 /// Note GG: the material-object layer.
 impl SetPreview {
-    /// The "Material object layer" toggle. The record is picked on the next shown frame; until its DATA is read the
-    /// layer shows default coverage.
+    /// The "Material object layer" toggle. Turning it on picks the record again on the next shown frame (its plugin
+    /// may have changed: a new mtime is a new read); until its DATA is read the layer shows default coverage.
     pub fn set_mato_layer(&mut self, on: bool) {
         if on != self.mato_layer {
             self.mato_layer = on;
             self.mato_due = true;
+            self.mato_repick = on;
             self.push_layer();
         }
     }
@@ -2599,7 +2603,7 @@ impl SetPreview {
                         .cloned()
                 })
             });
-            if rec != self.mato_rec {
+            if std::mem::take(&mut self.mato_repick) || rec != self.mato_rec {
                 self.pick_record(rec);
             }
         }

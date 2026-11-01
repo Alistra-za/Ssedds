@@ -239,24 +239,21 @@ fn data(f: [f32; 11], flags: u32) -> Vec<u8> {
     d
 }
 
-/// A scanned MO2 instance: Skyrim.esm with one MATO `SnowMat1P`, and mod A's loose projected diffuse.
-fn scanned(root: &Path) -> PathBuf {
+/// Skyrim.esm with one MATO `SnowMat1P` (single-pass) of DATA `f`.
+fn skyrim_esm(f: [f32; 11]) -> Vec<u8> {
     let mato = rec(
         b"MATO",
         0xA00,
-        &[
-            edid("SnowMat1P"),
-            sub(
-                b"DATA",
-                &data([0.5, 0.2, 30.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.9, 0.8, 0.7], 1),
-            ),
-        ],
+        &[edid("SnowMat1P"), sub(b"DATA", &data(f, 1))],
     );
-    scan_fixture::put(
-        root,
-        "Game/Data/Skyrim.esm",
-        &plugin(esp::FLAG_ESM, &[], &[top(b"MATO", &[mato])]),
-    );
+    plugin(esp::FLAG_ESM, &[], &[top(b"MATO", &[mato])])
+}
+
+const SNOW: [f32; 11] = [0.5, 0.2, 30.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.9, 0.8, 0.7];
+
+/// A scanned MO2 instance: Skyrim.esm with [`SNOW`], and mod A's loose projected diffuse.
+fn scanned(root: &Path) -> PathBuf {
+    scan_fixture::put(root, "Game/Data/Skyrim.esm", &skyrim_esm(SNOW));
     scan_fixture::put(
         root,
         "mods/A/textures/effects/projecteddiffuse.dds",
@@ -419,4 +416,46 @@ fn the_layer_resolves_through_the_content_map() {
         ]
     );
     assert_eq!(v.shapes[0].status, render3d::ShapeStatus::Drawing);
+}
+
+/// A model with ROCK's block naming `SnowMat1P` on the scanned instance, ROCK followed; and its preview.
+fn snow_preview(db: &Path, dir: &Path) -> (AppModel, SetPreview) {
+    let mut m = support::pbr_opened_plain(dir);
+    m.scan_db = Some(db.to_path_buf());
+    m.poll();
+    m.add_cs_block(ROCK, Kind::Mato);
+    m.set_cs_edids(ROCK, Kind::Mato, &["SnowMat1P".to_string()]);
+    let a = rock_key(&m);
+    m.select_set(&a);
+    let s = SetPreview::new(None, None, Some(db.to_path_buf()), DEFAULT_CAP);
+    (m, s)
+}
+
+/// Fix round 1, I1: turning the layer on picks the record again, so a plugin whose DATA changed (same winning record,
+/// new mtime) is read again.
+#[test]
+fn turning_on_rereads_a_changed_plugin() {
+    let inst = scan_fixture::instance_fixture("+A\n");
+    let db = scanned(inst.path());
+    let dir = tempfile::tempdir().unwrap();
+    let (m, mut s) = snow_preview(&db, dir.path());
+    s.set_mato_layer(true);
+    run(&mut s, &m);
+    assert_eq!(s.v3.projected().map(|l| l.falloff_scale), Some(0.5));
+    s.set_mato_layer(false);
+    run(&mut s, &m);
+    let esm = inst.path().join("Game/Data/Skyrim.esm");
+    let mut f = SNOW;
+    f[0] = 0.7;
+    std::fs::write(&esm, skyrim_esm(f)).unwrap();
+    let later = std::time::SystemTime::now() + Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&esm)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    s.set_mato_layer(true);
+    run(&mut s, &m);
+    assert_eq!(s.v3.projected().map(|l| l.falloff_scale), Some(0.7));
 }
