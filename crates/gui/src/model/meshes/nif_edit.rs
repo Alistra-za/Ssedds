@@ -776,7 +776,8 @@ impl NifEdit {
         if let Some(why) = &self.retarget_error {
             return Some(why.clone());
         }
-        // Note GH5: nothing edited is the idle state with or without a folder; `apply_err` needs ops, so no edit has it.
+        // Note GH5: nothing edited is the idle state with or without a folder, and wins over `apply_err` too (a reloaded
+        // source that stops parsing with no ops reads idle; `error` still says why).
         if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
             return Some(NO_EDITS.into());
         }
