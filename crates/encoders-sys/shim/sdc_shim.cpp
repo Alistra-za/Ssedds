@@ -126,11 +126,11 @@ void sdc_bc1_encode(uint8_t* dst, const uint8_t* px, uint32_t level, int allow3,
 }
 
 void sdc_bc3_encode(uint8_t* dst, const uint8_t* px, uint32_t level, uint32_t rad) {
-    rgbcx::encode_bc3_hq(level, dst, px, rad, rgbcx::BC4_USE_ALL_MODES);
+    rgbcx::encode_bc3_hq(level, dst, px, rad, rgbcx::BC4_USE_ALL_MODES | rgbcx::BC4_SDC_SEARCH | rgbcx::BC4_SDC_GUARD128);
 }
 
 void sdc_bc4_encode(uint8_t* dst, const uint8_t* px, uint32_t stride, uint32_t rad) {
-    rgbcx::encode_bc4_hq(dst, px, stride, rad, rgbcx::BC4_USE_ALL_MODES);
+    rgbcx::encode_bc4_hq(dst, px, stride, rad, rgbcx::BC4_USE_ALL_MODES | rgbcx::BC4_SDC_SEARCH);
 }
 
 // `flags` goes to encode_bc4_hq verbatim (research probes and tests reach the upstream path with explicit modes).
@@ -139,7 +139,7 @@ void sdc_bc4_encode_flags(uint8_t* dst, const uint8_t* px, uint32_t stride, uint
 }
 
 void sdc_bc5_encode(uint8_t* dst, const uint8_t* px, uint32_t rad) {
-    rgbcx::encode_bc5_hq(dst, px, 0, 1, 4, rad, rgbcx::BC4_USE_ALL_MODES);
+    rgbcx::encode_bc5_hq(dst, px, 0, 1, 4, rad, rgbcx::BC4_USE_ALL_MODES | rgbcx::BC4_SDC_SEARCH);
 }
 
 int sdc_bc1_decode(const uint8_t* src, uint8_t* px, int mode) {

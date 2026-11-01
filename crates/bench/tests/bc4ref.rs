@@ -1,4 +1,7 @@
 //! Pins the BC4 reference search (docs/research/bc4-family.md) to the upstream rgbcx path and to its never-worse rule.
+use encoders_sys::{
+    bc3_encode_block, bc4_encode_block, bc5_encode_block, gather_blocks, RGBCX_MAX_LEVEL,
+};
 use sdc_bench::bc4ref::{search, shipped};
 
 struct Rng(u64);
@@ -131,4 +134,137 @@ fn trimmed_range_beats_shipped_on_near_extremes() {
         0, 0, 1, 2, 40, 80, 120, 160, 200, 253, 254, 255, 255, 255, 128, 64,
     ];
     assert!(sse(&search(&v, 5, false), &v) < sse(&shipped(&v, 5), &v));
+}
+
+// The vendored C++ (shim flags BC4_SDC_SEARCH, plus BC4_SDC_GUARD128 for BC3 alpha) equals the reference byte for
+// byte; radius 10 is `max`.
+#[test]
+fn ffi_equals_reference() {
+    let bs = blocks(20_000);
+    for (i, v) in bs.iter().enumerate() {
+        let w = &bs[(i + 1) % bs.len()];
+        for r in [4, 5, 10] {
+            for ch in 0..4 {
+                let p = px(v, ch);
+                assert_eq!(
+                    bc4_encode_block(&p, ch, r),
+                    search(v, r, false),
+                    "{v:?} ch {ch} r {r}"
+                );
+            }
+            assert_eq!(
+                bc3_encode_block(&px(v, 3), RGBCX_MAX_LEVEL, r)[..8],
+                search(v, r, true),
+                "{v:?} bc3 r {r}"
+            );
+            let mut p = px(v, 0);
+            for t in 0..16 {
+                p[t][1] = w[t];
+            }
+            let e = bc5_encode_block(&p, r);
+            assert_eq!(e[..8], search(v, r, false), "{v:?} bc5 r r {r}");
+            assert_eq!(e[8..], search(w, r, false), "{w:?} bc5 g r {r}");
+        }
+    }
+}
+
+#[test]
+fn bc5_halves_equal_bc4_per_channel() {
+    let bs = blocks(4_000);
+    for (i, v) in bs.iter().enumerate() {
+        let w = &bs[(i + 1) % bs.len()];
+        let mut p = px(v, 0);
+        for t in 0..16 {
+            p[t][1] = w[t];
+        }
+        let e = bc5_encode_block(&p, 5);
+        assert_eq!(e[..8], bc4_encode_block(&p, 0, 5), "{v:?}");
+        assert_eq!(e[8..], bc4_encode_block(&p, 1, 5), "{w:?}");
+    }
+}
+
+#[test]
+fn guard_only_on_bc3() {
+    // First block of `blocks(20_000)` where the guard changes the reference result.
+    let v = [
+        101, 185, 152, 193, 87, 248, 130, 84, 241, 174, 246, 200, 103, 217, 60, 5,
+    ];
+    let (v4, v5) = (search(&v, 5, false), search(&v, 5, true));
+    assert_ne!(v4, v5);
+    assert_eq!(bc4_encode_block(&px(&v, 0), 0, 5), v4);
+    assert_eq!(bc5_encode_block(&px(&v, 0), 5)[..8], v4);
+    assert_eq!(bc3_encode_block(&px(&v, 3), RGBCX_MAX_LEVEL, 5)[..8], v5);
+}
+
+/// The engine's BC4 and BC3 paths (default preset, its radius) end to end against the reference.
+#[test]
+fn engine_bc4_bytes_equal_reference() {
+    use engine::encode::{encode_level, radius, EncodeCtx};
+    use engine::quantize::EncoderInput;
+    let mut r = Rng(0x1234_5678_9ABC_DEF1);
+    let img: Vec<[u8; 4]> = (0..64)
+        .map(|_| [r.byte(), r.byte(), r.byte(), r.byte()])
+        .collect();
+    let gathered = gather_blocks(&img, 8, 8);
+    for (fmt, ch, bs) in [("bc4", 0, 8), ("bc3", 3, 16)] {
+        let p = sdc_bench::encodeone::engine_profile(fmt, "default").unwrap();
+        let rad = radius(p.encoder.bc45_search_radius);
+        let out = encode_level(
+            &EncoderInput::Ldr(img.clone()),
+            8,
+            8,
+            &p,
+            &EncodeCtx::default(),
+        )
+        .unwrap();
+        for (b, src) in gathered.chunks(16).enumerate() {
+            let v: [u8; 16] = std::array::from_fn(|t| src[t][ch]);
+            assert_eq!(
+                out[b * bs..b * bs + 8],
+                search(&v, rad, fmt == "bc3"),
+                "{fmt} block {b}"
+            );
+        }
+    }
+}
+
+/// Every BC4 block of the bench's BC3 alpha, BC4 and BC5 sets (rounds 1-2), at each radius.
+#[test]
+#[ignore = "needs SDC_BENCH_ROOT"]
+fn ffi_equals_reference_on_corpus() {
+    let Some(root) = sdc_bench::corpus::corpus_root() else {
+        return;
+    };
+    let mut checked = 0u64;
+    let mut bad = 0u64;
+    for (dir, set, chans, bc3) in [
+        ("images2", "mask_real", &[0usize][..], false),
+        ("images2", "normal_real", &[0, 1][..], false),
+        ("images", "cutout_real", &[3][..], true),
+    ] {
+        for png in sdc_bench::corpus::set_files(&root, dir, set, "png").unwrap() {
+            let img = sdc_bench::corpus::load_png_rgba8(&png).unwrap();
+            let gathered = gather_blocks(&img.px, img.width, img.height);
+            for src in gathered.chunks(16) {
+                let src: &[[u8; 4]; 16] = src.try_into().unwrap();
+                for &ch in chans {
+                    let v: [u8; 16] = std::array::from_fn(|t| src[t][ch]);
+                    for r in [4, 5, 10] {
+                        let got = if bc3 {
+                            bc3_encode_block(src, RGBCX_MAX_LEVEL, r)[..8]
+                                .try_into()
+                                .unwrap()
+                        } else {
+                            bc4_encode_block(src, ch, r)
+                        };
+                        checked += 1;
+                        bad += (got != search(&v, r, bc3)) as u64;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("corpus: {checked} block-channel-radius checks, {bad} mismatches");
+    assert!(checked > 0);
+    assert_eq!(bad, 0, "{bad} of {checked} mismatched");
 }

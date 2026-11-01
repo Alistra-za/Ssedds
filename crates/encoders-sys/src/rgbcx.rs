@@ -75,6 +75,12 @@ pub fn bc4_encode_block(px: &[[u8; 4]; 16], channel: usize, search_radius: u32) 
 
 /// `rgbcx::BC4_USE_ALL_MODES` (8-value and 6-value modes).
 pub const BC4_USE_ALL_MODES: u32 = 3;
+/// `rgbcx::BC4_SDC_SEARCH` (sdc patch): the extra endpoint search after the mode loop (`sdc_bench::bc4ref::search`).
+/// `bc3/4/5_encode_block` set it.
+pub const BC4_SDC_SEARCH: u32 = 4;
+/// `rgbcx::BC4_SDC_GUARD128` (sdc patch): with [`BC4_SDC_SEARCH`], keep the mode-loop block when the search would flip
+/// more texels across 128. `bc3_encode_block` sets it for alpha.
+pub const BC4_SDC_GUARD128: u32 = 8;
 
 /// Like [`bc4_encode_block`] but `flags` reaches `encode_bc4_hq` verbatim (the shim adds no bit of its own).
 pub fn bc4_encode_block_flags(

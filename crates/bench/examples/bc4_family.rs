@@ -141,6 +141,8 @@ struct ImgOut {
     attrib: Vec<String>,
     mismatch_v0_ffi: u64,
     mismatch_ext_sdc: u64,
+    /// patched C++ (`cxx`) blocks that differ from v4 (v5 for BC3)
+    mismatch_cxx_ref: u64,
     blocks: u64,
     /// (variant, ms for the whole image) for the shipped FFI encoder and v4
     ms: Vec<(String, f64)>,
@@ -171,7 +173,12 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
             (0..nb)
                 .map(|b| {
                     let src: &[[u8; 4]; 16] = blocks[b * 16..b * 16 + 16].try_into().unwrap();
-                    encoders_sys::bc4_encode_block(src, c, rad as u32)
+                    encoders_sys::bc4_encode_block_flags(
+                        src,
+                        c,
+                        rad as u32,
+                        encoders_sys::BC4_USE_ALL_MODES,
+                    )
                 })
                 .collect()
         })
@@ -189,6 +196,39 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
             .collect();
         enc.push((name.to_string(), out, t.elapsed().as_secs_f64()));
     }
+    // the patched C++ with the shim's flags (guard on BC3 alpha), timed; must equal v4 (v5 for BC3)
+    let flags = encoders_sys::BC4_USE_ALL_MODES
+        | encoders_sys::BC4_SDC_SEARCH
+        | if job.fmt == "bc3" {
+            encoders_sys::BC4_SDC_GUARD128
+        } else {
+            0
+        };
+    let t = Instant::now();
+    let cxx: Vec<Vec<[u8; 8]>> = chans
+        .iter()
+        .map(|&c| {
+            (0..nb)
+                .map(|b| {
+                    let src: &[[u8; 4]; 16] = blocks[b * 16..b * 16 + 16].try_into().unwrap();
+                    encoders_sys::bc4_encode_block_flags(src, c, rad as u32, flags)
+                })
+                .collect()
+        })
+        .collect();
+    enc.push(("cxx".into(), cxx, t.elapsed().as_secs_f64()));
+    let refname = if job.fmt == "bc3" { "v5" } else { "v4" };
+    let (ri, ci) = (
+        enc.iter().position(|e| e.0 == refname).unwrap(),
+        enc.len() - 1,
+    );
+    let mismatch_cxx_ref = (0..chans.len())
+        .map(|k| {
+            (0..nb)
+                .filter(|&b| enc[ri].1[k][b] != enc[ci].1[k][b])
+                .count() as u64
+        })
+        .sum();
     for (name, path) in &job.ext {
         let bytes = std::fs::read(path)?;
         let p = payload(&bytes)?;
@@ -387,10 +427,11 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
         attrib,
         mismatch_v0_ffi,
         mismatch_ext_sdc,
+        mismatch_cxx_ref,
         blocks: (nb * chans.len()) as u64,
         ms: enc
             .iter()
-            .filter(|e| e.0 == "ffi" || e.0 == "v4")
+            .filter(|e| e.0 == "ffi" || e.0 == "v4" || e.0 == "cxx")
             .map(|e| (e.0.clone(), e.2 * 1e3))
             .collect(),
     })
@@ -489,7 +530,7 @@ fn main() -> anyhow::Result<()> {
         String::from("round,fmt,set,image,variant,class,blocks,sse,mode8,mode6,mode6_inner\n"),
         String::from("round,fmt,set,image,variant,d_psnr_all,d_const,d_bin,d_both_inner,d_one_inner,d_noext\n"),
     );
-    let (mut mm, mut me, mut nb) = (0u64, 0u64, 0u64);
+    let (mut mm, mut me, mut mc, mut nb) = (0u64, 0u64, 0u64, 0u64);
     for x in &res {
         for l in &x.rows {
             r.push_str(l);
@@ -505,12 +546,13 @@ fn main() -> anyhow::Result<()> {
         }
         mm += x.mismatch_v0_ffi;
         me += x.mismatch_ext_sdc.min(u64::MAX / 2);
+        mc += x.mismatch_cxx_ref;
         nb += x.blocks;
     }
     std::fs::write(out.join("per_image.csv"), r)?;
     std::fs::write(out.join("classes.csv"), c)?;
     std::fs::write(out.join("attrib.csv"), a)?;
-    for name in ["ffi", "v4"] {
+    for name in ["ffi", "v4", "cxx"] {
         let mut t: Vec<f64> = res
             .iter()
             .flat_map(|x| x.ms.iter().filter(|m| m.0 == name).map(|m| m.1))
@@ -523,6 +565,6 @@ fn main() -> anyhow::Result<()> {
             );
         }
     }
-    println!("blocks {nb}; v0 (Rust port) != ffi: {mm}; ffi != engine DDS (sdc_*_rounded): {me}");
+    println!("blocks {nb}; v0 (Rust port) != ffi: {mm}; ffi != engine DDS (sdc_*_rounded): {me}; cxx != v4/v5: {mc}");
     Ok(())
 }

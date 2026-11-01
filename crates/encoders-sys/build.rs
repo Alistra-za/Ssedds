@@ -24,6 +24,8 @@ fn main() {
     b.cpp(true)
         .std("c++17")
         .flag("/EHsc")
+        // rgbcx's BC4 search (BC4_SDC_SEARCH) must round like the Rust reference: no FP contraction or reassociation.
+        .flag("/fp:precise")
         .define("NOMINMAX", None)
         .define("NDEBUG", None)
         .define("SDC_BC7E_PATCHED", if patched { "1" } else { "0" })
