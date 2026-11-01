@@ -167,6 +167,11 @@ impl AppModel {
                 writes.push((i.key.clone(), f, v));
             }
         }
+        // Note F?3: after a re-encode step still on top, the recording joins it (`set_reencode`).
+        let join = self
+            .reencode_follow
+            .take()
+            .filter(|k| self.history.undo.last().and_then(|c| c.merge.as_ref()) == Some(k));
         if writes.is_empty() {
             return false;
         }
@@ -176,6 +181,16 @@ impl AppModel {
         let label = format!("Set {n} {noun}{s} automatically");
         for (k, f, _) in &writes {
             self.history.auto_written.insert((k.clone(), f));
+        }
+        if let Some(k) = join {
+            // One step with the re-encode (its label stays), so no row of its own offers a separate Undo.
+            let pushes = self.history.pushes;
+            self.edit_docs(&label, Some(k), true, |p, _| {
+                for (k, f, v) in &writes {
+                    p.set_file_value(k, f, v);
+                }
+            });
+            return self.history.pushes != pushes;
         }
         let wrote = self.batch_edit(&label, |m| {
             m.edit("Set automatically", |p| {

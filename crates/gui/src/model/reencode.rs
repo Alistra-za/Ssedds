@@ -21,8 +21,15 @@ impl AppModel {
         } else {
             format!("Stop re-encoding {n} DDS file{s}")
         };
+        if self.project.as_ref().is_none_or(|p| p.read_only()) {
+            return;
+        }
         let keys = keys.to_vec();
-        self.edit(&label, move |p| {
+        // The settled plan's FC1 recording (the new jobs' sub-types) joins this step, as FC8's weighting follow
+        // does: one Undo takes back the re-encode and what it caused.
+        let merge = format!("reencode-{}", self.history.pushes);
+        let pushes = self.history.pushes;
+        self.edit_docs(&label, Some(merge.clone()), true, move |p, _| {
             for k in &keys {
                 if on {
                     p.set_file_value(k, REENCODE_FIELD, &json!(true));
@@ -31,6 +38,7 @@ impl AppModel {
                 }
             }
         });
+        self.reencode_follow = (on && self.history.pushes != pushes).then_some(merge);
     }
 
     /// Whether `sdc.toml` sets `reencode = true` for `key`.

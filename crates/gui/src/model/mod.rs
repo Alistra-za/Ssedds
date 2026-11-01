@@ -553,6 +553,8 @@ pub struct AppModel {
     /// Note FC8 (CP10): a BC7 weighting pick whose own value may have hidden an inherited one: (item key, pick, the
     /// pick's history merge key). The settled plan checks it and completes the pick in the same step.
     weighting_follow: Option<(String, String, String)>,
+    /// Note F?3: a re-encode step's history merge key; the FC1 recording its settled plan makes joins that step.
+    reencode_follow: Option<String>,
     /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
     pub(crate) gen_ids: u64,
     /// Generate dialogs opened so far; the preview zoom is reset when this changes.
@@ -831,6 +833,7 @@ impl AppModel {
             gen_select: None,
             after_commit: Vec::new(),
             weighting_follow: None,
+            reencode_follow: None,
             gen_ids: 0,
             gen_opens: 0,
             report_saving: false,
@@ -926,6 +929,7 @@ impl AppModel {
         self.gen_cancel();
         self.gen_select = None;
         self.weighting_follow = None;
+        self.reencode_follow = None;
         self.after_commit.clear();
         self.drop_provenance_note();
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
@@ -2876,6 +2880,7 @@ impl AppModel {
         self.reset_type_follow();
         // Note FC8 ledger minor: a weighting re-write queued for the plan of the step undone no longer applies.
         self.weighting_follow = None;
+        self.reencode_follow = None;
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {

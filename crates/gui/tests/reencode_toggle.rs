@@ -79,28 +79,26 @@ fn reencode_button_writes_the_selector() {
     let mut h = harness(m);
     h.run();
     h.get_by_label("Already a DDS file: it is left as it is and not written to the export.");
-    let pushes = h.state().history.pushes;
+    let (before, steps) = (toml(h.state()), h.state().history.undo.len());
     h.get_by_label(REENCODE).click();
-    h.run();
-    // Counted before the plan lands: the plan's own FC1 recording (the new job's sub-type) is a step of its own.
-    assert_eq!(h.state().history.pushes, pushes + 1, "one undo step");
-    assert_eq!(h.state().undo_label(), Some("Re-encode 1 DDS file"));
     idle(&mut h);
     let t = toml(h.state());
     assert!(
-        t.contains("[files.\"a.dds\"]") && t.contains("reencode = true"),
-        "{t}"
+        t.contains("[files.\"a.dds\"]\nreencode = true\nsubtype = \"diffuse\""),
+        "the selector and the FC1 type it caused: {t}"
     );
     assert!(has_job(h.state(), "a.dds"), "a re-encoded DDS has a job");
-    if h.state().undo_label() != Some("Re-encode 1 DDS file") {
-        h.state_mut().undo(); // the FC1 recording
-        idle(&mut h);
-    }
+    // Note F?3: the plan's FC1 recording joined the re-encode: one step, one Undo, one Redo.
+    assert_eq!(h.state().history.undo.len(), steps + 1, "one undo step");
     assert_eq!(h.state().undo_label(), Some("Re-encode 1 DDS file"));
     h.state_mut().undo();
     idle(&mut h);
-    assert!(!toml(h.state()).contains("reencode"), "{}", toml(h.state()));
+    assert_eq!(toml(h.state()), before, "one Undo takes back both");
     assert!(!has_job(h.state(), "a.dds"));
+    h.state_mut().redo();
+    idle(&mut h);
+    assert_eq!(toml(h.state()), t, "one Redo puts back both");
+    assert!(has_job(h.state(), "a.dds"));
 }
 
 #[test]
@@ -130,12 +128,11 @@ fn bulk_reencode_counts_only_dds() {
     m.click_item("c.png", true, false);
     let mut h = harness(m);
     h.run();
-    let pushes = h.state().history.pushes;
+    let steps = h.state().history.undo.len();
     h.get_by_label("Re-encode 2 DDS files").click();
-    h.run();
-    assert_eq!(h.state().history.pushes, pushes + 1, "one undo step");
-    assert_eq!(h.state().undo_label(), Some("Re-encode 2 DDS files"));
     idle(&mut h);
+    assert_eq!(h.state().history.undo.len(), steps + 1, "one undo step");
+    assert_eq!(h.state().undo_label(), Some("Re-encode 2 DDS files"));
     let t = toml(h.state());
     assert!(
         t.contains("[files.\"a.dds\"]") && t.contains("[files.\"b.dds\"]"),
