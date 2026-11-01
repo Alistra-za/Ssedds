@@ -91,7 +91,7 @@ The left column is one flat list of meshes: one row per mesh path, showing the c
 Select a mesh to see:
 
 - **In game** / **Source**: the copy that wins in game, or the source mod's copy of a PGPatcher-patched mesh.
-- **Shapes**: the **Shapes** button next to the list title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots, with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
+- **Shapes**: the list column is titled **NIFs**, and the **Shapes of <file>** button next to the title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots (numbered from 1 like the set editor; hover for the NIF's own index), with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
 - **Plugin overrides**: plugin records that use this mesh. **Show inert** includes records that have no effect.
 - Override and conflict information ("Overridden by …").
 - **Edit**: opens the mesh for editing. See [NIF editing](NIF-Editing.md).

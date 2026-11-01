@@ -1,6 +1,6 @@
 //! The edit panel's Shader and Alpha tabs (spec §7, plan A17). Widgets only read the session; every change is
 //! collected in an [`Act`] that `edit_panel::panel` applies after drawing.
-use crate::model::meshes::nif_edit::{edit_slot_label, NifEdit, Selection};
+use crate::model::meshes::nif_edit::{edit_slot_label, edit_slot_shown, NifEdit, Selection};
 use crate::model::meshes::pg_entries::pg_ignore;
 use crate::model::meshes::{shader_type_name, MeshesModel, SHADER_TYPES};
 use crate::pgp::alpha::{AlphaFlags, BLEND_MODES, DEFAULT_FLAGS, DEFAULT_THRESH, TEST_FUNCS};
@@ -22,8 +22,6 @@ pub(super) struct Act {
     pub push: Option<(Vec<Op>, Option<String>)>,
     /// A drag or a typed value ended: the next change is a new undo step.
     pub flush: bool,
-    pub undo: bool,
-    pub redo: bool,
     pub solo: Option<bool>,
     pub check: Option<bool>,
     pub keep_mine: Option<usize>,
@@ -613,7 +611,7 @@ pub(super) fn shader_tab(ui: &mut egui::Ui, m: &MeshesModel, e: &NifEdit, act: &
 fn target_name(t: &Target) -> String {
     match t {
         Target::Field { field, .. } => crate::model::meshes::nif_edit::field_label(*field),
-        Target::Slot { slot, .. } => format!("slot {slot}"),
+        Target::Slot { slot, .. } => format!("slot {}", slot + 1),
         Target::Extra { block } => format!("extra data block {block}"),
         Target::Block { block } => format!("block {block}"),
     }
@@ -681,7 +679,10 @@ fn texture_slots(
     let lt = &l.lighting;
     let anchor = anchor_shape(&e.model, shape.block);
     for (i, raw) in ts.raw.slots.iter().enumerate() {
-        let name = edit_slot_label(lt.shader_type, lt.slsf1, lt.slsf2, i);
+        // Note GH7: the set editor's name where it has one; slots count from 1, the NIF's own index is on hover.
+        let name = edit_slot_shown(lt.shader_type, lt.slsf1, lt.slsf2, i);
+        let own = edit_slot_label(lt.shader_type, lt.slsf1, lt.slsf2, i);
+        let n = i + 1;
         let text = nif::text::lossy(raw);
         let norm = nif::path::canon_texture(raw).norm;
         let mut commit = None;
@@ -697,7 +698,7 @@ fn texture_slots(
         ui.horizontal(|ui| {
             // Note GD6: a slot with a warning is named in the warning's colour.
             let t = egui::RichText::new(name).strong();
-            match slot_warnings()
+            let label = match slot_warnings()
                 .map(|w| w.level)
                 .max_by_key(|l| *l == Level::Error)
             {
@@ -705,13 +706,18 @@ fn texture_slots(
                 Some(Level::Warn) => ui.label(t.color(AMBER)),
                 None => ui.label(t),
             };
+            label.on_hover_text(if own == name {
+                format!("NIF texture index {i}")
+            } else {
+                format!("NIF texture index {i}; the shader form's own name: {own}")
+            });
             for w in slot_warnings() {
                 let color = if w.level == Level::Error { RED } else { AMBER };
                 ui.label(egui::RichText::new(&w.text).small().color(color))
                     .on_hover_text(&w.text);
                 if let Some(fix) = &w.fix {
                     let r = ui.small_button("Fix");
-                    let name = format!("Fix slot {i}: {}", w.text);
+                    let name = format!("Fix slot {n}: {}", w.text);
                     r.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name)
                     });
@@ -733,7 +739,7 @@ fn texture_slots(
                 }
                 let browse =
                     super::super::path_picker::menu(ui, "Browse", |ui| browse(ui, m, &mut commit));
-                let bname = format!("Browse for {name} (slot {i})");
+                let bname = format!("Browse for {name} (slot {n})");
                 browse.response.widget_info(move || {
                     egui::WidgetInfo::labeled(egui::WidgetType::Button, true, bname.clone())
                 });
@@ -741,7 +747,7 @@ fn texture_slots(
                     ui,
                     set,
                     i,
-                    &format!("{name} path (slot {i})"),
+                    &format!("{name} path (slot {n})"),
                     &text,
                     &mut commit,
                 );

@@ -411,10 +411,21 @@ fn tree(ui: &mut egui::Ui, m: &mut MeshesModel) {
     } else if !can {
         m.shapes_col = false;
     }
+    // Note GH4: the column is named for what it lists, never for the view tab; the toggle names the file it opens.
+    let toggle = match m.selected_row() {
+        Some(n) => format!(
+            "Shapes of {}",
+            display_path(&n.path)
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or_default()
+        ),
+        None => "Shapes".to_string(),
+    };
     ui.horizontal(|ui| {
-        ui.heading("Meshes");
+        ui.heading("NIFs");
         let on = m.shapes_col;
-        let r = ui.add_enabled(can, egui::Button::selectable(on, "Shapes"));
+        let r = ui.add_enabled(can, egui::Button::selectable(on, toggle));
         let r = r.on_disabled_hover_text(if locked {
             "Close Edit to see the mesh list"
         } else {
@@ -661,7 +672,71 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
         ui.centered_and_justified(|ui| ui.label("Select a NIF."));
         return;
     }
-    if let Some(n) = &row {
+    // B-P33: non-finite controller times get no clock and no slider, only a line.
+    let invalid = m.edit.as_ref().is_some_and(|e| e.anim_invalid());
+    // No clock controls In game (simulated): the clock is paused there (F21).
+    let anim = m.v3.nif_view && m.view_source && (m.v3.clock.is_some() || invalid);
+    // Note GH6 (N6): the lines above the 3D view scroll when the window is short, so the frame keeps its minimum.
+    let cap = head_cap(ui, anim);
+    ui.scope(|ui| {
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::thin();
+        egui::ScrollArea::vertical()
+            .id_salt("meshes-detail-head")
+            .max_height(cap)
+            .auto_shrink([false, true])
+            .show(ui, |ui| detail_head(ui, m, row.as_ref()));
+    });
+    // v2 B3: the controls first (a click this frame is ticked this frame), then the tick, then the 3D view, whose
+    // request_frame then carries the new time and materials: one Render per frame.
+    if anim {
+        egui::Panel::bottom("meshes-3d-anim")
+            .frame(egui::Frame::new())
+            .resizable(false)
+            .show(ui, |ui| {
+                if invalid {
+                    ui.colored_label(AMBER, ANIM_INVALID);
+                } else {
+                    super::viewport3d::clock_controls(ui, &mut m.v3);
+                }
+            });
+    } else {
+        ui.skip_ahead_auto_ids(1);
+    }
+    // One step per frame: a discarded first pass must not advance the clock twice.
+    let dt = if ui.ctx().current_pass_index() == 0 {
+        ui.input(|i| i.stable_dt)
+    } else {
+        0.0
+    };
+    m.tick_anim(dt);
+    let image = super::viewport3d::show(ui, &mut m.v3);
+    // Note GH9 (Q1): a plain right-click on the frame while a NIF edit is open. egui opens a context menu only on a
+    // secondary click, not a drag, so the right-drag orbit and the Shift+right-drag sun are untouched.
+    if let Some(r) = image.filter(|_| m.edit.is_some()) {
+        r.context_menu(|ui| quick_export_menu(ui, m));
+    }
+}
+
+/// The 3D frame's minimum height (Note GH6).
+const PREVIEW_MIN_H: f32 = 160.0;
+/// The least the lines above the frame keep when the window is too short for both (the minimum wins, rule 2.3).
+const HEAD_MIN_H: f32 = 48.0;
+
+/// The most height the lines above the 3D frame may take: what is left after the frame's minimum and the panels
+/// around it. These panels' heights are last frame's, as the edit panel's width is in `draw`; the first frame has none.
+fn head_cap(ui: &egui::Ui, anim: bool) -> f32 {
+    let h = |id: &str| {
+        egui::containers::panel::PanelState::load(ui.ctx(), egui::Id::new(id))
+            .map_or(0.0, |p| p.outer_rect.height())
+    };
+    let around =
+        h("meshes-3d-bar") + h("meshes-3d-details") + if anim { h("meshes-3d-anim") } else { 0.0 };
+    (ui.available_height() - PREVIEW_MIN_H - around - ui.spacing().item_spacing.y).max(HEAD_MIN_H)
+}
+
+/// The title, the warnings and the In game / Source toggle above the 3D view.
+fn detail_head(ui: &mut egui::Ui, m: &mut MeshesModel, row: Option<&NifRow>) {
+    if let Some(n) = row {
         let editing = m.edit.is_some();
         let mut toggle = false;
         egui::Sides::new().shrink_left().truncate().show(
@@ -778,38 +853,6 @@ fn detail(ui: &mut egui::Ui, m: &mut MeshesModel) {
             ui.label(EDIT_HIDDEN);
         }
     }
-    // v2 B3: the controls first (a click this frame is ticked this frame), then the tick, then the 3D view, whose
-    // request_frame then carries the new time and materials: one Render per frame.
-    // B-P33: non-finite controller times get no clock and no slider, only this line.
-    let invalid = m.edit.as_ref().is_some_and(|e| e.anim_invalid());
-    // No clock controls In game (simulated): the clock is paused there (F21).
-    if m.v3.nif_view && m.view_source && (m.v3.clock.is_some() || invalid) {
-        egui::Panel::bottom("meshes-3d-anim")
-            .frame(egui::Frame::new())
-            .resizable(false)
-            .show(ui, |ui| {
-                if invalid {
-                    ui.colored_label(AMBER, ANIM_INVALID);
-                } else {
-                    super::viewport3d::clock_controls(ui, &mut m.v3);
-                }
-            });
-    } else {
-        ui.skip_ahead_auto_ids(1);
-    }
-    // One step per frame: a discarded first pass must not advance the clock twice.
-    let dt = if ui.ctx().current_pass_index() == 0 {
-        ui.input(|i| i.stable_dt)
-    } else {
-        0.0
-    };
-    m.tick_anim(dt);
-    let image = super::viewport3d::show(ui, &mut m.v3);
-    // Note GH9 (Q1): a plain right-click on the frame while a NIF edit is open. egui opens a context menu only on a
-    // secondary click, not a drag, so the right-drag orbit and the Shift+right-drag sun are untouched.
-    if let Some(r) = image.filter(|_| m.edit.is_some()) {
-        r.context_menu(|ui| quick_export_menu(ui, m));
-    }
 }
 
 /// Note GH9 (Q2-Q4): the 3D view's menu. Export this NIF writes the open edit without Review, and is off with its
@@ -865,11 +908,14 @@ fn shapes_column(ui: &mut egui::Ui, m: &mut MeshesModel) {
                         ui.label("No NIF of the latest scan uses it.");
                     }
                     for (nif, slot, kind) in users.iter().take(MAX_LISTED) {
+                        // Note GH7: slots count from 1 like the set editor; the NIF's own index is on hover.
                         ui.label(format!(
-                            "{} · slot {slot} ({})",
+                            "{} · slot {} ({})",
                             display_path(nif),
+                            slot + 1,
                             slot_name(*kind, *slot as usize)
-                        ));
+                        ))
+                        .on_hover_text(format!("NIF texture index {slot}"));
                     }
                     if users.len() > MAX_LISTED {
                         ui.label(format!("… and {} more", users.len() - MAX_LISTED));
@@ -1257,11 +1303,14 @@ fn shape(
             let Some(p) = t else { continue };
             ui.horizontal_wrapped(|ui| {
                 let name = slot_name(s.shader_kind, i);
+                // Note GH7: 1-based like the set editor; the NIF's own index is on hover.
+                let n = i + 1;
                 ui.label(if name.is_empty() {
-                    format!("slot {i}:")
+                    format!("slot {n}:")
                 } else {
-                    format!("slot {i} ({name}):")
-                });
+                    format!("slot {n} ({name}):")
+                })
+                .on_hover_text(format!("NIF texture index {i}"));
                 if ui.link(p).clicked() {
                     clicked = Some(p.clone());
                 }
@@ -1380,7 +1429,8 @@ fn shape_details(ui: &mut egui::Ui, m: &MeshesModel, s: &ShapeView) {
             continue;
         }
         ui.horizontal_wrapped(|ui| {
-            ui.label(format!("slot {i}"));
+            ui.label(format!("slot {}", i + 1))
+                .on_hover_text(format!("NIF texture index {i}"));
             if let Some(o) = origin {
                 ui.label(o);
             }

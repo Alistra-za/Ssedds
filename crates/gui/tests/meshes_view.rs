@@ -1867,24 +1867,31 @@ fn shapes_toggle_swaps_the_column_and_is_off_with_no_selection() {
     m.nifs = Arc::new(vec![nif(7, "meshes/x.nif")]);
     let mut h = harness(m);
     h.run();
-    // No mesh selected: disabled.
+    // Note GH4: the column is titled for what it lists; no mesh selected: the toggle is plain `Shapes` and disabled.
+    h.get_by_label("NIFs");
+    assert!(h.query_by_label("Meshes").is_none(), "the view tab's name");
     assert!(h.get_by_label("Shapes").accesskit_node().is_disabled());
     h.state_mut().selected_nif = Some(7);
     h.state_mut().shapes = vec![shape(vec![None])];
     h.run();
+    h.get_by_label("NIFs");
+    assert!(
+        h.query_by_label("Shapes").is_none(),
+        "the toggle names the file"
+    );
     assert_eq!(
         h.query_all_by_label("x.nif").count() + h.query_all_by_label("meshes/x.nif").count(),
         2,
         "heading and list row"
     );
-    h.get_by_label("Shapes").click();
+    h.get_by_label("Shapes of x.nif").click();
     h.run();
     assert!(h.state().shapes_col);
     h.get_by_label_contains("#0 Body");
     assert_eq!(h.query_all_by_label("x.nif").count(), 1, "heading only");
     // The detail pane has no Shapes | 3D selector any more.
     assert!(h.query_by_label("3D").is_none());
-    h.get_by_label("Shapes").click();
+    h.get_by_label("Shapes of x.nif").click();
     h.run();
     assert_eq!(
         h.query_all_by_label("x.nif").count() + h.query_all_by_label("meshes/x.nif").count(),
@@ -1940,8 +1947,13 @@ fn shader_line_is_the_bare_type_name_and_slots_are_indented() {
     assert!(h.query_by_label_contains("Lighting:").is_none());
     h.get_by_label("Environment Map (1)");
     let head = h.get_by_label_contains("#0 Body").rect().min.x;
-    let slot = h.get_by_label_contains("slot 0").rect().min.x;
+    let slot = h.get_by_label_contains("slot 1").rect().min.x;
     assert!(slot > head + 4.0, "slot x {slot} vs header x {head}");
+    // Note GH7: slots count from 1 like the set editor; the NIF's own index is on hover.
+    assert!(h.query_by_label_contains("slot 0").is_none());
+    h.get_by_label_contains("slot 1").hover();
+    h.run();
+    h.get_by_label_contains("NIF texture index 0");
 }
 
 #[test]

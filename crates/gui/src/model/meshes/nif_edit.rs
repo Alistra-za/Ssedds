@@ -329,6 +329,17 @@ pub fn edit_slot_label(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) ->
     }
 }
 
+/// Note GH7: the name the form shows for texture-set slot `slot` (0-based, the NIF's index). A True PBR set uses the
+/// set editor's card names for PGPatcher slots 3 and 7; every other slot keeps [`edit_slot_label`]'s own name (the set
+/// editor names only the True PBR slots).
+pub fn edit_slot_shown(shader_type: u32, slsf1: u32, slsf2: u32, slot: usize) -> &'static str {
+    match slot {
+        2 if slsf2 & SLSF2_TRUE_PBR != 0 => "Emissive / Skin",
+        6 if slsf2 & SLSF2_TRUE_PBR != 0 => "Coat normal / Fuzz",
+        _ => edit_slot_label(shader_type, slsf1, slsf2, slot),
+    }
+}
+
 /// A field in words, as the tabs name it (Meshes UI T3: no `Slsf1` or `UvOffset(0)` in the pending list).
 pub fn field_label(f: Field) -> String {
     let axis = |n: u8| ["U", "V"].get(n as usize).copied().unwrap_or("?");
@@ -382,7 +393,8 @@ pub fn op_label(op: &Op, m: &NifModel) -> String {
         Op::SetField { at, field, .. } | Op::SetBits { at, field, .. } => {
             (field_name(m, at.block, *field), at)
         }
-        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {slot}"), at),
+        // Note GH7: slots count from 1 like the set editor.
+        Op::SetTexturePath { at, slot, .. } => (format!("Texture slot {}", slot + 1), at),
         Op::SplitAlpha { at } => ("Split alpha".into(), at),
         Op::AddAlpha { at, .. } => ("Add alpha".into(), at),
         Op::RemoveAlpha { at } => ("Remove alpha".into(), at),

@@ -1,4 +1,4 @@
-//! The NIF edit panel (spec §7, plan A17/A19): what is edited and from where, Solo, Undo / Redo, the pending edits,
+//! The NIF edit panel (spec §7, plan A17/A19): what is edited and from where, Solo, the pending edits,
 //! the export status with Review… (Note GD2: NIF edits export from Review), then the Shader, Alpha, Controllers and
 //! Extra data tabs.
 use super::edit_fields::{self, Act};
@@ -105,27 +105,11 @@ fn top(ui: &mut egui::Ui, e: &NifEdit, act: &mut Act) {
     if e.le_mesh {
         ui.colored_label(AMBER, "LE mesh: no 3D preview");
     }
-    ui.horizontal(|ui| {
-        let mut solo = e.solo;
-        if ui.checkbox(&mut solo, "Show only this shape").changed() {
-            act.solo = Some(solo);
-        }
-        // Distinct names: the shared header has its own Undo / Redo for the Textures history.
-        for (text, name, enabled, undo) in [
-            ("Undo", "Undo NIF edit", e.history.can_undo(), true),
-            ("Redo", "Redo NIF edit", e.history.can_redo(), false),
-        ] {
-            let r = ui.add_enabled(enabled, egui::Button::new(text));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
-            if r.clicked() {
-                if undo {
-                    act.undo = true;
-                } else {
-                    act.redo = true;
-                }
-            }
-        }
-    });
+    // Note GH2: no Undo / Redo here; the header's pair, the palette and Ctrl+Z / Ctrl+Y step the NIF history.
+    let mut solo = e.solo;
+    if ui.checkbox(&mut solo, "Show only this shape").changed() {
+        act.solo = Some(solo);
+    }
     if let Some((applied, conflicts)) = e.source_changed {
         ui.colored_label(
             AMBER,
@@ -373,12 +357,6 @@ fn apply(m: &mut MeshesModel, act: Act) {
     // v2 B7: edit_with sends nothing for an unchanged static material; the next tick_anim sends the animated ones.
     if let Some(p) = act.playing {
         m.edit_with(|e| e.set_playing(p));
-    }
-    if act.undo {
-        m.undo_edit();
-    }
-    if act.redo {
-        m.redo_edit();
     }
     if let Some(on) = act.solo {
         m.edit_with(|e| e.solo = on);

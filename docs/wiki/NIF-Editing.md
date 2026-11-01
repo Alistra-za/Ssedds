@@ -10,7 +10,7 @@ The GUI can edit a mesh (NIF file) in the Meshes view and write an edited copy. 
 ## Open a mesh for editing
 
 1. Switch to the **Meshes** view and select a mesh.
-2. Press **Edit** next to its name. The edit panel opens, and the column shows the mesh's shape cards: a **Root** card, then one card per shape.
+2. Press **Edit** next to its name. The edit panel opens, and the list column (titled **NIFs**; its **Shapes of <file>** button is on and locked) shows the mesh's shape cards: a **Root** card, then one card per shape.
 3. Click a card to choose what the tabs edit. A line under the tabs says which one, for example "Editing: BodyMesh (BSTriShape)".
 
 The 3D view shows your edits as you make them. **Show only this shape** hides the other shapes.
@@ -40,7 +40,7 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 ## Pending edits, undo and source changes
 
 - **Pending edits (N)** lists each edit in words. **Revert** removes one. A red row did not apply and says why.
-- **Undo** and **Redo** (header, panel, **Ctrl+Z** / **Ctrl+Y**) act on the NIF edit while it is open. The header buttons then name the step, as in **Undo NIF edit: Set shader type**.
+- **Undo** and **Redo** (header, **Ctrl+Z** / **Ctrl+Y**, the command palette) act on the NIF edit while it is open. The header buttons then name the step, as in **Undo NIF edit: Set shader type**. The edit panel has no Undo or Redo of its own; each pending edit has its own **Revert**.
 - Edits are kept in a small file under `.sdc\nif-edits` in the export folder, so they survive a restart. If you change the export folder while editing, the open edit moves with you to the new folder; the edits saved in the old one stay there. If the new folder already has saved edits for that NIF, the first save there moves them aside to `<name>.<seconds>.toml` beside them, and Messages names the kept file.
 - If a mod update changes the source NIF, your edits are applied again by name. Any that clash offer **Take source** or **Keep mine**.
 

@@ -1264,7 +1264,8 @@ fn edit_opens_on_the_card_picked_before_and_locks_the_shapes_column() {
         h.state().edit.as_ref().unwrap().selection,
         Selection::Shape(s.block)
     );
-    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes");
+    // Note GH4: the toggle names the file while a NIF is selected.
+    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes of x.nif");
     assert!(
         shapes.accesskit_node().is_disabled(),
         "locked while editing"
@@ -2031,7 +2032,7 @@ fn edit_controls_have_names_and_roles() {
     h.run_steps(2);
     h.get_by_role_and_label(AkRole::ComboBox, "Shader type");
     h.get_by_role_and_label(AkRole::ColorWell, "Specular colour");
-    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)");
+    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)");
     h.get_by_label("Alpha tab").click();
     h.run_steps(2);
     for l in ["Source", "Destination", "Function"] {
@@ -2152,17 +2153,17 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         "Alpha tab",
         "Controllers tab",
         "Extra data tab",
-        "Undo NIF edit",
-        "Redo NIF edit",
     ] {
-        // `get_by_label` panics on two matches: the header's Undo/Redo must not share the panel's names (rule 8.4).
         let r = h.get_by_label(l).rect();
         assert!(
             edit.contains(r.center()),
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
-    // Note FC12 (fix round 1): the header names whose history it acts on.
+    // Note GH2: the panel has no Undo / Redo of its own; the header names whose history it acts on (Note FC12).
+    for l in ["Undo NIF edit", "Redo NIF edit"] {
+        assert!(h.query_by_label(l).is_none(), "{l} is back in the panel");
+    }
     h.get_by_label("Undo (NIF edit history)");
     h.get_by_label("Redo (NIF edit history)");
     // Meshes UI T3: the footer sits under the tabs, inside the panel, with its blocked reason; Note GD2: its button
@@ -3479,7 +3480,7 @@ fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
     h.get_by_label("Blocked: 1 edit cannot be applied.");
     h.get(row(": SLSF1 flags"));
     assert!(h.query_by_label_contains("Slsf1").is_none());
-    h.get_by_label_contains(": Texture slot 0: ");
+    h.get_by_label_contains(": Texture slot 1: ");
     // Closed by hand, Show opens it again.
     h.get_by_label("Pending edits (2)").click();
     h.run_steps(3);
@@ -3569,7 +3570,7 @@ fn a_path_typed_without_enter_is_committed_by_the_review_click() {
     gloss(&mut m, 12.5);
     let mut h = view(m);
     h.run_steps(3);
-    let field = "Diffuse path (slot 0)";
+    let field = "Diffuse path (slot 1)";
     h.get_by_role_and_label(AkRole::TextInput, field).focus();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -3621,6 +3622,14 @@ fn both_histories(ops: usize) -> (tempfile::TempDir, tempfile::TempDir, AppH) {
 }
 
 fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile::TempDir, AppH) {
+    in_the_meshes_view_sized(model, ops, egui::vec2(1400.0, 900.0))
+}
+
+fn in_the_meshes_view_sized(
+    model: sdc_gui::model::AppModel,
+    ops: usize,
+    size: egui::Vec2,
+) -> (tempfile::TempDir, AppH) {
     let d = files(false);
     let mut app = sdc_gui::app::SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
@@ -3636,12 +3645,10 @@ fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile:
         app.meshes.edit.as_mut().unwrap().flush();
     }
     let mut frame = eframe::Frame::_new_kittest();
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1400.0, 900.0))
-        .build_ui_state(
-            move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
-            app,
-        );
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
+        app,
+    );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
     h.run_steps(4);
@@ -9303,7 +9310,7 @@ fn shader_tab_shows_slots_first_and_flags_closed() {
     let mut h = view(m);
     h.run_steps(2);
     let slot = h
-        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)")
+        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)")
         .rect();
     let ty = h
         .get_by_role_and_label(AkRole::ComboBox, "Shader type")
@@ -9484,7 +9491,7 @@ fn repeated_fix_and_conflict_buttons_have_unique_names() {
     );
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_role_and_label(AkRole::Button, "Fix slot 0: Not relative to Data");
+    h.get_by_role_and_label(AkRole::Button, "Fix slot 1: Not relative to Data");
     // A conflict: the source's own glossiness changes on disk under the edit.
     let (d, mut m) = export_session();
     m.open_edit();
@@ -9834,7 +9841,7 @@ fn empty_rmaos_slot_is_a_row() {
     );
     assert_eq!(
         nif::edit::validate::EMPTY_RMAOS,
-        "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic"
+        "Slot 6 (RMAOS) is empty: in game the mesh renders fully metallic"
     );
     // GD1: the worklist row; the slot is not a `Field`, so the row names it and has no field.
     use sdc_gui::model::meshes::{NifLevel, NifTab};
@@ -11214,4 +11221,117 @@ fn the_set_preview_has_no_export_menu() {
     h.run_steps(4);
     right_click_3d(&mut h); // finds the 3D image, so the view is drawn
     assert!(h.query_by_label(EXPORT_THIS_NIF).is_none());
+}
+
+// ---- Note GH2, GH6, GH7: one Undo pair, the preview's minimum height, 1-based slot numbers ----
+
+/// GH2 (N2): the panel has no Undo / Redo of its own; the header's pair and Ctrl+Z step the NIF history.
+#[test]
+fn the_edit_panel_has_no_undo_redo_of_its_own() {
+    use egui::containers::panel::PanelState;
+    let (_t, _d, mut h) = both_histories(1);
+    let edit = PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .unwrap()
+        .outer_rect;
+    for l in ["Undo NIF edit", "Redo NIF edit"] {
+        assert!(h.query_by_label(l).is_none(), "{l} is in the panel");
+    }
+    let in_panel = h
+        .query_all_by_role(AkRole::Button)
+        .filter(|n| edit.contains(n.rect().center()))
+        .filter(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Undo") || l.starts_with("Redo"))
+        })
+        .count();
+    assert_eq!(in_panel, 0, "an Undo or Redo button inside the edit panel");
+    assert!(!header_button(&h, "Undo").accesskit_node().is_disabled());
+    // The header's own text names the step.
+    let hdr = sdc_gui::ui::header::undo_button(
+        sdc_gui::ui::meshes::undo_target(&h.ctx).as_ref(),
+        true,
+        None,
+    );
+    assert!(hdr.text.starts_with("Undo NIF edit: "), "{}", hdr.text);
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(nif(&h), (0, true), "Ctrl+Z undid the NIF step");
+}
+
+/// GH6 (N6): the lines above the 3D frame give way, so the frame keeps 160 px, fully on screen, while the window has
+/// the room (Review dragged up to 400 px at 1536x864). Taller than that the room is gone: the bottom panel's own cap is
+/// in a main-team file, so past it the frame shrinks (the report's hand-off), but the lines above are already at their
+/// least.
+#[test]
+fn the_preview_keeps_160_px_with_review_open() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let mut tops = vec![];
+    for review_h in [345.0, 380.0, 400.0, 440.0, 480.0] {
+        let r = egui::Rect::from_min_size(
+            egui::pos2(8.0, hgt - review_h),
+            egui::vec2(w - 16.0, review_h),
+        );
+        h.ctx.data_mut(|d| {
+            d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+        });
+        h.run_steps(8);
+        let frame = h
+            .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+            .rect();
+        if review_h <= 400.0 {
+            assert!(
+                frame.height() >= 159.5,
+                "Review {review_h}: preview {frame:?}"
+            );
+            assert!(frame.max.y <= r.min.y, "{frame:?} under Review {r:?}");
+        }
+        tops.push(frame.min.y);
+    }
+    // The lines above give way first: the frame's top stops at the head's least once the room runs short.
+    assert!(
+        tops[0] > tops[4] + 20.0,
+        "the head did not give way: {tops:?}"
+    );
+    assert_eq!(tops[3], tops[4], "the head is at its least: {tops:?}");
+}
+/// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
+#[test]
+fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {
+    use egui::containers::panel::PanelState;
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)");
+    h.get_by_role_and_label(AkRole::Button, "Browse for Diffuse (slot 1)");
+    assert!(h.query_by_label_contains("(slot 0)").is_none());
+    let edit = PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .unwrap()
+        .outer_rect;
+    let name = h
+        .query_all_by_label("Diffuse")
+        .find(|n| edit.contains(n.rect().center()))
+        .expect("the slot's name in the form");
+    name.hover();
+    h.run_steps(30);
+    h.get_by_label_contains("NIF texture index 0");
+}
+
+/// GH7: the form shows the set editor's name for a True PBR slot, and keeps its own where the set editor has none.
+#[test]
+fn true_pbr_slots_use_the_set_editors_names() {
+    const PBR: u32 = 1 << 23;
+    assert_eq!(edit_slot_shown(0, 0, PBR, 2), "Emissive / Skin");
+    assert_eq!(edit_slot_shown(0, 0, PBR, 6), "Coat normal / Fuzz");
+    assert_eq!(edit_slot_shown(0, 0, PBR, 5), "RMAOS");
+    // No set editor label outside True PBR: the form's own names stay.
+    assert_eq!(edit_slot_shown(0, 0, 0, 2), "Rim / back-light");
+    assert_eq!(edit_slot_shown(1, 0, 0, 4), "Env cube");
 }
