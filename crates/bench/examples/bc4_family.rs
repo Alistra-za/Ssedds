@@ -3,7 +3,7 @@
 //! CSVs to `--out` (must be outside the bench root).
 //!
 //! Everything is scored with the round-to-nearest BC4 decoder (bcdec weights, the vendored rgbcx after Note T13).
-//! Variants (all start from the shipped result and only replace it on a strictly lower SSE, so ties keep its bytes):
+//! Variants (all start from the upstream result and only replace it on a strictly lower SSE, so ties keep its bytes):
 //! - `v0`: a Rust port of `rgbcx::encode_bc4_hq` (`--radius`, default 5, both modes), checked byte-identical to the FFI encoder.
 //! - `v1`: v0 + a 6-value-mode search anchored on the block's inner range (values other than 0 and 255), e0 == e1
 //!   allowed, for blocks that contain 0 or 255.
@@ -15,7 +15,7 @@
 //!
 //! usage: cargo run --release -p sdc-bench --example bc4_family -- --out <dir> [--oracle] [--sets a,b] [--rounds 1,2,3] [--radius 5] [--serial] [--time]
 //! `--radius 10` also runs `max` (`search_max`: v4 + the near-exhaustive pair search, guard last on BC3).
-//! `--time` prints per-image median/worst ms for shipped (v0, Rust), v4 and max; add `--serial` for uncontended times.
+//! `--time` prints per-image median/worst ms for upstream (v0, Rust), v4 and max; add `--serial` for uncontended times.
 // Research probe: index loops mirror the C++ it ports, and the per-encoder tuples stay local.
 #![allow(clippy::needless_range_loop, clippy::type_complexity)]
 use rayon::prelude::*;
@@ -148,7 +148,7 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
         .collect();
     // decoded channel blocks per encoder (name -> chan -> block -> 16 values, plus raw bytes)
     let mut enc: Vec<(String, Vec<Vec<[u8; 8]>>, f64)> = vec![];
-    // shipped FFI encoder (timed)
+    // upstream FFI encoder (timed)
     let t = Instant::now();
     let ffi: Vec<Vec<[u8; 8]>> = chans
         .iter()
@@ -244,11 +244,13 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
         })
         .sum();
     let sdc = &job.ext.first().map(|e| e.0.clone());
+    // The engine DDS rows (`sdc_*_rounded`) are the patched engine's bytes, so they are compared with `cxx`.
+    let cxx_i = enc.iter().position(|e| e.0 == "cxx").unwrap();
     let mismatch_ext_sdc = match enc.iter().position(|e| Some(&e.0) == sdc.as_ref()) {
         Some(i) => (0..chans.len())
             .map(|ci| {
                 (0..nb)
-                    .filter(|&b| enc[0].1[ci][b] != enc[i].1[ci][b])
+                    .filter(|&b| enc[cxx_i].1[ci][b] != enc[i].1[ci][b])
                     .count() as u64
             })
             .sum(),
@@ -561,6 +563,6 @@ fn main() -> anyhow::Result<()> {
             );
         }
     }
-    println!("blocks {nb}; v0 (Rust port) != ffi: {mm}; ffi != engine DDS (sdc_*_rounded): {me}; cxx != v4/v5: {mc}");
+    println!("blocks {nb}; v0 (Rust port) != ffi: {mm}; cxx != engine DDS (sdc_*_rounded): {me}; cxx != v4/v5: {mc}");
     Ok(())
 }

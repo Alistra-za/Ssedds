@@ -1,6 +1,6 @@
 //! Reference BC4 block search (docs/research/bc4-family.md): a Rust port of `rgbcx::encode_bc4_hq` plus the measured
 //! additions (6-value search on the inner range, least-squares refits, trimmed inner ranges, a local search).
-//! Everything starts from the shipped result and replaces it only on a strictly lower SSE, so ties keep its bytes.
+//! Everything starts from the upstream result and replaces it only on a strictly lower SSE, so ties keep its bytes.
 //! The vendored C++ is patched to equal [`search`] byte for byte, so the tie rules here are the contract: the first
 //! minimum per texel, a strict `<` to replace the best, and candidates tried in the order written.
 // Index loops mirror the C++ they port.
@@ -280,13 +280,13 @@ pub fn flips(v: &[u8; 16], b: &Best) -> u32 {
         .count() as u32
 }
 
-/// The shipped search: `rgbcx::encode_bc4_hq` with all modes, as bytes.
-pub fn shipped(v: &[u8; 16], radius: u32) -> [u8; 8] {
+/// The upstream search: `rgbcx::encode_bc4_hq` with all modes, as bytes.
+pub fn upstream(v: &[u8; 16], radius: u32) -> [u8; 8] {
     v0(v, radius as i32).bytes()
 }
 
-/// The measured search (probe variant v4; v5 with `guard128`, which falls back to the shipped block when it would
-/// flip more texels across the alpha-test value 128). Never worse than [`shipped`] in SSE.
+/// The measured search (probe variant v4; v5 with `guard128`, which falls back to the upstream block when it would
+/// flip more texels across the alpha-test value 128). Never worse than [`upstream`] in SSE.
 pub fn search(v: &[u8; 16], radius: u32, guard128: bool) -> [u8; 8] {
     let rad = radius as i32;
     let base = v0(v, rad);
@@ -321,7 +321,7 @@ pub fn oracle(v: &[u8; 16], b: &mut Best) {
 }
 
 /// `max`: [`search`] at radius 10 without the guard, then the near-exhaustive pair search, then the guard last:
-/// when the result flips more texels at 128 than the shipped block, return the guarded radius-10 search instead.
+/// when the result flips more texels at 128 than the upstream block, return the guarded radius-10 search instead.
 pub fn search_max(v: &[u8; 16], guard128: bool) -> [u8; 8] {
     let base = v0(v, 10);
     let mut b = from_bytes(&search(v, 10, false), v);

@@ -1,9 +1,9 @@
-//! Pins the BC4 reference search (docs/research/bc4-family.md): `shipped` to the upstream rgbcx path, `search` to its
+//! Pins the BC4 reference search (docs/research/bc4-family.md): `upstream` to the upstream rgbcx path, `search` to its
 //! never-worse rule, to the patched C++ (BC3/BC4/BC5 entry points) and to the engine's encode path.
 use encoders_sys::{
     bc3_encode_block, bc4_encode_block, bc5_encode_block, gather_blocks, RGBCX_MAX_LEVEL,
 };
-use sdc_bench::bc4ref::{search, search_max, shipped};
+use sdc_bench::bc4ref::{search, search_max, upstream};
 
 struct Rng(u64);
 impl Rng {
@@ -83,13 +83,13 @@ fn flips(b: &[u8; 8], v: &[u8; 16]) -> u32 {
 }
 
 #[test]
-fn shipped_port_equals_ffi() {
+fn upstream_port_equals_ffi() {
     for v in blocks(20_000) {
         for ch in 0..4 {
             let p = px(&v, ch);
             for r in [4, 5, 10] {
                 assert_eq!(
-                    shipped(&v, r),
+                    upstream(&v, r),
                     encoders_sys::bc4_encode_block_flags(
                         &p,
                         ch,
@@ -107,7 +107,7 @@ fn shipped_port_equals_ffi() {
 fn search_never_worse() {
     for v in blocks(20_000) {
         for r in [4, 5, 10] {
-            let s = shipped(&v, r);
+            let s = upstream(&v, r);
             let a = search(&v, r, false);
             assert!(sse(&a, &v) <= sse(&s, &v), "{v:?} r {r}");
             let g = search(&v, r, true);
@@ -124,17 +124,17 @@ fn const_and_binary_blocks_unchanged() {
         *x = if (i + i / 4) % 2 == 0 { 0 } else { 255 };
     }
     for v in [[0u8; 16], [255; 16], [77; 16], checker] {
-        assert_eq!(search(&v, 5, false), shipped(&v, 5), "{v:?}");
-        assert_eq!(search(&v, 5, true), shipped(&v, 5), "{v:?}");
+        assert_eq!(search(&v, 5, false), upstream(&v, 5), "{v:?}");
+        assert_eq!(search(&v, 5, true), upstream(&v, 5), "{v:?}");
     }
 }
 
 #[test]
-fn trimmed_range_beats_shipped_on_near_extremes() {
+fn trimmed_range_beats_upstream_on_near_extremes() {
     let v = [
         0, 0, 1, 2, 40, 80, 120, 160, 200, 253, 254, 255, 255, 255, 128, 64,
     ];
-    assert!(sse(&search(&v, 5, false), &v) < sse(&shipped(&v, 5), &v));
+    assert!(sse(&search(&v, 5, false), &v) < sse(&upstream(&v, 5), &v));
 }
 
 // The vendored C++ (shim flags BC4_SDC_SEARCH, plus BC4_SDC_GUARD128 for BC3 alpha) equals the reference byte for
@@ -163,8 +163,33 @@ fn ffi_equals_reference() {
                 p[t][1] = w[t];
             }
             let e = bc5_encode_block(&p, r);
-            assert_eq!(e[..8], search(v, r, false), "{v:?} bc5 r r {r}");
-            assert_eq!(e[8..], search(w, r, false), "{w:?} bc5 g r {r}");
+            assert_eq!(e[..8], search(v, r, false), "{v:?} bc5 r half r {r}");
+            assert_eq!(e[8..], search(w, r, false), "{w:?} bc5 g half r {r}");
+        }
+    }
+}
+
+/// The flag constants in `encoders-sys` reach the C++ as the reference expects (they are only mirrored by hand).
+#[test]
+fn flag_constants_select_the_reference_arms() {
+    use encoders_sys::{
+        bc4_encode_block_flags, BC4_SDC_GUARD128, BC4_SDC_SEARCH, BC4_USE_ALL_MODES,
+    };
+    for v in blocks(400) {
+        let p = px(&v, 0);
+        for r in [4, 5, 10] {
+            let f = BC4_USE_ALL_MODES | BC4_SDC_SEARCH;
+            assert_eq!(
+                bc4_encode_block_flags(&p, 0, r, f),
+                search(&v, r, false),
+                "{v:?} r {r}"
+            );
+            let g = f | BC4_SDC_GUARD128;
+            assert_eq!(
+                bc4_encode_block_flags(&p, 0, r, g),
+                search(&v, r, true),
+                "{v:?} r {r} guard"
+            );
         }
     }
 }
@@ -298,7 +323,7 @@ fn search_max_never_worse_than_v4() {
         better += (sse(&m, &v) < sse(&p, &v)) as u32;
         let (g, pg) = (search_max(&v, true), search(&v, 10, true));
         assert!(sse(&g, &v) <= sse(&pg, &v), "{v:?} guard");
-        assert!(flips(&g, &v) <= flips(&shipped(&v, 10), &v), "{v:?} guard");
+        assert!(flips(&g, &v) <= flips(&upstream(&v, 10), &v), "{v:?} guard");
         guarded += (g == pg && g != m) as u32;
     }
     eprintln!("search_max: {n} blocks, {better} strictly better than v4, {guarded} fell back to the guarded v4");

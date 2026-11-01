@@ -3706,7 +3706,8 @@ mod tests {
                 !stale,
                 "{format:?} pre-patch record"
             );
-            // The tag from before the BC4 search (round-to-nearest only) is stale the same way.
+            // The tag from before the BC4 search (round-to-nearest only) is stale the same way. The fake hash only
+            // proves that any other tag string is stale, not the real old value format.
             let mut older = entry_for(&job);
             older.encoders.as_mut().unwrap().rgbcx_patch =
                 Some("bc4-round-to-nearest@sha256:00".into());

@@ -76,7 +76,8 @@ pub fn bc4_encode_block(px: &[[u8; 4]; 16], channel: usize, search_radius: u32) 
 /// `rgbcx::BC4_USE_ALL_MODES` (8-value and 6-value modes).
 pub const BC4_USE_ALL_MODES: u32 = 3;
 /// `rgbcx::BC4_SDC_SEARCH` (sdc patch): the extra endpoint search after the mode loop (`sdc_bench::bc4ref::search`).
-/// `bc3/4/5_encode_block` set it.
+/// `bc3/4/5_encode_block` set it. It requires [`BC4_USE_ALL_MODES`]: the search assumes both modes are allowed and the
+/// C++ does not check ([`bc4_encode_block_flags`] debug-asserts it).
 pub const BC4_SDC_SEARCH: u32 = 4;
 /// `rgbcx::BC4_SDC_GUARD128` (sdc patch): with [`BC4_SDC_SEARCH`], keep the mode-loop block when the search would flip
 /// more texels across 128. `bc3_encode_block` sets it for alpha.
@@ -90,6 +91,7 @@ pub fn bc4_encode_block_flags(
     flags: u32,
 ) -> [u8; 8] {
     assert!(channel < 4, "channel {channel} out of range");
+    debug_assert!(flags & BC4_SDC_SEARCH == 0 || flags & BC4_USE_ALL_MODES == BC4_USE_ALL_MODES);
     ensure_init();
     let src = bytes(px);
     let mut out = [0u8; 8];

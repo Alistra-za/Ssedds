@@ -46,7 +46,7 @@ The [encoder survey](encoder-survey.md) found that nobody had published a fair c
 
 ### Protocol
 
-- **One decoder for every output**, mip 0 only, compared with the source in 8-bit code values. No colour-space conversion on either side. BC1 colours were decoded as `round((2a+b)/3)` ("IdealRound4"). BC4 interpolants (BC4, BC5, BC3 alpha) were decoded rounded down, as upstream rgbcx does, where GPUs round to nearest; [BC3, BC4 and BC5](#bc3-bc4-and-bc5-tessaliths-encoder-against-the-others-2026-11-01) rescores them both ways.
+- **One decoder for every output**, mip 0 only, compared with the source in 8-bit code values. No colour-space conversion on either side. BC1 colours were decoded as `round((2a+b)/3)` ("IdealRound4"). BC4 interpolants (BC4, BC5, BC3 alpha) were decoded rounded down, as upstream rgbcx does, where GPUs round to nearest; [BC3, BC4 and BC5](#bc3-bc4-and-bc5-tessaliths-encoder-against-the-others) rescores them both ways.
 - **Normal maps** were scored the way a BC5 shader reads them: X and Y decoded, Z rebuilt. BC7 was also scored with its stored Z.
 - **BC6H** used identical fp16 input for every tool. mPSNR uses 13 exposures from 2⁻⁶ to 2⁶. Peak ratio is decoded peak luminance divided by source peak; 1.0 means the brightest highlight survives.
 - **Alpha flags were set the way a real pipeline would**: NVTT `-noalpha` on opaque sets and `-alpha` on alpha sets; ISPC alpha profiles on alpha sets.
@@ -285,7 +285,7 @@ Round 3, mean Δ of `bc7e_max` against the other encoder [95% t-interval], wins 
 
 The full per-set tables for all three rounds (including bc7e u6 perceptual, and the seconds) are in the bench folder, `results/summary_maxpeak.md` (`scripts/analyze_maxpeak.py`) and `results/summary_engine_bytes.md` (`scripts/analyze_engine_bytes.py`).
 
-## BC3, BC4 and BC5: Tessalith's encoder against the others (2026-11-01)
+## BC3, BC4 and BC5: Tessalith's encoder against the others
 
 `sdc rgbcx (rounded)` (CSV ids `sdc_bc3_rounded`, `sdc_bc4_rounded`, `sdc_bc5_rounded`) is the engine's own BC3, BC4 and BC5 encode, through `sdc-bench encode-one --format bc3|bc4|bc5 --level default` (`engine::encode::encode_level`), re-run on 2026-11-01 with the build of branch `research/bc4-family` (a3785aef, engine 1.2.0). That is the vendored rgbcx with the round-to-nearest BC4 model (DECISIONS T13) and the BC4 block search (DECISIONS Note FJ, [BC4-family encoding](bc4-family.md)), level 18, BC4/BC5 search radius 5, the default preset's settings. BC4 uses a `height` profile, BC5 a `flow` profile. BC3 has no built-in sub-type, so it is a `diffuse` profile with the format set to BC3, as a user override would set it. Its BC3 colour is encoded for the engine's default BC1 model (`ideal`). The rows ran on every set that has BC3, BC4 or BC5 rows, in all three rounds.
 
@@ -321,12 +321,12 @@ Round 3, mean Δ of `sdc rgbcx (rounded)` against the other encoder [95% t-inter
 | | Compressonator | −0.81 [±0.41], 12/83 | +0.53 [±0.15], 89/6 |
 
 - **Under the rounding decoder Tessalith's rgbcx beats upstream rgbcx** on BC4 (+1.8 dB), BC5 (+0.08°) and BC3 alpha (+0.5 to +3.3 dB), on almost every image. Under the floor decoder upstream stays ahead on BC4, BC5 and `packed_real`, where the gap is mostly the decoder model; on cutout and smooth alpha the block search outweighs it.
-- **Under the rounding decoder Tessalith is ahead of NVTT `-highest` on every set in this table:** cutout alpha +1.18 dB (95/0), smooth alpha +0.21 dB premultiplied, packed alpha +0.97 dB, BC5 +0.004° (77/14). On BC4 it is +0.08 dB [±0.05] but wins only 46 of 93 images, and BC5 RG PSNR is +0.002 dB with 17/74, so those two are ties by count. Every other encoder is behind under the rounding decoder.
+- **Under the rounding decoder Tessalith is ahead of NVTT `-highest` on BC3 alpha (cutout, smooth, packed) and on BC5 angle, and tied on BC4 and BC5 RG PSNR:** cutout alpha +1.18 dB (95/0), smooth alpha +0.21 dB premultiplied, packed alpha +0.97 dB, BC5 angle +0.004° (77/14). BC4 is +0.08 dB [±0.05] but wins only 46 of 93 images, and BC5 RG PSNR is +0.002 dB with 17/74, so those two are ties by count. Every other encoder is behind under the rounding decoder.
 - **The wider search radius gains nothing once decoding rounds.** Upstream rgbcx `-hr10` against `-4` is +0.13 dB [±0.07] under the floor decoder and −0.06 dB [±0.16] under the rounding one; BC5 `-hr10` is −0.014° [±0.016].
 - **BC3 cutouts:** the earlier rows (2026-10-31, before the block search) were about 2 dB behind NVTT and Compressonator on cutout alpha; the gap and its fix are in [BC4-family encoding](bc4-family.md). Visible RGB is 0.075 dB behind NVTT `-highest` (3/92), from the colour half.
 - **BC3 colour is exactly upstream rgbcx L18's** (Δ 0 on every image). Encoded for `ideal`, it is 0.10 to 0.32 dB behind `-r` under the bench's IdealRound4 colour decoder; that gap is the BC1 model setting, not the encoder.
-- Rounds 1 and 2 (2 to 7 images per set) point the same way under the rounding decoder: against NVTT `-highest`, cutout alpha +1.06 dB (n = 4), BC4 `mask_real` −0.01 dB (n = 6), BC5 `normal_real` +0.002° (n = 7).
-- Speed (process start included, another build running on the machine): on `mask_real` the BC4 encode took 1.78× the time of bc7enc's `-4` (30.0 s against 16.8 s over 93 images) and 0.87× `-hr10`; BC5 1.79× `-5`. The engine's own end-to-end time is in [BC4-family encoding](bc4-family.md).
+- Rounds 1 and 2 (2 to 7 images per set) point the same way under the rounding decoder: against NVTT `-highest`, cutout alpha +1.06 dB (n = 4), BC4 `mask_real` −0.01 dB (a tie, n = 6), BC5 `normal_real` +0.002° (n = 7).
+- Speed: the old-against-new end-to-end times, measured alternately per image, are in [BC4-family encoding](bc4-family.md). A ratio to bc7enc's CLI from the bench's separate runs is not given: they ran under different machine load and are unreliable.
 
 Per-set tables for all three rounds, with the mean of each variant under both decoders and the seconds, are in `results/summary_engine_bytes.md`; the change against the 2026-10-31 rows is in `results/summary_bc4_rerun.md` (`tools/compare_prev_sdc.py`).
 

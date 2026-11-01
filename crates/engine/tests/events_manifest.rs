@@ -343,7 +343,8 @@ fn encoder_versions_come_from_the_encoders_crate() {
         e.rgbcx_patch.as_deref(),
         Some(format!("bc4-round-to-nearest+bc4-search@sha256:{rgbcx}").as_str())
     );
-    // Note FJ: the BC4/BC5-default sub-types re-encode once (BC4 search).
+    // Note FJ: the BC4/BC5-default sub-types re-encode once (BC4 search). Keep this list equal to the one in
+    // `golden.rs` (`two_d_outputs_unchanged`); the two test crates cannot share a const.
     for st in [
         Subtype::Envmask,
         Subtype::Flow,

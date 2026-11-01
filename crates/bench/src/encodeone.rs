@@ -11,7 +11,8 @@ use engine::presets::{PresetRegistry, DEFAULT_PRESET};
 use engine::quantize::EncoderInput;
 use std::path::Path;
 
-/// The default preset's profile the engine encodes `format` with at `level` ("max" for BC7, "default" for BC3/4/5).
+/// The default preset's profile the engine encodes `format` with at `level` ("max" for BC7; "default" or "max" for
+/// BC3/4/5, where "max" sets the search radius `max`).
 /// Every bench set's sub-type resolves to the same encoder fields (sdc-base.toml: perceptual off, no bc7_weights,
 /// rgbcx level 18, BC4/BC5 radius "default"; exact_opaque, the zero-alpha fix and the grass guard only on
 /// envmask / complex_material / complex_grass), so one representative sub-type per format stands for them.
@@ -36,8 +37,8 @@ pub fn engine_profile(format: &str, level: &str) -> Result<Profile> {
     Ok(p)
 }
 
-/// `format` "bc7" (level "max"), "bc3" / "bc4" / "bc5" (level "default", or "max" = search radius `max`), input an 8-bit PNG fed to the engine's
-/// `encode_level` unchanged; or "bc6h" (level "veryslow_peak", input a bench `.f16`).
+/// `format` "bc7" (level "max"), "bc3" / "bc4" / "bc5" (level "default", or "max" = search radius `max`), input an
+/// 8-bit PNG fed to the engine's `encode_level` unchanged; or "bc6h" (level "veryslow_peak", input a bench `.f16`).
 pub fn encode_one(format: &str, level: &str, input: &Path, output: &Path) -> Result<()> {
     // The engine's default BC1 model (engine::api); only BC3 colour reads it.
     encoders_sys::init(Bc1Model::Ideal)?;

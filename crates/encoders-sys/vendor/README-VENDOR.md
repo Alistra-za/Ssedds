@@ -82,7 +82,8 @@ a strictly lower error: a 6-value search around the inner range (values other th
 refits of the best and of a fresh other-mode search, 6-value searches on trimmed inner ranges, and an exhaustive +-3
 around the best pair. `BC4_SDC_GUARD128` keeps the mode-loop block when the result would flip more texels across 128.
 The search equals `sdc_bench::bc4ref::search` byte for byte (`crates/bench/tests/bc4ref.rs`, including the bench corpus
-when `SDC_BENCH_ROOT` is set); its least-squares step is f64, so `build.rs` compiles with `/fp:precise`. Without the new
+when `SDC_BENCH_ROOT` is set); its least-squares step is f64, so `build.rs` compiles with `/fp:precise`; do not add `/arch:AVX2` (or enable FP contraction) without re-running
+`ffi_equals_reference_on_corpus`. `BC4_SDC_SEARCH` requires `BC4_USE_ALL_MODES`. Without the new
 bits `encode_bc4_hq` is unchanged. The shim sets `BC4_SDC_SEARCH` for BC4 and both BC5 halves, plus `BC4_SDC_GUARD128`
 for BC3 alpha (`encode_bc3_hq` passes its flags through). Measurements: docs/research/bc4-family.md.
 Before this patch (round-to-nearest only) `rgbcx.cpp` had SHA-256 `6f4d4664daa957a9d49f9fe881eab4a04c3d7c58a381280da0ecea1cf354c51c`
