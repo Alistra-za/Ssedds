@@ -28,6 +28,8 @@ Click a row to open its panel.
 
 The centre shows the helper's name, a link back to its set, and the same "fills to … / not used: …" line. Every control writes the helper file's own `[files]` entry in `sdc.toml` as one undo step, and the folder is planned again. With `sdc.toml` read-only, the controls are greyed out with the reason on hover.
 
+![The panel of a helper texture.](../img/gui/GUI-Helpers-RNM-and-Cubemaps/helper-panel.png)
+
 - **Role.** What the file is. The hint says *guessed from the name* or *set by you*.
   - **Not a helper** (first in the list) makes it an ordinary texture: it becomes a tile and is converted on its own (`helper.role = "none"`).
   - Any other role makes it a helper of that kind even if its name says otherwise (`helper.role = "<role>"`). Picking the guessed role also writes it, which makes it count as set by hand: an assigned helper replaces what the channel holds, a guessed one only fills an empty channel.
@@ -54,6 +56,8 @@ The set card's channel rows edit the same `helper.fills` lists ([Packed channel 
 
 A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and their masks) blend into the set's `_n` (or `_cnr`) before the mips are made ([RNM normal layers](Texture-Packing.md#rnm-normal-layers)). Layer files are never tiles: they are rows in the Helpers group, whose panel has the **Blends into** switch. The blend itself is set on the normal.
 
+![The panel of an RNM normal map.](../img/gui/GUI-Helpers-RNM-and-Cubemaps/rnm-panel.png)
+
 - Select the normal: its settings have an **RNM** section with a switch for the whole blend, one strength slider per layer, the layer order and, for `_bent`, the AO options (*AO blend* or *Like a detail*, *AO power*, *use AO*).
 - The normal (or `_cnr`) card has an outline in the accent colour (teal) while RNM is active (layers present and enabled). A slot the shader cannot use keeps its amber outline instead.
 - When the set has both an `_n` and a `_cnr`, each layer has a **target** switch (*Normal*, *CNR* or *Both*), written as `rnm.target` on the layer file's `[files]` entry. The layer's helper panel (**Blends into**) edits the same key.
@@ -64,6 +68,8 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 ## Cubemaps
 
 A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown) gets a **Cubemap** section in its settings panel and a cross in the preview. Everything the panel writes goes to `sdc.toml` as the matching `cubemap.*` key, so the GUI and the CLI make the same bytes. What each setting does is in [Cubemaps](Cubemaps.md#settings).
+
+![The panel of a six-face cubemap.](../img/gui/GUI-Helpers-RNM-and-Cubemaps/cube-panel.png)
 
 **In the Textures column.** The six faces are one item ([Textures column](GUI-Textures-Column.md)). The size estimate counts all six faces and their mips. A six-file set's settings are written to all six face entries in `sdc.toml`, so the faces keep matching.
 
@@ -96,3 +102,5 @@ A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown)
 - **Colour** is raw codes; the hint reads F0 = (code/255)^1.6. **Roughness** is optional (the *Set roughness* tick): ticked, it starts at 0.5; unticked, the alpha is 255. The alpha it will store is shown under the controls.
 - **Save…** opens the file dialog (Enter never writes), in `<textures folder>\cubemaps` when that folder exists, named `marker_e.dds`.
 - It never overwrites a file Tessalith did not write: it says it kept it and leaves the dialog open, so you can pick another name. The bytes equal what `sdc cubemap-marker` writes.
+
+![The marker cube dialog.](../img/gui/GUI-Helpers-RNM-and-Cubemaps/marker-dialog.png)

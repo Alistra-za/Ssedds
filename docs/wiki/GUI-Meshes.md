@@ -6,6 +6,8 @@ The GUI's view of the meshes a mod scan found: the mesh list, its filters, the s
 
 Switch to it with the **Meshes** tab in the header. The Meshes view draws the same one-row header as the Textures view (Open, Undo, Redo, MO2…, Mode, Preset, the view tabs, Export to, Save, Export) with the status line under it; only the column eyes are missing.
 
+![The Meshes view with a mesh selected.](../img/gui/GUI-Meshes/meshes-view.png)
+
 The scan source and the scan's progress are behind the **MO2…** header button; see [Choosing what to scan](Mod-Scanning.md#choosing-what-to-scan). The scan row's **Scan details** lists what the last scan found and any notes (missing mod folders, archive notes, meshes that failed to read).
 
 ## The mesh list
@@ -26,6 +28,8 @@ Select a mesh to see:
 - **Edit**: opens the mesh for editing ([Editing a NIF](GUI-NIF-Edit.md)).
 
 **Plugin file references…** opens a window listing files that plugins reference: *Missing* (referenced but not found, with **Show inert**) and *Unused*, with **Copy**. The button is there whenever a scan database is open. After a folder scan, which reads no plugins, the window says "Plugins were not read in the last scan".
+
+![The Plugin file references window.](../img/gui/GUI-Meshes/plugin-refs.png)
 
 ## Shapes
 

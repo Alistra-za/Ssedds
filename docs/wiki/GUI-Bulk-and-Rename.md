@@ -41,6 +41,10 @@ Right-clicking a selected tile or set keeps the selection; right-clicking anothe
 - For sets, *Select members of kind*, which turns the selection into those textures.
 - *Show in Explorer* (one texture selected): opens Explorer with the source file selected. It is greyed out, with the reason, when the file is gone.
 
+![The Copy settings checklist.](../img/gui/GUI-Bulk-and-Rename/copy-settings.png)
+
+![Select members of kind for two selected sets.](../img/gui/GUI-Bulk-and-Rename/members-of-kind.png)
+
 Every change of this kind is one undo step, and the folder is planned once. A read-only `sdc.toml` takes no bulk change. The Advanced drawer edits one texture at a time.
 
 ## Renaming
@@ -51,6 +55,10 @@ Right-click a texture or a set (or press **F2**) for the rename dialog. It has t
 |---|---|
 | **Inputs** | Reads files under corrected names, for a source saved with the wrong name (a normal map without `_n`, or a file in the wrong folder). The name is written to `sdc.toml` as `[inputs."<file>"] as = "<new path>"`. The file on disk is never renamed, and `sdc convert` reads the same alias. The tile shows *read as <name>*. The file keeps its own settings and set membership, whatever name it is read as. *Clear input alias* in the tile menu removes it. |
 | **Outputs** | Gives a set's outputs a new base name. Every output keeps its folder and its suffix (`steel.dds`, `steel_n.dds`, `steel_rmaos.dds`). On a TruePBR set (Community Shaders) this writes the set's PGPatcher **Rename**, so the JSON follows; on any other set it is saved in `sdc-project.toml`. Nothing on disk is renamed, and outputs already exported under the old name stay where they are. |
+
+![The rename dialog in Inputs mode.](../img/gui/GUI-Bulk-and-Rename/rename-inputs.png)
+
+![The rename dialog in Outputs mode.](../img/gui/GUI-Bulk-and-Rename/rename-outputs.png)
 
 The dialog changes only the base name (the part before `_n`, `_normal` and so on):
 

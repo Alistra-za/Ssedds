@@ -10,6 +10,8 @@ Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. T
 
 Press **Ctrl+K** for the command palette. Type part of an action's, a texture's or a set's name: the letters in order are enough. Names that start with what you typed come first, then names that contain it. Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, and Esc closes the palette.
 
+![The command palette.](../img/gui/GUI-Keyboard/command-palette.png)
+
 The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
 
 ### Keys and text fields
@@ -67,3 +69,5 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 | Problems list | Enter or Space | Accept the focused Problems row's suggestion and go to the next row |
 | Dialogs | Enter | Press the dialog's safe default |
 | Dialogs | Esc | Cancel the dialog |
+
+![The shortcut sheet.](../img/gui/GUI-Keyboard/shortcut-sheet.png)

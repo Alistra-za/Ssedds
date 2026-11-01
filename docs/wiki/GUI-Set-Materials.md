@@ -6,6 +6,8 @@ The material cards a set gets in place of, or beside, the PGPatcher settings: Ad
 
 A set whose diffuse is an **Advanced skin** (`skin_albedo`) gets an **Advanced skin (Community Shaders)** card instead of the TruePBR settings. It lists the set's skin textures (`_rfaos`, `_sk`, `_wet`) and the 20 per-material Community Shaders skin settings in five groups: Specular, Physical, Edge & detail, SSS and Fuzz. Wetness is not here: Community Shaders keeps it global.
 
+![The Advanced skin card of a body set.](../img/gui/GUI-Set-Materials/skin-card.png)
+
 - **Choosing the Advanced Skin shader** on a set's card (Community Shaders target) also makes the set's diffuse `skin_albedo`, so a packed `_rmaos` becomes `_rfaos`, in the same undo step. It does this when the diffuse's sub-type was inferred or is plain `diffuse`; a sub-type you picked yourself (say `pbr_albedo`) is kept. Choosing another shader, or Auto, puts back what was there before (inferred, or your `diffuse`), and the packed output returns to `_rmaos`, unless you have changed the diffuse's sub-type since or pinned its slot. Tessalith remembers which diffuses it changed in `sdc-project.toml` (`[project] auto_skin`).
 - **The shader decides the reading, unless the diffuse is pinned.** While a set's shader is Advanced Skin, its diffuse reads as `skin_albedo` whether its sub-type is inferred or written as plain `diffuse`; only another sub-type you picked yourself stays. A pinned Diffuse slot blocks this: the set reads and packs as it would without the shader (Tessalith writes nothing into a pinned slot), while a diffuse already written as `skin_albedo` keeps it. The packed output is `_rfaos` (*RFAOS (skin) (auto)* on the card) when the set can build one and the card's recipe does not say RMAOS; a set with only a metallic map, or with a pre-packed `_rmaos`, keeps it. A set saved with the Advanced Skin shader switches on open, with nothing written.
 - Each setting is **not set** (the Community Shaders default shows beside it, for example "default 0.7", and nothing is stored) or an explicit value on this set. **set** stores the default as a value you can then change; **↺** returns it to not set. Presets, defaults and rules never fill these, and sets do not inherit from each other.
@@ -18,6 +20,8 @@ A set whose diffuse is an **Advanced skin** (`skin_albedo`) gets an **Advanced s
 ## PBR Landscape
 
 Under the Community Shaders target, a PBR set (an `_rmaos`, a PBR albedo or the raw PBR maps) under `textures\landscape\`, with a `landscape` folder in its path, or with a Community Shaders texture-set block gets the **PBR Landscape** shader automatically; you can also pick it in the Shader list. It converts exactly like a PBR set; only the cards and the set's pill change. Its maps are the albedo (a landscape diffuse or plain diffuse also fills it), `_n`, and optionally `_rmaos` and `_p`. Any PBR set under `textures\landscape\` counts, trees, grass and mountains included; pick PBR in the Shader list for one that is not terrain.
+
+![The PBR Landscape card.](../img/gui/GUI-Set-Materials/landscape-card.png)
 
 The set editor shows a **PBR Landscape** card, open by default. It edits the same blocks that the [CS PBR records](#community-shaders-pbr-records) panel edits for other sets (a PBR Landscape set has no such panel).
 

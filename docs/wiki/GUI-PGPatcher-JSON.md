@@ -6,6 +6,8 @@ The TruePBR settings a PBR set has under `cs`, the PGPatcher JSON that Export wr
 
 A PBR set under `cs` has the settings PGPatcher reads in the set editor's **Material** tab, as framed groups in this order:
 
+![The PGPatcher settings of a set.](../img/gui/GUI-PGPatcher-JSON/pgp-material.png)
+
 | Group | Settings |
 |---|---|
 | Material | Specular level, Roughness scale. |
@@ -89,6 +91,8 @@ After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.jso
 ## The JSON editor
 
 Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** until a folder is chosen), the **TruePBR JSON editor…** button beside the Material tab, or the command palette. It shows the whole PGPatcher JSON as a tab of the centre column, with **Pop out**, **Dock** and **Close** as the preset creator has ([Presets](GUI-Presets.md#presets)): one entry per TruePBR set, then the delete sections. A popped-out editor is a window titled "TruePBR JSON — Tessalith". Advanced skin sets have no entry.
+
+![The JSON editor.](../img/gui/GUI-PGPatcher-JSON/json-editor.png)
 
 Its top field, **JSON name:**, is the JSON's file name (by default the folder name, shown as grey hint text; empty restores it), with the full path beside it. A change applies when you leave the field, as one undo step.
 

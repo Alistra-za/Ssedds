@@ -19,6 +19,8 @@ Review and Problems keep separate heights; see [Review](GUI-Review-and-Export.md
 
 The last 500 entries, newest first, with the time, the severity and the text. **Clear** empties the list. **Ctrl+M**, or a click on the **Messages** tab, opens this tab, or collapses the panel when it already shows Messages.
 
+![The Messages tab.](../img/gui/GUI-Bottom-Tabs/messages-tab.png)
+
 Every note that shows in the status line (the encoding-follows-type note, *Export cancelled*, *Picker result ignored*) is also logged here, as are the toasts. The log lives in memory only; it is gone when you close the window.
 
 ## Toasts
@@ -31,4 +33,4 @@ Routine results show as **toasts**: short notices at the bottom right that do no
 - Holding the pointer over a toast keeps it. A toast you let go of in its last 0.2 s may vanish a little early.
 - With **Reduce motion** on ([Advanced drawer](GUI-Advanced-Drawer.md#reduce-motion)) there is no rise, and the fades take about an eighth of a second.
 
-Anything that needs a decision (Replace or Cancel, an external change, an error that blocks) stays a dialog ([Dialogs](GUI-Main-Window.md#dialogs)).
+Anything that needs a decision (Replace or Cancel, an external change, an error that blocks) stays a dialog ([Dialogs](GUI-Dialogs.md#dialogs)).

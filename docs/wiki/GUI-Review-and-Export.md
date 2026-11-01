@@ -27,6 +27,8 @@ With [Also export as Vanilla and CM](GUI-Also-Export.md) on, Export always opens
 
 Press **Export**: a clean project exports at once, but when something is blocked, undecided or worth a second look, Review opens in the bottom panel instead of a dialog. It opens for any of these: a blocker, an undecided texture, an export pitfall, a half-size question ([Artist checks](GUI-Artist-Checks.md#half-size)), a PGPatcher JSON edited outside Tessalith, or NIF edits waiting to be exported (Review's **Export** is the only way they are written).
 
+![The Review tab.](../img/gui/GUI-Review-and-Export/review-tab.png)
+
 - Review does not lock the window. Keep editing and its lists update; Export from Review always uses the plan current at that moment.
 - Review never exports by itself, not even when you decide the last texture: its **Export** button is the only way out. Enter does nothing there.
 - When Export becomes available, the button (in Review and in the header) fades to the accent colour over 0.15 s, and the header's "Review n files" turns into "Export n files"; losing it snaps back at once.

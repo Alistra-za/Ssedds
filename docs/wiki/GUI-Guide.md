@@ -1,6 +1,6 @@
 # GUI guide
 
-A map of the GUI (`tessalith.exe`): the main window with its areas numbered, each linked to the page that explains it. New to the GUI? Start with [Main window](GUI-Main-Window.md).
+A map of the GUI (`tessalith.exe`): the main window with its areas numbered, each linked to the page that explains it.
 
 ## Main window
 
@@ -26,7 +26,8 @@ The line under the header is the [status line](GUI-Main-Window.md#status-line-an
 
 ## Pages
 
-- [Main window](GUI-Main-Window.md): opening a folder, the header, the columns, dialogs and words.
+- [Main window](GUI-Main-Window.md): opening a folder, the header, the columns and words.
+- [Dialogs](GUI-Dialogs.md): keys and buttons.
 - [GUI settings and recovery](GUI-Settings.md): where settings live, crashes.
 - [Keyboard and command palette](GUI-Keyboard.md): every shortcut.
 - [Textures column](GUI-Textures-Column.md): tiles, filters, sort and tile size.

@@ -22,3 +22,296 @@ id = "main-window"
 page = "GUI-Guide"
 scenario = "main_window"
 used_by = ["GUI-Guide.md"]
+
+[[shot]]
+id = "start-screen"
+page = "GUI-Main-Window"
+scenario = "start_screen"
+used_by = ["GUI-Main-Window.md"]
+
+[[shot]]
+id = "open-menu"
+page = "GUI-Main-Window"
+scenario = "open_menu"
+used_by = ["GUI-Main-Window.md"]
+
+[[shot]]
+id = "export-to-menu"
+page = "GUI-Main-Window"
+scenario = "export_to_menu"
+used_by = ["GUI-Main-Window.md"]
+
+[[shot]]
+id = "preset-combo"
+page = "GUI-Main-Window"
+scenario = "preset_combo"
+used_by = ["GUI-Main-Window.md"]
+
+[[shot]]
+id = "command-palette"
+page = "GUI-Keyboard"
+scenario = "command_palette"
+used_by = ["GUI-Keyboard.md"]
+
+[[shot]]
+id = "shortcut-sheet"
+page = "GUI-Keyboard"
+scenario = "shortcut_sheet"
+used_by = ["GUI-Keyboard.md"]
+
+[[shot]]
+id = "advanced-drawer"
+page = "GUI-Advanced-Drawer"
+scenario = "advanced_drawer"
+used_by = ["GUI-Advanced-Drawer.md"]
+
+[[shot]]
+id = "problems-tab"
+page = "GUI-Problems"
+scenario = "problems_tab"
+used_by = ["GUI-Problems.md"]
+
+[[shot]]
+id = "messages-tab"
+page = "GUI-Bottom-Tabs"
+scenario = "messages_tab"
+used_by = ["GUI-Bottom-Tabs.md"]
+
+[[shot]]
+id = "tile-menu"
+page = "GUI-Textures-Column"
+scenario = "tile_menu"
+used_by = ["GUI-Textures-Column.md"]
+
+[[shot]]
+id = "filter-popup"
+page = "GUI-Textures-Column"
+scenario = "filter_popup"
+used_by = ["GUI-Textures-Column.md"]
+
+[[shot]]
+id = "members-of-kind"
+page = "GUI-Bulk-and-Rename"
+scenario = "members_of_kind"
+used_by = ["GUI-Bulk-and-Rename.md"]
+
+[[shot]]
+id = "set-card-menu"
+page = "GUI-Sets-Column"
+scenario = "set_card_menu"
+used_by = ["GUI-Sets-Column.md"]
+
+[[shot]]
+id = "member-menu"
+page = "GUI-Sets-Column"
+scenario = "member_menu"
+used_by = ["GUI-Sets-Column.md"]
+
+[[shot]]
+id = "review-tab"
+page = "GUI-Review-and-Export"
+scenario = "review_tab"
+used_by = ["GUI-Review-and-Export.md"]
+
+["GUI-Review-and-Export.md"]
+
+[[shot]]
+id = "presets-tab"
+page = "GUI-Presets"
+scenario = "presets_tab"
+used_by = ["GUI-Presets.md"]
+
+[[shot]]
+id = "json-editor"
+page = "GUI-PGPatcher-JSON"
+scenario = "json_editor"
+used_by = ["GUI-PGPatcher-JSON.md"]
+
+[[shot]]
+id = "close-unsaved"
+page = "GUI-Dialogs"
+scenario = "close_unsaved"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "open-unsaved"
+page = "GUI-Dialogs"
+scenario = "open_unsaved"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "reload-unsaved"
+page = "GUI-Dialogs"
+scenario = "reload_unsaved"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "external-change"
+page = "GUI-Dialogs"
+scenario = "external_change"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "export-running"
+page = "GUI-Dialogs"
+scenario = "export_running"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "error-dialog"
+page = "GUI-Dialogs"
+scenario = "error_dialog"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "reset-all"
+page = "GUI-Dialogs"
+scenario = "reset_all"
+used_by = ["GUI-Dialogs.md"]
+
+[[shot]]
+id = "copy-settings"
+page = "GUI-Bulk-and-Rename"
+scenario = "copy_settings"
+used_by = ["GUI-Bulk-and-Rename.md"]
+
+[[shot]]
+id = "rename-inputs"
+page = "GUI-Bulk-and-Rename"
+scenario = "rename_inputs"
+used_by = ["GUI-Bulk-and-Rename.md"]
+
+[[shot]]
+id = "rename-outputs"
+page = "GUI-Bulk-and-Rename"
+scenario = "rename_outputs"
+used_by = ["GUI-Bulk-and-Rename.md"]
+
+[[shot]]
+id = "generate-dialog"
+page = "GUI-Generate-From-Normal"
+scenario = "generate_dialog"
+used_by = ["GUI-Generate-From-Normal.md"]
+
+[[shot]]
+id = "marker-dialog"
+page = "GUI-Helpers-RNM-and-Cubemaps"
+scenario = "marker_dialog"
+used_by = ["GUI-Helpers-RNM-and-Cubemaps.md"]
+
+[[shot]]
+id = "set-editor"
+page = "GUI-Set-Editor"
+scenario = "set_editor"
+used_by = ["GUI-Set-Editor.md"]
+
+[[shot]]
+id = "assign-menu"
+page = "GUI-Set-Editor"
+scenario = "assign_menu"
+used_by = ["GUI-Set-Editor.md"]
+
+[[shot]]
+id = "slot-menu"
+page = "GUI-Sets-Column"
+scenario = "slot_menu"
+used_by = ["GUI-Sets-Column.md"]
+
+[[shot]]
+id = "pgp-material"
+page = "GUI-PGPatcher-JSON"
+scenario = "pgp_material"
+used_by = ["GUI-PGPatcher-JSON.md"]
+
+[[shot]]
+id = "texture-panel"
+page = "GUI-Texture-Panel"
+scenario = "texture_panel"
+used_by = ["GUI-Texture-Panel.md"]
+
+[[shot]]
+id = "rnm-panel"
+page = "GUI-Helpers-RNM-and-Cubemaps"
+scenario = "rnm_panel"
+used_by = ["GUI-Helpers-RNM-and-Cubemaps.md"]
+
+[[shot]]
+id = "helper-panel"
+page = "GUI-Helpers-RNM-and-Cubemaps"
+scenario = "helper_panel"
+used_by = ["GUI-Helpers-RNM-and-Cubemaps.md"]
+
+[[shot]]
+id = "cube-panel"
+page = "GUI-Helpers-RNM-and-Cubemaps"
+scenario = "cube_panel"
+used_by = ["GUI-Helpers-RNM-and-Cubemaps.md"]
+
+[[shot]]
+id = "preview-encoded"
+page = "GUI-Preview"
+scenario = "preview_encoded"
+used_by = ["GUI-Preview.md"]
+
+[[shot]]
+id = "preview-normal"
+page = "GUI-Preview"
+scenario = "preview_normal"
+used_by = ["GUI-Preview.md"]
+
+[[shot]]
+id = "meshes-view"
+page = "GUI-Meshes"
+scenario = "meshes_view"
+used_by = ["GUI-Meshes.md"]
+
+[[shot]]
+id = "plugin-refs"
+page = "GUI-Meshes"
+scenario = "plugin_refs"
+used_by = ["GUI-Meshes.md"]
+
+[[shot]]
+id = "mo2-popup"
+page = "GUI-Main-Window"
+scenario = "mo2_popup"
+used_by = ["GUI-Main-Window.md"]
+
+[[shot]]
+id = "skin-card"
+page = "GUI-Set-Materials"
+scenario = "skin_card"
+used_by = ["GUI-Set-Materials.md"]
+
+[[shot]]
+id = "landscape-card"
+page = "GUI-Set-Materials"
+scenario = "landscape_card"
+used_by = ["GUI-Set-Materials.md"]
+
+["GUI-PGPatcher-JSON.md"]
+
+[[exempt]]
+what = "3D set preview content"
+page = "GUI-Set-Preview-3D"
+reason = "needs Community Shaders' shader files (SDC_CS_SHADERS) and a D3D11 device"
+
+[[exempt]]
+what = "Complex grass and PBR grass sets"
+page = "GUI-Set-Materials"
+reason = "need GRAS records from a real plugin scan"
+
+[[exempt]]
+what = "Files tab during an export"
+page = "GUI-Review-and-Export"
+reason = "its rows hold timings and the export folder, so no two renders match; a shot would also write an export"
+
+[[exempt]]
+what = "Toasts"
+page = "GUI-Bottom-Tabs"
+reason = "a toast rises and fades on a clock, so no two renders match"
+
+[[exempt]]
+what = "Editing a NIF (edit panel, shapes, animation)"
+page = "GUI-NIF-Edit"
+reason = "the edit panel opens only on a mesh of a scanned MO2 instance, and its 3D view needs a D3D11 device"

@@ -6,6 +6,8 @@ The bottom panel's **Problems** tab: one row per thing that needs your attention
 
 Rows come blockers first, then undecided textures, then warnings, then checks and info rows. A coloured dot starts each row: red blocks the export, orange is a warning or a decision to make, grey is a check or an info row.
 
+![The Problems tab.](../img/gui/GUI-Problems/problems-tab.png)
+
 Then come where it is (a texture, set or file you can click; "Project" for a problem that belongs to no file) and a sentence that names the action ("This alpha channel carries data the format would drop — choose what it means"). A row never prints a code: hover the sentence for the engine's own message and the code (`LOSS-ALPHA-DATA`), which is also what Troubleshooting and the `--allow` lists use. A problem with no sentence of its own shows the engine's message.
 
 A row is one line and does not wrap. The fix buttons sit at the panel's right edge and stay visible, and a sentence too long for the room left ends in an ellipsis.

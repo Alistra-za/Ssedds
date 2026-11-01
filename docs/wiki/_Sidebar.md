@@ -18,6 +18,7 @@ GUI
 
 - [Main window](GUI-Main-Window.md)
 - [GUI settings](GUI-Settings.md)
+- [Dialogs](GUI-Dialogs.md)
 - [Textures column](GUI-Textures-Column.md)
 - [Sets column](GUI-Sets-Column.md)
 - [Bulk editing and renaming](GUI-Bulk-and-Rename.md)

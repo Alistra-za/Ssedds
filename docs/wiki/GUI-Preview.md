@@ -6,6 +6,10 @@ The expanded view of one texture: its source beside the encode Export would writ
 
 Double-click a tile (or a set member), or select it and press **Enter** or **Space**, to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport collapses it again. The preview keys are listed in [Keyboard](GUI-Keyboard.md#keyboard): **[** and **]** step through the textures in the Textures column's order, **1** to **6** pick the channel buttons, **PageUp** and **PageDown** step through the mips, **L** toggles the lens and **T** the 3×3 tiling.
 
+![The preview of an encoded texture.](../img/gui/GUI-Preview/preview-encoded.png)
+
+![The preview of a normal map.](../img/gui/GUI-Preview/preview-normal.png)
+
 - **Live encode** is off by default. Encoding happens when you press **Encode now**. Switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
 - Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
 - The preview encodes only mips whose larger side is at most the **preview size limit**: 4096 by default, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in the [Advanced drawer](GUI-Advanced-Drawer.md#advanced-drawer). A GPU that cannot hold a texture that large lowers the limit, and the preview says so.

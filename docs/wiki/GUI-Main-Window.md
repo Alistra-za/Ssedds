@@ -14,6 +14,8 @@ The GUI reads the folder recursively, analyses every image and plans the convers
 
 With no folder open the window shows one large **Open folder** button in the middle, under the hint "Open a folder of source textures to begin." (after a cancelled open it reads "Opening cancelled"). Under the button is the **Recent** list; click a folder to open it. "Or drag a folder onto the window." is the last line.
 
+![The start screen with two recent folders.](../img/gui/GUI-Main-Window/start-screen.png)
+
 The Textures and Sets columns and the Advanced drawer are not drawn until a folder is open (the bottom strip is), and the column eyes in the header are hidden. The widths you dragged are kept and come back with the first folder. When a folder opens, the Textures and Sets columns and the centre fade in over a quarter of a second; they take clicks from the first frame.
 
 ### While a folder opens
@@ -55,9 +57,17 @@ The header is one row from about 1340 points of window width; in a narrower wind
 | **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Left of Export, as tall as the row. |
 | **Export** | Convert the folder. See [Export](#export). |
 
+![The Open menu.](../img/gui/GUI-Main-Window/open-menu.png)
+
+![The MO2… popup.](../img/gui/GUI-Main-Window/mo2-popup.png)
+
+![The Preset list, open.](../img/gui/GUI-Main-Window/preset-combo.png)
+
 ### Export to
 
 **Export to ▾** shows the export folder chosen for this project. A long path is cut in the middle so its tail stays visible; hover gives the whole path.
+
+![The Export to menu.](../img/gui/GUI-Main-Window/export-to-menu.png)
 
 It is not drawn until a folder is chosen for the project: a project never takes over the folder you picked for another mod. The same menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one.
 
@@ -94,45 +104,7 @@ Each column collapses to a thin strip with the **◀** on its heading (hover *Co
 
 ## Dialogs
 
-### Dialog keys
-
-**Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings** and **Fill from names** ignore a click outside, so a stray click cannot lose what you typed or chose.
-
-**Enter** takes the safe default and never saves, deletes or exports:
-- Cancel in the close and open unsaved-changes dialogs (back to the app; **Save** and **Don't save** need a click);
-- Cancel in the reload, changed-on-disk and Reset all dialogs;
-- **Keep exporting** in the export-running dialog;
-- OK in an error or a refusal;
-- Apply in the rename dialog and Fill in Fill from names.
-
-In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. In the rename dialog Enter applies only while no widget has keyboard focus (typing in Find and pressing Enter still applies); with a row's tick or the Case list focused it does nothing. Copy settings, the Replace and set-choice questions, the discard question in the preset creator and Slot commands have no Enter default. Enter or Space on a focused red-outlined button (Don't save, Discard and reload, Overwrite with my changes, Reset, Delete, Stop the export) does nothing: those need a click. Esc with the rename dialog's Case list open closes the list first; a second Esc closes the dialog. Review's **Export** is a click only: Enter never exports.
-
-### Dialog style
-
-Every dialog is one frame: a title, the question, and a footer of buttons on the right. The footer reads left to right: plain buttons, then the destructive one, then the Enter default.
-- The Enter default is drawn filled in the accent (teal) colour, so you can see what Enter will press. A dialog where Enter does nothing has no filled button.
-- A destructive button (Don't save, Discard, Delete, Reset, Overwrite, Stop the export) has a red outline and is never the default.
-- Each dialog is as wide as its cap: 420 points, Slot commands 640, the rename dialog 860. A button row too long for that width wraps onto a second row of the same height; the dialog never grows past that.
-- A long file name is cut in the middle in the button labels (**Replace {name}**), and the question above them gives the whole name.
-
-The buttons say what they do:
-
-| Dialog | Buttons |
-|---|---|
-| Unsaved changes (close the window, open another folder) | Save, **Don't save**, Cancel (Enter) |
-| Unsaved changes (Reload) | **Discard and reload**, Cancel (Enter) |
-| An export is running | **Stop the export and close** (or **Stop the export and open the folder**), **Keep exporting** (Enter) |
-| {file} changed on disk | **Reload from disk**, **Overwrite with my changes**, Cancel (Enter) |
-| Error, and "Can't do that" | OK (Enter) |
-| Reset all settings of {n} textures | **Reset**, Cancel (Enter) |
-| Replace? (a drop onto a filled slot) | **Replace {name}**, Cancel; no Enter default |
-| {name} is in {set} (a drop from another set) | **Move it here**, **Share (borrow its finished output)**, **Duplicate the source for this set** in the body; Cancel in the footer |
-| Discard changes? (preset creator) | Cancel, **Discard**; no Enter default |
-| Rename {id} (a set) | Cancel, OK; no Enter default (the name field's own Enter renames) |
-| Rename {n} inputs, Rename outputs of {n} sets | Cancel, **Apply** (Enter, while it is enabled) |
-| Fill from names | Cancel, **Fill** (Enter) |
-| Copy settings | Cancel, Apply; no Enter default |
-| Slot commands | Close; no Enter default |
+Keys, button layout and every dialog's buttons are on [Dialogs](GUI-Dialogs.md).
 
 ## Words
 

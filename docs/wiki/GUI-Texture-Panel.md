@@ -6,6 +6,8 @@ The centre column with one texture selected: its settings, the questions it stil
 
 The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, Compression. Each value shows where it came from: the preset, the config, the analysis, or your `[files]` entry (for example "from sdc.toml", "suggested", or "from the meshes that use this texture"). Selecting a set shows the set editor instead.
 
+![The settings of a fern texture.](../img/gui/GUI-Texture-Panel/texture-panel.png)
+
 | Row | Choices |
 |---|---|
 | Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered, plus the texture's current sub-type. The list opens under the field with a search box and the suggested type on top, the same picker as the Problems tab's **Set type…**. |
@@ -118,7 +120,7 @@ The GUI writes only `target`, `preset`, the `[files.*]` tables, `[inputs.*]` ali
 
 Per-texture `[files]` entries sit above preset and config rules and analysis, and below any `--set` on the command line, so `sdc convert <folder>` honours them ([Project config](Project-Config.md#files)).
 
-Unsaved edits put a dot in the window title until you save with **Save** or **Ctrl+S**; Export saves first. If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it (**Reload from disk**) or overwrite it (**Overwrite with my changes**). Without unsaved edits, the GUI reloads it when the window regains focus or when you save or export. The other unsaved-changes dialogs are listed under [Dialogs](GUI-Main-Window.md#dialogs).
+Unsaved edits put a dot in the window title until you save with **Save** or **Ctrl+S**; Export saves first. If `sdc.toml` changes on disk while you have unsaved edits, saving asks whether to reload it (**Reload from disk**) or overwrite it (**Overwrite with my changes**). Without unsaved edits, the GUI reloads it when the window regains focus or when you save or export. The other unsaved-changes dialogs are listed under [Dialogs](GUI-Dialogs.md#dialogs).
 
 **Encoding follows type.** When a texture's sub-type changes (a set shader, a slot command, a drag, or a sub-type edit), a format and tag you set on it that the new type does not allow are reset, so the new type's default applies. An info row in Problems says which, with **Undo this change**. Settings that are still valid are kept, and a texture in a pinned slot is left alone and named in that row. One undo restores both the change and the reset.
 

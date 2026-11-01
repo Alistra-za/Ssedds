@@ -6,6 +6,8 @@ The dialog that turns a set's normal map into a height map, an AO map or a curva
 
 **Generate from normal map…** integrates the set's normal back into a height map and writes it as a source file next to the normal. Nothing changes until you click **Generate**; Enter never generates.
 
+![The Generate from normal map dialog.](../img/gui/GUI-Generate-From-Normal/generate-dialog.png)
+
 - **Where:** the Height row's right-click menu (an empty row's **Assign…** opens the same menu), and the set card's menu. A small **Generate…** button also sits directly under **Assign…** on an empty Height or RMAOS row, and under the format combo on a filled one; it reads **Regenerate…** when a generated file already fills the slot. It is hidden when the slot's item is a packed texture. The entry is greyed out, with the reason, when the set cannot use a height: vanilla multilayer, vanilla landscape, a shader that reads no height, no normal map, a normal whose sides are not powers of two, or a real height already there.
 - **The dialog:** Size (256, 512 or 1024; up to 2048 on a `cs` PBR set whose albedo is larger; never larger than the normal; above 512 a warning about parallax cost; the `_m` alpha takes the `_m`'s size), Tiling (Auto, Wrap, Mirror), Relief balance and Strength, with a preview of the height and the fit. It shows the path it will write. On a complex-material set (vanilla target) **Use as** offers *Complex material `_m` alpha*.
 - **The preview** in the dialog: the wheel zooms 1 to 16 times around the pointer, a drag pans, and a double-click fits. All tiles share one crop.

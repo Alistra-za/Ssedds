@@ -26,6 +26,8 @@ After the pills comes **Filter ▾**. It opens a popup with five combos, and sta
 
 The button reads **Filter (k) ▾** while k of the four filter combos are set. Sort is not a filter and is not counted.
 
+![The Filter popup.](../img/gui/GUI-Textures-Column/filter-popup.png)
+
 All filters and the search box combine: a texture shows only if it passes every one.
 
 When the filters hide every texture, the column says "No textures match the filters (N hidden)" and offers **Clear filters**. It resets the pills, the combos and the search, and keeps the sort and the tile size. A multi-selection keeps the textures a filter hides, and the heading says how many ("4 hidden by filter").
@@ -55,3 +57,5 @@ The filters, the sort and the tile size are remembered in `gui.toml` with the wi
 ## Selecting
 
 Click selects one tile. Ctrl+click, Shift+click and Ctrl+A select several; see [Bulk editing](GUI-Bulk-and-Rename.md#selecting-several).
+
+![A texture tile's right-click menu.](../img/gui/GUI-Textures-Column/tile-menu.png)

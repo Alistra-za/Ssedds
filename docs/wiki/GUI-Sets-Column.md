@@ -68,6 +68,8 @@ The pills and the shader are remembered in `gui.toml` with the window layout. Th
   - **Delete set** asks nothing. It is one undo step, and a toast "Deleted set name (N members)" has an **Undo** button, which works while nothing else was done since (otherwise use Undo in the header). The textures stay; only the set is removed. Only a set you created can be deleted: an automatic set would regroup from the file names at once. A set whose files are all gone still shows, as missing, so you can delete its entry.
 - **Fill from names…** in a set's menu finds the textures in the set's folder that are named like its diffuse (or the set) plus a suffix the engine knows (`_n`, `_p`, `_g`, `_rmaos`, `_cnr`, `_s`, …, and exporter tails such as `_normal`) and are not in the set yet. A dialog lists each file with the slot it would fill, all ticked. A filled slot says "replaces <file>"; a pinned slot says "locked" and cannot be ticked. **Fill** (or **Enter**) moves the ticked files in as one undo step. **Esc** or **Cancel** closes it; a click outside does nothing.
 
+![A set card's right-click menu.](../img/gui/GUI-Sets-Column/set-card-menu.png)
+
 ### Move to
 
 **Move to…** in the set's right-click menu opens a dialog with a box ("Number or name"):
@@ -96,6 +98,10 @@ Right-clicking a slot row in the set editor, or a member chip on a card, opens a
   - The file is still exported, and Tessalith stops writing its own path for that slot. A slot command (`slotN`) on the same slot still wins in PGPatcher, so a warning says "slotN overrides the lock (PGPatcher applies slotN last)".
   - The cubemap is not offered: PGPatcher's `lock_cubemap` clears that slot (the Texture locks group calls it *Clear cubemap*).
 - *Show in Explorer*: the source file of the texture that fills the slot, selected in Explorer. A set pill's own menu has a *Show in Explorer* submenu that lists its members.
+
+![The menu of a member chip on a set card.](../img/gui/GUI-Sets-Column/member-menu.png)
+
+![The menu of the RMAOS row in the set editor.](../img/gui/GUI-Sets-Column/slot-menu.png)
 
 ## Where set edits are saved
 

@@ -6,6 +6,8 @@ The drawer at the right edge of the Textures view: settings that are not per tex
 
 Click the strip at the right edge to open it. With a set selected in 2D, the same sections are the set editor's last tab, **Advanced**, and the open or closed choice is shared by the tab and the drawer. In 3D, with a texture selected, or with several sets selected, the drawer is at the right edge.
 
+![The Advanced drawer with the preset inspector.](../img/gui/GUI-Advanced-Drawer/advanced-drawer.png)
+
 | Section | Contents |
 |---|---|
 | Preset inspector | The batch preset, the user presets that loaded (with their files), and how the selected texture's settings were resolved. *Show only differences* hides values equal to the base preset. Built-in presets are read-only. |

@@ -6,6 +6,8 @@ What the centre column shows with one set selected: its slot rows, packed channe
 
 Select a set to edit it. The heading row has the input name box ([Input name box](GUI-Bulk-and-Rename.md#input-name-box)), the **Match** box on a TruePBR set, and the **2D | 3D** switch ([The 3D preview](GUI-Set-Preview-3D.md#a-set-in-3d)).
 
+![The set editor.](../img/gui/GUI-Set-Editor/set-editor.png)
+
 In 2D the editor is one column that scrolls as a whole, like a texture's settings:
 
 1. the input name box at the top;
@@ -35,6 +37,8 @@ A row has these columns:
 | *Format* | The format dropdown (format and tag together, one undo step). An empty slot shows **Assign…** here, which opens the slot menu, headed by the slot's name ("Emissive / Skin (slot 3)"). A packed output's recipe and fills sit under the dropdown. |
 | *Flags* | Small toggles, each with a hover: **Match on this** (Diffuse, Normal: PGPatcher applies the entry to meshes with this exact texture in this slot; see [Matching](GUI-PGPatcher-JSON.md#pgpatcher-settings)) and **Opaque** (Diffuse: strips alpha, so the diffuse is fully opaque). |
 | *Status* | A dot: green ready, amber a warning or decision, red blocks. Its hover gives the reason, such as "borrowed from X", "not used by the shader" or "RNM, 2 layers". |
+
+![The menu Assign… opens on an empty slot.](../img/gui/GUI-Set-Editor/assign-menu.png)
 
 The File column takes the width the other columns leave, so the rows fill the centre. While a set is selected, the Textures and Sets columns give the centre at least 540 px, down to their own minimums, so the rows fit without clipping from a 1024 px window up.
 
