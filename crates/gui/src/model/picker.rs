@@ -265,6 +265,21 @@ impl AppModel {
         self.picker.request(ctx, purpose, scope, spec)
     }
 
+    /// The Open folder dialog: it starts in the parent of the most recent project, when that parent still exists
+    /// (Note F?10), so the next mod is usually one click away.
+    pub fn open_folder_spec(&self) -> PickerSpec {
+        match self
+            .settings
+            .recent
+            .first()
+            .and_then(|p| p.parent())
+            .filter(|p| p.is_dir())
+        {
+            Some(parent) => PickerSpec::folder().start_in(parent.to_path_buf()),
+            None => PickerSpec::folder(),
+        }
+    }
+
     /// Open the export folder picker, starting in the app-wide last pick (`gui.toml`) when there is one (Note FB1:
     /// it is no longer the project's choice, only where the dialog opens).
     pub fn pick_export_folder(&self, ctx: &egui::Context) -> bool {

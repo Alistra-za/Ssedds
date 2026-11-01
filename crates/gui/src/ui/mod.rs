@@ -41,7 +41,7 @@ pub mod thumbs;
 pub mod type_picker;
 pub mod viewport3d;
 
-use crate::model::picker::{PickerPurpose, PickerSpec};
+use crate::model::picker::PickerPurpose;
 use crate::model::{AppModel, CentreTab, Selection};
 use eframe::egui;
 use std::cell::RefCell;
@@ -349,7 +349,11 @@ fn start_screen(ui: &mut egui::Ui, model: &mut AppModel) {
         ui.weak("Or drag a folder onto the window.");
     });
     if pick {
-        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
+        model.pick(
+            ui.ctx(),
+            PickerPurpose::OpenFolder,
+            model.open_folder_spec(),
+        );
     }
     if let Some(p) = open {
         model.request_open(p);

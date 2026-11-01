@@ -1,7 +1,7 @@
 //! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
 //! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
 use super::meshes::UndoTarget;
-use crate::model::picker::{self, PickerPurpose, PickerSpec};
+use crate::model::picker::{self, PickerPurpose};
 use crate::model::{also, AppModel};
 use eframe::egui;
 use engine::config::Target;
@@ -513,7 +513,11 @@ fn open_menu(ui: &mut egui::Ui, model: &mut AppModel) {
         }
     });
     if pick {
-        model.pick(ui.ctx(), PickerPurpose::OpenFolder, PickerSpec::folder());
+        model.pick(
+            ui.ctx(),
+            PickerPurpose::OpenFolder,
+            model.open_folder_spec(),
+        );
     }
     if let Some(p) = open {
         model.request_open(p);

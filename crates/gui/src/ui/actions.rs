@@ -1,7 +1,7 @@
 //! Items 5 and 19: one action list. The F1 shortcut sheet, the Ctrl+K command palette and the key handling all read
 //! [`actions`]; a menu that shows a shortcut takes its text from here ([`keys_text`]). DECISIONS AG22-AG26.
 use crate::model::nav::{Palette, Pick};
-use crate::model::picker::{PickerPurpose, PickerSpec};
+use crate::model::picker::PickerPurpose;
 use crate::model::AppModel;
 use eframe::egui::{self, Key, Modifiers};
 
@@ -237,7 +237,7 @@ pub static ACTIONS: &[Action] = &[
     }),
     when(
         a("open", "Open folder…", Global, &[], |m, ctx| {
-            m.pick(ctx, PickerPurpose::OpenFolder, PickerSpec::folder());
+            m.pick(ctx, PickerPurpose::OpenFolder, m.open_folder_spec());
         }),
         |m| !m.picker.busy(),
     ),
