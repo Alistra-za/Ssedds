@@ -1553,6 +1553,9 @@ enum SpMsg {
 
 pub const MATO_NO_RECORD: &str = "No MATO record in the load order; showing default coverage";
 pub const MATO_PBR_ONLY: &str = "The JSON values apply to PBR shapes only.";
+/// The toggle's label and hover (Note GG); the toggle shows only for a set with a `cs_mato` block.
+pub const MATO_TOGGLE: &str = "Material object layer";
+pub const MATO_HOVER: &str = "Shows the snow/ash layer the game draws on statics that use this material object. Applies to PBR shapes; skinned shapes are not shown.";
 
 pub fn mato_missing_text(path: &str) -> String {
     format!("{path} is not in the load order; showing a plain fallback")
@@ -2708,6 +2711,11 @@ impl SetPreview {
             .filter(|_| self.mato_layer)
             .map(|b| layer_from_block(&b.values, self.mato_data.as_ref()));
         self.v3.set_projected_layer(want);
+    }
+
+    /// The followed set has a `cs_mato` block (as of the last sync): the toggle shows only then.
+    pub fn mato_available(&self) -> bool {
+        self.mato_block.is_some()
     }
 
     /// The grey lines under the toggle (design D3, D4, D6); none while the layer is off or the set has no block.

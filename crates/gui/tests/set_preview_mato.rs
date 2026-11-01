@@ -674,3 +674,119 @@ fn out_of_range_values_fall_back() {
     let g = l.glint.unwrap();
     assert_eq!((g.screen_space_scale, g.log_microfacet_density), (3.0, 0.0));
 }
+
+// ---- Task 4: the toggle and its grey lines in the panel (kittest; the 3D view never idles, so run_steps) ----
+
+use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::Harness;
+
+type H = Harness<'static, (AppModel, SetPreview)>;
+
+fn panel(m: AppModel) -> H {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(520.0, 1000.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (AppModel, SetPreview)| sdc_gui::ui::set_preview::draw(ui, m, s),
+            (m, SetPreview::new(None, None, None, DEFAULT_CAP)),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+/// Draw and poll like the app does until nothing is in flight.
+fn settle(h: &mut H) {
+    let t = Instant::now();
+    loop {
+        h.run_steps(4);
+        {
+            let (m, s) = h.state_mut();
+            s.input = true;
+            s.poll(&*m);
+        }
+        if !h.state().1.busy() {
+            h.run_steps(4);
+            return;
+        }
+        assert!(t.elapsed() < Duration::from_secs(90), "did not settle");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn rock_panel(dir: &Path) -> H {
+    let mut m = support::pbr_opened_plain(dir);
+    let key = rock_key(&m);
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    panel(m)
+}
+
+fn toggle(h: &H) -> egui_kittest::Node<'_> {
+    h.get_by_role_and_label(
+        eframe::egui::accesskit::Role::CheckBox,
+        "Material object layer",
+    )
+}
+
+/// The toggle is a checkbox with the spec's name, and only a set with a `cs_mato` block has it.
+#[test]
+fn toggle_only_with_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut h = rock_panel(dir.path());
+    settle(&mut h);
+    assert!(h.query_by_label("Material object layer").is_none());
+    h.state_mut().0.add_cs_block(ROCK, Kind::Mato);
+    settle(&mut h);
+    assert_eq!(
+        toggle(&h).accesskit_node().toggled(),
+        Some(eframe::egui::accesskit::Toggled::False),
+        "off by default"
+    );
+    h.state_mut().0.remove_cs_block(ROCK, Kind::Mato);
+    settle(&mut h);
+    assert!(h.query_by_label("Material object layer").is_none());
+}
+
+/// A click turns the layer on; with no scan there is no record, so the grey line says so, in the spec's words.
+#[test]
+fn toggle_turns_layer_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(dir.path());
+    m.add_cs_block(ROCK, Kind::Mato);
+    let key = rock_key(&m);
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    let mut h = panel(m);
+    settle(&mut h);
+    assert!(h
+        .query_by_label("No MATO record in the load order; showing default coverage")
+        .is_none());
+    toggle(&h).click();
+    settle(&mut h);
+    assert!(h.state().1.mato_layer);
+    assert_eq!(
+        toggle(&h).accesskit_node().toggled(),
+        Some(eframe::egui::accesskit::Toggled::True)
+    );
+    h.get_by_label("No MATO record in the load order; showing default coverage");
+    toggle(&h).click();
+    settle(&mut h);
+    assert!(!h.state().1.mato_layer);
+    assert!(h
+        .query_by_label("No MATO record in the load order; showing default coverage")
+        .is_none());
+}
+
+#[test]
+fn toggle_hover_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(dir.path());
+    m.add_cs_block(ROCK, Kind::Mato);
+    let key = rock_key(&m);
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    let mut h = panel(m);
+    settle(&mut h);
+    toggle(&h).hover();
+    h.run_steps(12);
+    h.get_by_label("Shows the snow/ash layer the game draws on statics that use this material object. Applies to PBR shapes; skinned shapes are not shown.");
+}
