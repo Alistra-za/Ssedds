@@ -11218,6 +11218,30 @@ fn quick_export_never_overwrites_a_foreign_file() {
     );
 }
 
+/// Final review Minor 2: with a foreign file at the path the enabled item's hover says the click opens Review.
+#[test]
+fn quick_export_hover_says_a_foreign_file_opens_review() {
+    let (_t, _d, mut h) = review_app();
+    let (_path, out_path, _out) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    assert!(h.state().meshes.quick_export_asks());
+    right_click_3d(&mut h);
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    h.get_by_label(
+        "The file on disk was not written by Tessalith: opens Review to answer Keep or Overwrite",
+    );
+    assert!(h
+        .query_by_label("Write this NIF to the export folder now, without Review")
+        .is_none());
+}
+
 /// Q4: with no export folder the item is off with the reason, and `Choose export folder…` asks for the picker.
 #[test]
 fn quick_export_is_off_without_a_folder_and_offers_the_picker() {

@@ -2340,6 +2340,14 @@ impl MeshesModel {
         }
     }
 
+    /// Final review Minor 2: the click on `Export this NIF` opens Review instead of writing, because the file at the
+    /// export path is foreign and has no answer yet.
+    pub fn quick_export_asks(&self) -> bool {
+        self.nif_review_rows()
+            .iter()
+            .any(|r| r.foreign.is_some() && r.answer.is_none())
+    }
+
     /// Note GH9 (Q3, Q5): writes the open edit's NIF alone, as Review's Export would. A file at the export path that
     /// Tessalith did not write, with no Review answer that still matches it, is never overwritten: the click opens
     /// Review on that row instead. The result waits in `quick_export_result` for the app.
@@ -2347,11 +2355,7 @@ impl MeshesModel {
         if self.quick_export_block().is_some() {
             return;
         }
-        if self
-            .nif_review_rows()
-            .iter()
-            .any(|r| r.foreign.is_some() && r.answer.is_none())
-        {
+        if self.quick_export_asks() {
             self.open_review_request = true;
             return;
         }

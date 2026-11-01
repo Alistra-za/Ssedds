@@ -916,6 +916,9 @@ fn quick_export_menu(ui: &mut egui::Ui, m: &mut MeshesModel) {
     let r = ui.add_enabled(block.is_none(), egui::Button::new("Export this NIF"));
     let r = match &block {
         Some(why) => r.on_disabled_hover_text(why),
+        None if m.quick_export_asks() => r.on_hover_text(
+            "The file on disk was not written by Tessalith: opens Review to answer Keep or Overwrite",
+        ),
         None => r.on_hover_text("Write this NIF to the export folder now, without Review"),
     };
     if r.clicked() {
