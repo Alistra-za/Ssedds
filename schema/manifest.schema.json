@@ -488,7 +488,7 @@
           ]
         },
         "rgbcx_patch": {
-          "description": "`<patch name>@sha256:<hash of the patched rgbcx.h>`; `None` before the patch, so BC3/BC4/BC5 re-encode.",
+          "description": "`<patch name>@sha256:<hash of the patched rgbcx.h and rgbcx.cpp>`; `None` before the patch, so BC3/BC4/BC5 re-encode.",
           "type": [
             "string",
             "null"
