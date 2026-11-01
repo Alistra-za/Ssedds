@@ -12,7 +12,7 @@ use render3d::ShapeStatus;
 
 const AMBER: egui::Color32 = egui::Color32::from_rgb(230, 160, 30);
 const RED: egui::Color32 = egui::Color32::from_rgb(210, 60, 60);
-/// A missing texture's colour, as the frame shows it (AG76).
+/// A missing texture's colour, as the frame shows it (AU3).
 const MAGENTA: egui::Color32 = egui::Color32::from_rgb(255, 0, 255);
 /// The tallest the problem list above the frame gets; it scrolls past that.
 const PROBLEMS_MAX: f32 = 100.0;

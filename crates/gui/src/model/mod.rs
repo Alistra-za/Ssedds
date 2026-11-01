@@ -2267,7 +2267,7 @@ impl AppModel {
 
     /// Saves `sdc-project.toml` after a hash was recorded, unless it already held unsaved edits (set edits and
     /// Undo stay live while an export runs; Note BD2): those are the user's to save or discard, so the record waits
-    /// for the next Save. A stale on-disk record only makes the next export ask before overwriting.
+    /// for the next Save. The hash is also recorded at write time, so the next export does not ask (Note FC11).
     fn save_hash_record(&mut self, was_dirty: bool) {
         if self.save_record(was_dirty) {
             const NOTE: &str = "hash recorded; written with the next Save";

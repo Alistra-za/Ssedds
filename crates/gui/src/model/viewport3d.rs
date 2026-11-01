@@ -2234,7 +2234,7 @@ fn render_loop(
     let make = |shaders: Fingerprint, features: bool| -> Result<Renderer, String> {
         let mut r = Renderer::new(shaders, cache.clone())?;
         r.set_async_compile(true);
-        // AG76 → render3d's fill (GUI suggestions item 3): colour slots only, so a missing normal no longer tints.
+        // AU3: render3d's fill (GUI suggestions item 3): colour slots only, so a missing normal no longer tints.
         r.set_missing_texture(Some([255, 0, 255, 255]));
         r.set_features_on(features);
         apply_settings(&mut r, settings.clone());
