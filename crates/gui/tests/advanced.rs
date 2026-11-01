@@ -390,11 +390,6 @@ fn no_inspector_value_passes_the_drawer_edge() {
             let r = n.rect();
             if r.min.y > inspector_top && r.min.y < batch_top {
                 checked += 1;
-                eprintln!(
-                    "{width}: {:?} {:?} {r:?}",
-                    n.accesskit_node().value(),
-                    n.accesskit_node().label()
-                );
                 assert!(
                     r.max.x <= width + 1.0,
                     "{width}: {:?} ends at {} past the drawer edge",

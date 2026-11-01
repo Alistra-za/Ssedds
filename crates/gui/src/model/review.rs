@@ -100,7 +100,7 @@ pub fn disk_state(path: &Path, recorded: Option<&str>) -> DiskState {
     }
 }
 
-fn plural(n: usize) -> &'static str {
+pub(super) fn plural(n: usize) -> &'static str {
     if n == 1 {
         ""
     } else {

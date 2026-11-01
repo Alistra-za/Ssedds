@@ -145,7 +145,7 @@ pub enum Selection {
 
 pub use texture_view::Filter;
 
-/// (sdc.toml rev, dirty), (sdc-project.toml rev, dirty, read-only).
+/// (sdc.toml rev, dirty, only automatic types unsaved), (sdc-project.toml rev, dirty, read-only).
 type RecoveryKey = (Option<(u64, bool, bool)>, Option<(u64, bool, bool)>);
 
 /// Which of the two project files a dialog or save error is about.
@@ -2998,9 +2998,12 @@ impl AppModel {
 
     /// "1 texture, 1 set" / "3 textures, 2 sets" (Note FI14).
     fn counts_line(&self) -> String {
-        let pl = |n: usize| if n == 1 { "" } else { "s" };
         let (t, s) = (self.items.len(), self.sets.len());
-        format!("{t} texture{}, {s} set{}", pl(t), pl(s))
+        format!(
+            "{t} texture{}, {s} set{}",
+            review::plural(t),
+            review::plural(s)
+        )
     }
 
     /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
