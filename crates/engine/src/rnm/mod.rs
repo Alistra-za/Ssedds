@@ -1,4 +1,4 @@
-//! M6 Track F2: RNM normal layers (rulings: `docs/DECISIONS.md` Note W). Layer files
+//! M6 Track F2: RNM normal layers (rulings: `.claude/DECISIONS.md` Note W). Layer files
 //! (`_bump`, `_detailnorm`, `_bent`, their masks, rnm.py aliases, `_n_`/`_cnr_` prefixes) join their set, are never
 //! written on their own and are blended into the set's base normal before mips.
 use crate::config::{LayerId, RnmSpec, RnmTarget};

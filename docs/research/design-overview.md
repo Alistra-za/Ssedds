@@ -2,7 +2,7 @@
 
 Written 2026-10-16 (commit 1bae037b).
 
-Tessalith started in October 2026 as a written plan for an open-source DDS converter for Skyrim SE/AE modding, with a GUI and a CLI on one engine. The plan drew on the [encoder survey](encoder-survey.md), the [local benchmark](encoder-benchmark.md), the [mipmap research](mipmaps-and-alpha.md) and a review of Skyrim's texture conventions. It listed open questions, and each was settled by a short test ("spike") or by the project owner. This page describes the design that resulted and how it differs from the first plan. The decision record is [DECISIONS.md](../DECISIONS.md).
+Tessalith started in October 2026 as a written plan for an open-source DDS converter for Skyrim SE/AE modding, with a GUI and a CLI on one engine. The plan drew on the [encoder survey](encoder-survey.md), the [local benchmark](encoder-benchmark.md), the [mipmap research](mipmaps-and-alpha.md) and a review of Skyrim's texture conventions. It listed open questions, and each was settled by a short test ("spike") or by the project owner. This page describes the design that resulted and how it differs from the first plan. The decision record is [DECISIONS.md](../../.claude/DECISIONS.md).
 
 ## The main idea: correct Skyrim policy matters more than the encoder
 
@@ -18,7 +18,7 @@ Most of the original work went into the first two. The encoders were taken from 
 
 ## Who it is for
 
-Texture artists converting a folder of source images (PNG, TGA, TIFF, EXR, PSD and others) to DDS. It is not a tool for "fixing" an installed game folder; DDS input is secondary. File names may suggest how a texture is treated, but the user always decides ([DECISIONS](../DECISIONS.md), "Scope clarification").
+Texture artists converting a folder of source images (PNG, TGA, TIFF, EXR, PSD and others) to DDS. It is not a tool for "fixing" an installed game folder; DDS input is secondary. File names may suggest how a texture is treated, but the user always decides ([DECISIONS](../../.claude/DECISIONS.md), "Scope clarification").
 
 ## Skyrim texture rules
 
@@ -34,7 +34,7 @@ These come from the Skyrim research notes, the Community Shaders (CS) source and
 
 ## Targets
 
-The first plan had three targets: Community Shaders, Complex Parallax Materials (`cpm`) and vanilla. The `cpm` target was removed before the first release ([DECISIONS](../DECISIONS.md) Note AZ). Today there are two:
+The first plan had three targets: Community Shaders, Complex Parallax Materials (`cpm`) and vanilla. The `cpm` target was removed before the first release ([DECISIONS](../../.claude/DECISIONS.md) Note AZ). Today there are two:
 
 | Target | What it allows |
 |---|---|
@@ -117,6 +117,6 @@ Every output is written atomically, and a batch manifest records how each file w
 
 ## Other changes since the plan
 
-- **Plain `_normal` files are assumed DirectX**, with an info message, instead of blocking until the user states the convention ([DECISIONS](../DECISIONS.md) Note AW).
-- **Version 0.8.0** is the first public alpha ([DECISIONS](../DECISIONS.md) Note AX).
+- **Plain `_normal` files are assumed DirectX**, with an info message, instead of blocking until the user states the convention ([DECISIONS](../../.claude/DECISIONS.md) Note AW).
+- **Version 0.8.0** is the first public alpha ([DECISIONS](../../.claude/DECISIONS.md) Note AX).
 - **Channel packing, RNM normal layers, complex grass, PGPatcher JSON export and a 3D preview** were added after the plan. See the [wiki](../wiki/Home.md).

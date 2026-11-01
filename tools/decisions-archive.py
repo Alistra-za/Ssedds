@@ -1,4 +1,4 @@
-"""decisions-archive.py: moves superseded rulings from docs/DECISIONS.md verbatim (docs/DOCUMENTATION.md §7).
+"""decisions-archive.py: moves superseded rulings from .claude/DECISIONS.md verbatim (docs/DOCUMENTATION.md §7).
 
   py -3.13 -I tools\\decisions-archive.py --table <tsv> --apply [--root <repo>]
   py -3.13 -I tools\\decisions-archive.py --check --base <git-ref> [--table <tsv>] [--root <repo>]
@@ -7,8 +7,9 @@
 """
 import argparse, csv, pathlib, re, subprocess, sys, tempfile
 
-DEC = "docs/DECISIONS.md"
-ARC = "docs/DECISIONS-ARCHIVE.md"
+DEC = ".claude/DECISIONS.md"
+ARC = ".claude/DECISIONS-ARCHIVE.md"
+DEC_BEFORE_MOVE = "docs/" + "DECISIONS.md"  # where a --base before the move into .claude/ holds it
 RES = "docs/research/2026-10-early-spikes.md"
 
 
@@ -126,7 +127,7 @@ ARC_HEAD = ["# DECISIONS archive", "",
             "Rulings here are **not in force**. They moved verbatim from DECISIONS.md under their original IDs "
             "(docs/DOCUMENTATION.md §7). Never cite one as a reason for current behaviour.", ""]
 RES_HEAD = ["# Early spikes and phase records (2026-10)", "",
-            "Moved verbatim from docs/DECISIONS.md on 2026-10-31 (docs/DOCUMENTATION.md §7): measurement and process "
+            "Moved verbatim from DECISIONS.md on 2026-10-31 (docs/DOCUMENTATION.md §7): measurement and process "
             "records of 2026-10-08 to 2026-10-13, not rulings.", ""]
 
 
@@ -390,6 +391,7 @@ def self_test():
     with tempfile.TemporaryDirectory() as td:
         root = pathlib.Path(td)
         (root / "docs/research").mkdir(parents=True)
+        (root / DEC).parent.mkdir(parents=True)
         (root / DEC).write_bytes(FIXTURE.replace("\n", "\r\n").encode())
         lines = FIXTURE.split("\n")
         a, b = find_span(lines, ROWS[0])
@@ -464,10 +466,16 @@ def main():
         if a.check:
             table = a.table or max(map(str, (root / "tools/decisions-archive").glob("*.tsv")))
             text = lambda p: (root / p).read_text(encoding="utf-8") if (root / p).exists() else ""
-            fails = check(git("show", f"{a.base}:{DEC}"), text(DEC), text(ARC), text(RES), read_table(table))
+            try:
+                old = git("show", f"{a.base}:{DEC}")
+            except subprocess.CalledProcessError:
+                old = git("show", f"{a.base}:{DEC_BEFORE_MOVE}")
+            fails = check(old, text(DEC), text(ARC), text(RES), read_table(table))
         else:
+            # The DECISIONS files and the mistakes log are prose, not code with comments.
             diff = git("diff", "-U0", "--no-color", a.base, "--", "crates", "tools", ".claude",
-                       "photoshop", "gimp", "paintdotnet", "chainner")
+                       "photoshop", "gimp", "paintdotnet", "chainner", f":!{DEC}", f":!{ARC}",
+                       ":!.claude/mistakes", ":!.claude/scratch")
             fails = comment_failures(diff, a.exclude)
     except LookupError2 as e:
         print(f"error: {e}", file=sys.stderr)

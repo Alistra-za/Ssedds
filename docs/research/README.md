@@ -1,6 +1,6 @@
 # Research
 
-The research behind Tessalith's defaults, in these pages. Each page says what was asked, how it was measured, what came out and what Tessalith does because of it. For a one-page summary, see [Research behind the defaults](../wiki/Research.md). Individual decisions are recorded in [DECISIONS.md](../DECISIONS.md).
+The research behind Tessalith's defaults, in these pages. Each page says what was asked, how it was measured, what came out and what Tessalith does because of it. For a one-page summary, see [Research behind the defaults](../wiki/Research.md). Individual decisions are recorded in [DECISIONS.md](../../.claude/DECISIONS.md).
 
 | Page | What it covers |
 |---|---|

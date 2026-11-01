@@ -117,7 +117,7 @@ Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Hos
 - Paint.NET: a [Tessalith DDS file type](docs/paintdotnet-plugin.md) saves DDS.
 - chaiNNer: three [Tessalith DDS nodes](https://github.com/Alistra-za/Tessalith/tree/host-plugins/chainner/README.md) save DDS. Their licences are in [Host plugins](docs/wiki/Host-Plugins.md#licences).
 
-Design records: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
+Design records: [.claude/DECISIONS.md](.claude/DECISIONS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
 
 ## Credits and licence
 

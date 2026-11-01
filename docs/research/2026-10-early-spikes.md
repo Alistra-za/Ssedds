@@ -1,6 +1,6 @@
 # Early spikes and phase records (2026-10)
 
-Moved verbatim from docs/DECISIONS.md on 2026-10-31 (docs/DOCUMENTATION.md §7): measurement and process records of 2026-10-08 to 2026-10-13, not rulings.
+Moved verbatim from DECISIONS.md on 2026-10-31 (docs/DOCUMENTATION.md §7): measurement and process records of 2026-10-08 to 2026-10-13, not rulings.
 
 ## Spike S3 — workspace links vendored encoders and reproduces the bench (2026-10-08)
 

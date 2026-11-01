@@ -2,7 +2,7 @@
 
 The plugin's source, and every path and build command on this page, are on branch `host-plugins`, not `main`; see [Host plugins](wiki/Host-Plugins.md#where-the-plugins-live).
 
-`tessalith-dds` is a GIMP 3 plug-in (Windows x64, GIMP 3.0.x) that opens and exports Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `gimp/README.md`; the rulings are Note DG in [DECISIONS.md](DECISIONS.md), on top of Note DC (Photoshop), DD (psdds.dll), DF (16-bit, 32-bit and HDR) and DH (Alpha is transparency).
+`tessalith-dds` is a GIMP 3 plug-in (Windows x64, GIMP 3.0.x) that opens and exports Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `gimp/README.md`; the rulings are Note DG in [DECISIONS.md](../.claude/DECISIONS.md), on top of Note DC (Photoshop), DD (psdds.dll), DF (16-bit, 32-bit and HDR) and DH (Alpha is transparency).
 
 ## Layout
 - `crates/psdds`: the shared DLL (`psdds.dll`, C ABI in `photoshop/psdds.h`, ABI 4). Every rule lives there: greying, formats per type, presets, alpha, clamp, size limits, encode, decode.

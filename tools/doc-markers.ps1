@@ -17,8 +17,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $Root) { $Root = Split-Path $PSScriptRoot -Parent }
-$DecisionsPath = 'docs\DECISIONS.md'
-$ArchivePath = 'docs\DECISIONS-ARCHIVE.md'
+$DecisionsPath = '.claude\DECISIONS.md'
+$ArchivePath = '.claude\DECISIONS-ARCHIVE.md'
 $IdChars = '[A-Z][A-Za-z0-9?-]*'
 
 # The IDs a DECISIONS file defines: items and note letters, each with its "(superseded by X)" when the line has one.

@@ -4,7 +4,7 @@ These rules apply to every agent or person who writes documentation for Tessalit
 
 They cover these files:
 - **User-facing docs:** README.md, docs/wiki/, docs/gui.md, and the plugin pages (docs/*-plugin.md).
-- **The ruling log:** docs/DECISIONS.md.
+- **The ruling log:** .claude/DECISIONS.md.
 - **History:** CHANGELOG.md (versions) and docs/presets-changelog.md (presets).
 
 docs/research/ is a record of measurements. It may describe old results, but each page states the date and the build it measured.
@@ -93,7 +93,7 @@ Every menu, context menu, panel, tab and dialog the guide documents has a screen
 
 ## 7. DECISIONS.md: live rulings only
 DECISIONS.md is the ruling log: why the code behaves as it does. It keeps only rulings that are in force.
-- **Fully reverted or superseded rulings move to `docs/DECISIONS-ARCHIVE.md`.** They move verbatim, under their original ID, headed `ARCHIVED (superseded by Note XX, <date>)`.
+- **Fully reverted or superseded rulings move to `.claude/DECISIONS-ARCHIVE.md`.** They move verbatim, under their original ID, headed `ARCHIVED (superseded by Note XX, <date>)`.
 - **A partly superseded item is edited in place to the current rule.** The replaced wording goes to the archive under the same ID.
 - **IDs are permanent.** Code comments and commits cite them ("Note BC10"), so a letter is never reused. An archived ID stays findable by grep in the archive.
 - **When you archive a ruling, update the code comments that cite it** to cite the ruling that replaced it.
