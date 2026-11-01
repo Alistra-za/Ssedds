@@ -544,6 +544,10 @@ impl AppModel {
     pub fn review_gate(&self) -> Result<(usize, usize), String> {
         if self.root.is_none() {
             // Note GH8: with no project Review exports NIF edits only, to the gui.toml folder (never a `sdc-out` guess).
+            // No NIF row at all is the fresh-start state, which keeps its old reason; a blocked row (no folder) says why.
+            if self.nif_rows.is_empty() {
+                return Err("Open a folder first".into());
+            }
             if self.export_folder_chosen().is_none() {
                 return Err(NO_EXPORT_FOLDER.into());
             }

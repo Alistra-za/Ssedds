@@ -271,6 +271,13 @@ fn no_folder_open_reads_plain_export() {
     assert_eq!(m.header_export_text(), "Export");
 }
 
+/// Note GH8: a fresh start (no project, no folder, no edit) still says "Open a folder first", not the folder reason.
+#[test]
+fn fresh_start_with_no_folder_says_open_a_folder_first() {
+    let m = AppModel::new(GuiSettings::default(), None, session());
+    assert_eq!(m.review_gate(), Err("Open a folder first".to_string()));
+}
+
 /// Note GH8: with no project and a folder chosen, Review has nothing to write until a NIF edit is pending.
 #[test]
 fn meshes_only_with_nothing_to_write_says_open_a_folder() {
