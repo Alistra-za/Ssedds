@@ -543,7 +543,20 @@ impl AppModel {
     /// Ok((files, skipped_undecided)) or Err(the reason the button shows), in A9's order.
     pub fn review_gate(&self) -> Result<(usize, usize), String> {
         if self.root.is_none() {
-            return Err("Open a folder first".into());
+            // Note GH8: with no project Review exports NIF edits only, to the gui.toml folder (never a `sdc-out` guess).
+            if self.export_folder_chosen().is_none() {
+                return Err(NO_EXPORT_FOLDER.into());
+            }
+            if self.export.running.is_some() {
+                return Err("An export is running".into());
+            }
+            if !self.nif_rows_written() {
+                return Err("Open a folder first".into());
+            }
+            if let Some(name) = self.unanswered_overwrites().first() {
+                return Err(format!("Answer Keep or Overwrite for {name}"));
+            }
+            return Ok((0, 0));
         }
         // `toml_read_only_reason` is `Some` exactly when `project.read_only()` (both read the load error).
         if let Some(why) = self.toml_read_only_reason() {
@@ -826,6 +839,11 @@ impl AppModel {
 
     /// "Export 20 files (skip 2 undecided)".
     pub fn review_button_text(&self) -> String {
+        // Note GH8: no project, no texture run: the button writes the NIF edits alone.
+        if self.root.is_none() {
+            let n = self.nif_rows.iter().filter(|r| r.blocked.is_none()).count();
+            return format!("Export {n} NIF edit{}", plural(n));
+        }
         let files = self.export_files();
         let skipped = self.undecided();
         let mut t = format!("Export {files} file{}", plural(files));
@@ -842,7 +860,8 @@ impl AppModel {
     /// Review's Export (R3): `export_clicked`'s front half (a plan in flight → wait; changed sources → plan again and
     /// wait), then `Continue::Review`: the guards and the gate again before the export. Never on a stale plan.
     pub fn export_from_review(&mut self) {
-        if self.root.is_none() || self.review.is_none() {
+        // Note GH8: Review's Export also works with no project (it writes the NIF edits alone).
+        if self.review.is_none() {
             return;
         }
         self.status_note = None;

@@ -776,14 +776,15 @@ impl NifEdit {
         if let Some(why) = &self.retarget_error {
             return Some(why.clone());
         }
+        // Note GH5: nothing edited is the idle state with or without a folder; `apply_err` needs ops, so no edit has it.
+        if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
+            return Some(NO_EDITS.into());
+        }
         if self.edit_mod.as_os_str().is_empty() {
             return Some(NO_EXPORT_FOLDER.into());
         }
         if let Some(e) = &self.apply_err {
             return Some(e.clone());
-        }
-        if self.doc.ops.is_empty() && self.doc.export.sha256.is_none() {
-            return Some(NO_EDITS.into());
         }
         let refused = self
             .outcomes

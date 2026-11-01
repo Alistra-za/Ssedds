@@ -5,7 +5,7 @@ The GUI can edit a mesh (NIF file) in the Meshes view and write an edited copy. 
 ## Before you start
 
 - Scan your mods first, so the Meshes view lists your meshes. See [Mod scanning](Mod-Scanning.md).
-- Pick an export folder with **Export to ▾** in the header (**More ▾ → Choose export folder…** until a folder is chosen; a project never takes over the folder you picked for another mod). Edited NIFs go there, next to your textures. There is no default folder: until you pick one you can edit, but not export ("No export folder chosen"), and your edits are kept in `%LOCALAPPDATA%\sdc\nif-edits` so they survive a restart. Edits made with Tessalith 1.1 or earlier without an export folder are in `mods\sdc NIF Edits`: choose that folder in **Export to ▾** to reopen them.
+- Pick an export folder with **Export to ▾** in the header (**More ▾ → Choose export folder…** until a folder is chosen; a project never takes over the folder you picked for another mod). Edited NIFs go there, next to your textures. There is no default folder: until you pick one you can edit, but not export (Review says "No export folder chosen"), and your edits are kept in `%LOCALAPPDATA%\sdc\nif-edits` so they survive a restart. Edits made with Tessalith 1.1 or earlier without an export folder are in `mods\sdc NIF Edits`: choose that folder in **Export to ▾** to reopen them.
 
 ## Open a mesh for editing
 
@@ -46,10 +46,11 @@ Values are never clamped. A value or flag that looks wrong shows an amber warnin
 
 ## Export
 
-The bottom of the edit panel says **Ready**, "No edits to export.", or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**. When a file Tessalith did not write is already where the export goes, **Diff…** (in the edit panel, or on its Review row) lists the blocks that differ from what the export writes.
+The bottom of the edit panel says **Ready**, "No edits to export." (grey, before any edit), "Skipped until an export folder is chosen" (grey, edits but no folder), or **Blocked:** with the reason. **Review…** opens Review: NIF edits export from there, together with your textures, when you press Review's **Export**. When a file Tessalith did not write is already where the export goes, **Diff…** (in the edit panel, or on its Review row) lists the blocks that differ from what the export writes.
 
 - Review lists each NIF with edits as a row. The export writes `meshes\...\<name>.nif` under the export folder. Blocks that your edits left unused are left out, and the row says how many.
 - A blocked NIF row is skipped; it never stops the texture export.
+- You do not need a texture folder open. With only the Meshes view and an export folder chosen, Review's **Export** reads "Export 1 NIF edit" and writes just the NIFs.
 - If a file Tessalith did not write is already there, or the file changed since Tessalith wrote it, its row asks first: keep the file on disk, or overwrite it. Until you answer, that NIF is skipped.
 - When the export folder is an MO2 mod, Messages says if the mod must be enabled or moved.
 

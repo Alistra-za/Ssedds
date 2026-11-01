@@ -270,3 +270,19 @@ fn no_folder_open_reads_plain_export() {
     let m = AppModel::new(GuiSettings::default(), None, session());
     assert_eq!(m.header_export_text(), "Export");
 }
+
+/// Note GH8: with no project and a folder chosen, Review has nothing to write until a NIF edit is pending.
+#[test]
+fn meshes_only_with_nothing_to_write_says_open_a_folder() {
+    let d = tempfile::tempdir().unwrap();
+    let m = AppModel::new(
+        GuiSettings {
+            export_folder: Some(d.path().join("out")),
+            ..GuiSettings::default()
+        },
+        None,
+        session(),
+    );
+    assert_eq!(m.review_gate(), Err("Open a folder first".to_string()));
+    assert_eq!(m.review_button_text(), "Export 0 NIF edits");
+}

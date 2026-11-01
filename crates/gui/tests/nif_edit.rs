@@ -3490,13 +3490,15 @@ fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
     h.get(row(": SLSF1 flags"));
 }
 
-/// Meshes UI T3: without an export folder the block stays and says why it cannot export.
+/// Meshes UI T3: without an export folder Review… stays on. Note GH5: an untouched session reads the idle "No edits" line,
+/// not a red block (an edit with no folder reads "Skipped until an export folder is chosen", pinned below).
 #[test]
 fn a_read_only_session_shows_the_no_export_folder_reason() {
     let m = direct(scenes::shared_alpha_and_set());
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label(&format!("Blocked: {NO_EXPORT_FOLDER}"));
+    h.get_by_label(NO_EDITS);
+    assert!(h.query_by_label_contains("Blocked").is_none());
     // Note GD2: Review… stays on, so Review can show the reason on the NIF's row.
     assert!(!h.get(review_button()).accesskit_node().is_disabled());
 }
@@ -3975,10 +3977,15 @@ fn no_export_folder_blocks_the_nif_row() {
     assert_eq!(m.edit_mod(), None);
     m.open_edit();
     assert_eq!(m.error, None, "the edit opens");
+    // Note GH5: nothing edited yet reads NO_EDITS; the first edit brings the folder's reason.
     let e = m.edit.as_ref().unwrap();
-    assert_eq!(e.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(e.blocked.as_deref(), Some(NO_EDITS));
     assert_eq!(NO_EXPORT_FOLDER, "No export folder chosen");
     gloss(&mut m, 12.5);
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EXPORT_FOLDER)
+    );
     assert_eq!(m.edit.as_ref().unwrap().doc_path, autosave(&d));
     assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 1);
     assert!(
@@ -10816,4 +10823,162 @@ fn a_cancelled_export_drops_the_overwrite_answer() {
         theirs,
         "no Export without a new answer"
     );
+}
+
+// ---- Note GH5, GH8: the footer before any edit, and Review's NIF export with no project ----
+
+/// Note GH5: nothing edited is the idle state with no export folder too (the folder check used to come first and
+/// showed a red `Blocked: No export folder chosen` over an untouched edit).
+#[test]
+fn an_untouched_edit_with_no_folder_is_idle_not_blocked() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EDITS),
+        "NO_EDITS comes before NO_EXPORT_FOLDER"
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label(NO_EDITS);
+    h.get_by_label("idle");
+    assert!(h.query_by_label_contains("Blocked").is_none());
+}
+
+/// Note GH5: one edit and no folder is Review's own case (a weak `skipped` line, not a block): the footer says the
+/// same, and the Review row still carries `NO_EXPORT_FOLDER`.
+#[test]
+fn an_edit_with_no_folder_reads_skipped_until_a_folder_is_chosen() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EXPORT_FOLDER)
+    );
+    assert_eq!(review_row(&m).blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("Skipped until an export folder is chosen");
+    h.get_by_label("idle");
+    assert!(h.query_by_label_contains("Blocked").is_none());
+}
+
+/// The app in the Meshes view with no project open, gui.toml naming `export` (or nothing), and `ops` pending edits.
+fn no_project_app(export: Option<&Path>, ops: usize) -> (tempfile::TempDir, AppH) {
+    app_data();
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: export.map(Path::to_path_buf),
+        ..Default::default()
+    };
+    let model = sdc_gui::model::AppModel::new(settings, None, support::session());
+    assert!(model.root.is_none());
+    in_the_meshes_view(model, ops)
+}
+
+/// Every file under `p` except the scan store, which sqlite may touch when only read.
+fn tree(p: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = vec![];
+    let mut todo = vec![p.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let q = e.path();
+            if q.is_dir() {
+                todo.push(q);
+            } else if !e.file_name().to_string_lossy().starts_with("scan.db") {
+                v.push(q);
+            }
+        }
+    }
+    v.sort();
+    v
+}
+
+/// Note GH8: with no project and gui.toml's folder, Review's Export is on, reads `Export 1 NIF edit`, and writes the
+/// NIF alone under that folder: no texture run, no `sdc-out`.
+#[test]
+fn meshes_only_review_exports_the_nif_edit() {
+    let out = tempfile::tempdir().unwrap();
+    let (_d, mut h) = no_project_app(Some(out.path()), 1);
+    let (_path, out_path, bytes) = nif_out(&h);
+    assert!(out_path.starts_with(out.path()), "{out_path:?}");
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(h.state().model.review_gate(), Ok((0, 0)));
+    let b = h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit");
+    assert!(!b.accesskit_node().is_disabled());
+    h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit")
+        .click();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).ok(), Some(bytes));
+    assert!(out_path.starts_with(out.path().join("meshes")));
+    assert!(h.state().model.review.is_none(), "Review closes");
+    assert!(h.state().model.export.running.is_none(), "no texture run");
+    assert!(h
+        .state()
+        .model
+        .messages
+        .entries()
+        .any(|e| e.text == "NIF edits written: 1 file"));
+    assert!(!out.path().join("sdc-out").exists());
+    assert!(!Path::new("sdc-out").exists());
+}
+
+/// Note GH8 / Review Focus 2: no project and no folder chosen: the gate says so, Export is off, nothing is written.
+#[test]
+fn meshes_only_without_a_folder_writes_nothing() {
+    let (d, mut h) = no_project_app(None, 1);
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().model.review_gate(),
+        Err("No export folder chosen".to_string())
+    );
+    assert!(h.query_all_by_label("No export folder chosen").count() >= 1);
+    let before = tree(d.path());
+    assert!(h
+        .get_by_role_and_label(AkRole::Button, "Export 0 NIF edits")
+        .accesskit_node()
+        .is_disabled());
+    h.state_mut().model.export_from_review();
+    h.run_steps(6);
+    assert!(h.state().model.review.is_some(), "Review stays open");
+    assert!(!h
+        .state()
+        .model
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("NIF edits")));
+    assert_eq!(tree(d.path()), before);
+    assert!(!d.path().join("sdc-out").exists());
+    assert!(!Path::new("sdc-out").exists());
+}
+
+/// Note GH8: a file Tessalith did not write at the export path is never overwritten without the row's answer.
+#[test]
+fn meshes_only_waits_for_a_foreign_answer() {
+    let out = tempfile::tempdir().unwrap();
+    let (_d, mut h) = no_project_app(Some(out.path()), 1);
+    let (_path, out_path, bytes) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().model.review_gate(),
+        Err("Answer Keep or Overwrite for x.nif".to_string())
+    );
+    h.state_mut().model.export_from_review();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).unwrap(), b"theirs");
+    h.get_by_label("Overwrite it").click();
+    h.run_steps(4);
+    assert_eq!(h.state().model.review_gate(), Ok((0, 0)));
+    h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit")
+        .click();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).unwrap(), bytes);
 }

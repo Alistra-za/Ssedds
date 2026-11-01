@@ -4,7 +4,7 @@
 use super::edit_fields::{self, Act};
 use super::{edit_ctrl, edit_extra};
 use crate::model::meshes::edit_doc::OpStatus;
-use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS};
+use crate::model::meshes::nif_edit::{NifEdit, Selection, NO_EDITS, NO_EXPORT_FOLDER};
 use crate::model::meshes::MeshesModel;
 use crate::ui::header::elide_middle;
 use crate::ui::status::{self, Status, AMBER, GREEN, RED};
@@ -13,6 +13,9 @@ use nif::edit::Outcome;
 use nif::fields::Field;
 
 const TABS: [&str; 4] = ["Shader", "Alpha", "Controllers", "Extra data"];
+
+/// Note GH5: the footer's line for an edit with no export folder; Review's footer says the same.
+const SKIPPED_NO_FOLDER: &str = "Skipped until an export folder is chosen";
 
 pub fn panel(ui: &mut egui::Ui, m: &mut MeshesModel) {
     ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
@@ -243,15 +246,20 @@ fn export_block(
                 status::dot(ui, Status::Ready);
                 ui.colored_label(GREEN, "Ready");
             }
-            // Review Minor 5: nothing edited yet is an idle state, not a block: a weak dot and weak text.
+            // Review Minor 5: nothing edited yet is an idle state, not a block: a weak dot and weak text. Note GH5: so is
+            // an edit with no export folder, as Review's footer lists it (`Skipped until an export folder is chosen`).
             // shortcut: a hand-drawn copy of `status::dot`; add a `Status::Idle` there (main-team file) if another view needs it.
-            Some(why) if why == NO_EDITS => {
+            Some(why) if why == NO_EDITS || why == NO_EXPORT_FOLDER => {
                 let (rect, r) =
                     ui.allocate_exact_size(egui::Vec2::splat(8.0), egui::Sense::hover());
                 let c = ui.visuals().weak_text_color();
                 ui.painter().circle_filled(rect.center(), 4.0, c);
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, "idle"));
-                ui.weak(NO_EDITS);
+                ui.weak(if why == NO_EDITS {
+                    NO_EDITS
+                } else {
+                    SKIPPED_NO_FOLDER
+                });
             }
             Some(why) => {
                 status::dot(ui, Status::Blocks);
