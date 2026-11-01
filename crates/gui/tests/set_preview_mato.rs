@@ -225,6 +225,24 @@ fn no_record_line() {
     assert!(s.mato_lines().is_empty());
 }
 
+/// Final review M5: with the layer on, a block edit reaches the layer on the next frame, with no input event and
+/// inside the throttle (a slider drag only produces pointer moves).
+#[test]
+fn value_edit_reaches_the_layer_next_frame() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(dir.path());
+    m.add_cs_block(ROCK, Kind::Mato);
+    let key = rock_key(&m);
+    m.select_set(&key);
+    let mut s = SetPreview::new(None, None, None, DEFAULT_CAP);
+    s.set_mato_layer(true);
+    run(&mut s, &m);
+    assert_eq!(s.v3.projected().map(|l| l.roughness), Some(1.0));
+    m.set_cs_value(ROCK, Kind::Mato, "roughness", Some(json!(0.25)));
+    s.shown = true;
+    s.poll(&m);
+    assert_eq!(s.v3.projected().map(|l| l.roughness), Some(0.25));
+}
 /// Review Focus 5: the layer follows the followed set's block.
 #[test]
 fn switching_sets_follows_block() {

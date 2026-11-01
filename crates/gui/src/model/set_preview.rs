@@ -1923,7 +1923,8 @@ impl SetPreview {
             }
         }
         let mato_due = std::mem::take(&mut self.mato_due);
-        if due || mato_due {
+        // Every frame with the layer on, so a dragged value shows on the next frame (cached reads; Note GG).
+        if due || mato_due || self.mato_layer {
             self.sync_mato(m);
         }
         self.enc
