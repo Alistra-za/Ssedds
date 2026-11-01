@@ -17,7 +17,7 @@ fn tall(model: AppModel) -> Harness<'static, AppModel> {
 }
 
 /// esp spec §4.1: TXSTs matching the set (EDID, load-order FormID, winning plugin, slot, overridden N×), then the
-/// records whose alternate textures use them. Information only.
+/// records whose alternate textures use them. Information only. Note F?18 (4, GH7): TXST slot 0 reads "slot 1".
 #[test]
 fn used_by_plugins_lists_txsts_and_alternate_texture_users() {
     use modscan::plugin_store::{AltUse, ShapeSwap, TxstUse};
@@ -63,7 +63,7 @@ fn used_by_plugins_lists_txsts_and_alternate_texture_users() {
     h.run();
     h.get_by_label("Used by plugins").click();
     h.run();
-    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1×");
+    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 1: textures/landscape/rock01.dds · overridden 1×");
     h.get_by_label("RockStat [00000DEF] STAT — Skyrim.esm · Shape0 → RockTXST");
 }
 
@@ -184,7 +184,7 @@ fn used_by_plugins_reads_the_scan_db_and_refresh_rereads_it() {
     h.run();
     h.get_by_label("Used by plugins").click();
     h.run();
-    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1×");
+    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 1: textures/landscape/rock01.dds · overridden 1×");
     assert!(h.query_by_label_contains("Rock2TXST").is_none());
     add_txst(&db, 0x2000, "Rock2TXST");
     h.run();
@@ -296,7 +296,7 @@ fn used_by_plugins_hides_inert_records_until_asked() {
     h.run();
     h.get_by_label("Used by plugins").click();
     h.run();
-    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1×");
+    h.get_by_label("RockTXST [00012345] TXST — Skyrim.esm · slot 1: textures/landscape/rock01.dds · overridden 1×");
     assert!(h.query_by_label_contains("RockStat").is_none());
     h.get_by_label("Show inert (1)").click();
     h.run();
@@ -369,7 +369,7 @@ fn used_by_plugins_all_inert_says_nothing_matches_until_shown() {
     assert!(h
         .query_by_label("No texture set of the latest scan matches this set.")
         .is_none());
-    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1× · no reference");
+    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 1: textures/landscape/rock01.dds · overridden 1× · no reference");
 }
 
 /// Filtering spec §3 through the real `get` (so `inert_of` is exercised): an inert TXST and an inert alternate-texture
@@ -410,6 +410,6 @@ fn used_by_plugins_reads_inert_from_the_scan_db() {
     assert!(h.query_by_label_contains("DeadStat").is_none());
     h.get_by_label("Show inert (2)").click();
     h.run();
-    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 0: textures/landscape/rock01.dds · overridden 1× · no reference");
+    h.get_by_label_contains("RockTXST [00012345] TXST — Skyrim.esm · slot 1: textures/landscape/rock01.dds · overridden 1× · no reference");
     h.get_by_label("DeadStat [00000DEF] STAT — Skyrim.esm · Shape0 → LiveTXST · not placed");
 }
