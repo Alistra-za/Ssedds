@@ -1604,7 +1604,10 @@ impl MeshesModel {
         let (tx, rx) = channel();
         let (gate, alive) = (self.project_gate.clone(), self.project_alive.clone());
         alive.fetch_add(1, Ordering::SeqCst);
-        self.project_started.push(rev);
+        // Test hook: only a gated read (a test holds the gate) is recorded, so production never grows the list.
+        if self.project_gate.is_some() {
+            self.project_started.push(rev);
+        }
         std::thread::spawn(move || {
             let r = {
                 let _held = gate.as_ref().map(|g| g.lock());

@@ -2438,6 +2438,18 @@ fn one_project_read_runs_at_a_time_and_only_the_newest_key_starts_next() {
     assert_eq!(m.project_alive.load(Ordering::SeqCst), 0);
 }
 
+/// Final review Minor 3: the start record is a test hook; reads without a gate (production) leave it empty.
+#[test]
+fn ungated_project_reads_record_no_starts() {
+    let (d, mut m) = project_textures();
+    m.set_project_root(Some(&d.path().join("plain")));
+    for rev in 1..=3 {
+        m.set_project_textures(rev, &[format!("textures/pbr/xmead/ale{rev}_bc.dds")]);
+        wait_project(&mut m);
+    }
+    assert!(m.project_started.is_empty(), "{:?}", m.project_started);
+}
+
 /// Note GH3 fix round 1: the pill's on/off is kept per project root: A off, then B, then A again keeps A off.
 #[test]
 fn the_pill_state_is_kept_per_project_root() {
