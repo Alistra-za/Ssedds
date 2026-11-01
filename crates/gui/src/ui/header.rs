@@ -122,34 +122,27 @@ fn right_end(ui: &mut egui::Ui, model: &mut AppModel) {
         .as_ref()
         .and_then(|_| model.export_folder_chosen())
         .map(|p| p.display().to_string());
-    let fixed_text = match (&model.root, &full) {
-        (None, _) => Some(MORE_TEXT),
-        (Some(_), None) => Some(NOT_CHOSEN_TEXT),
-        _ => None,
-    };
     // K1: what Export to's path may take is the room left after the button's own text, Save and Export.
-    let (lead, min_path) = match fixed_text {
-        Some(t) => (t, 0.0),
-        None => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph),
+    let (lead, min_path, path) = match (&model.root, &full) {
+        (None, _) => (MORE_TEXT, 0.0, None),
+        (Some(_), None) => (NOT_CHOSEN_TEXT, 0.0, None),
+        (Some(_), Some(p)) => ("Export to:  ▾", PATH_MIN_CHARS as f32 * glyph, Some(p)),
     };
     let fixed = button_width(ui, lead) + gap + save_w + gap + EXPORT_WIDTH;
     fit(ui, fixed + min_path);
     let mut chars =
         (((room(ui) - fixed - gap) / glyph).floor().max(0.0) as usize).max(PATH_MIN_CHARS);
     let others = gap + save_w + gap + EXPORT_WIDTH;
-    let text = loop {
-        if let Some(t) = fixed_text {
-            break t.to_string();
-        }
-        let Some(p) = &full else {
-            unreachable!("a chip without fixed text has a folder");
-        };
-        let text = format!("Export to: {} ▾", elide_middle(p, chars));
-        // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
-        if chars <= PATH_MIN_CHARS || button_width(ui, &text) + others <= room(ui) - 0.5 {
-            break text;
-        }
-        chars -= 1;
+    let text = match path {
+        None => lead.to_string(),
+        Some(p) => loop {
+            let text = format!("Export to: {} ▾", elide_middle(p, chars));
+            // A path's characters can be wider than '0': drop more until the trio fits (never below the minimum).
+            if chars <= PATH_MIN_CHARS || button_width(ui, &text) + others <= room(ui) - 0.5 {
+                break text;
+            }
+            chars -= 1;
+        },
     };
     push_right(ui, button_width(ui, &text) + others);
     export_to_menu(ui, model, text, full);
@@ -683,7 +676,7 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         .response
         .on_hover_ui(|ui| {
             ui.label(format!(
-                "The preset the folder converts with. Saved in sdc.toml as preset. Mode: {mode}; the list shows this mode's presets. Change the mode in Presets…."
+                "The preset the folder converts with. Saved in sdc.toml as preset. Mode: {mode}; the list shows this mode's presets. Change the mode in Presets…"
             ));
         });
     // Note FC1 (AM14): a Problems row's `Choose preset…` opens the same menu under the combo, as a popup the header
