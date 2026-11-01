@@ -39,6 +39,8 @@
 //   STANDIN_ENV_T31 it samples EnvTexture at t31 instead (CS's other forward DC register).
 // - STANDIN_TIMER (with STANDIN_FLAT): the PS declares CS's Timer (b2) and the flat colour adds 0.5 x frac(Timer)
 //   to red, so the clock's time shows in pixels (v2 B3).
+// - STANDIN_PROJECTED (with PROJECTED_UV): the PS declares CS's four projected registers and returns only them:
+//   r = 0.5 t3.r + 0.25 t11.r, g = 0.5 t8.r, b = 0.5 t10.r, so each binding shows in pixels (MATO layer, Note GG).
 
 struct VsOut
 {
@@ -152,11 +154,24 @@ cbuffer SkinPerGeometry : register(b7)
 Texture2D<float4> TexSkinExtraSampler : register(t71);
 #endif
 
+#if defined(STANDIN_PROJECTED) && defined(PROJECTED_UV)
+Texture2D<float4> TexProjDiffuseSampler : register(t3);
+Texture2D<float4> TexProjNormalSampler : register(t8);
+Texture2D<float4> TexProjDetail : register(t10);
+Texture2D<float4> TexCharacterLightProjNoiseSampler : register(t11);
+#endif
+
 float4 shade(VsOut i)
 {
     float4 base = DiffuseMap.Sample(DiffuseSampler, i.Uv);
     float3 bump = NormalMap.Sample(DiffuseSampler, i.Uv).xyz * 2.0 - 1.0;
-#if defined(STANDIN_TBN)
+#if defined(STANDIN_PROJECTED) && defined(PROJECTED_UV)
+    float2 c = float2(0.5, 0.5);
+    return float4(0.5 * TexProjDiffuseSampler.SampleLevel(DiffuseSampler, c, 0).r
+                      + 0.25 * TexCharacterLightProjNoiseSampler.SampleLevel(DiffuseSampler, c, 0).r,
+                  0.5 * TexProjNormalSampler.SampleLevel(DiffuseSampler, c, 0).r,
+                  0.5 * TexProjDetail.SampleLevel(DiffuseSampler, c, 0).r, 1.0);
+#elif defined(STANDIN_TBN)
     float3 nt = normalize(bump.x * i.Row0 + bump.y * i.Row1 + bump.z * i.Normal);
     return float4(saturate(dot(nt, DirLightDirection.xyz)).xxx, 1.0);
 #elif defined(STANDIN_FLAT)

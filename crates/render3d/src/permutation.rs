@@ -12,6 +12,11 @@ pub struct Material {
     pub has_vertex_colors: bool,
     /// NIF specular strength; SPECULAR is dropped when it is 0 (answers.md Q4.2, Arch_Mouth).
     pub specular_strength: f32,
+    /// The MATO projected layer applies to this shape (Note GG): `PROJECTED_UV` on both stages. Set by the
+    /// renderer from its layer and `material::projected_eligible`; [`crate::material::perm_material`] leaves it false.
+    pub projected: bool,
+    /// With `projected`: the layer has projected glint, so a PBR pixel shader compiles `GLINT` (capture 18019).
+    pub projected_glint: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -61,10 +66,15 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     if bit(m.slsf1, 12) {
         out.push("MODELSPACENORMALS");
     }
-    if bit(m.slsf1, 23) {
+    if bit(m.slsf1, 23) || m.projected {
         out.push("PROJECTED_UV");
     }
     if !ps && bit(m.slsf2, 5) && m.has_vertex_colors {
+        out.push("VC");
+    }
+    // CS pairs VC with PROJECTED_UV (captures 8019/18019). The game sets the vertex-colour flag itself when the mesh has
+    // colours (owner, Note GG21), so VC follows the mesh, not SLSF2.5; a colour-less mesh gets none (vertexAlpha = 1).
+    if m.projected && m.has_vertex_colors {
         out.push("VC");
     }
     if pbr {
@@ -81,7 +91,8 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     }
     // TruePBR: CS enables glint from its remapped Glint flag (Fit_Slope without MLP/Soft/Back; 01 §3.1, P1 spec
     // §2.2); SLSF2.21 is cleared at load. Vanilla: Anisotropic_Lighting (SLSF2.21) → ANISO_LIGHTING.
-    if pbr && crate::material::remapped_glint(m.slsf2) {
+    // Projected glint (CS PBR::Flags::ProjectedGlint) needs the same GLINT code (capture 18019).
+    if pbr && (crate::material::remapped_glint(m.slsf2) || (m.projected && m.projected_glint)) {
         out.push("GLINT");
     } else if ps && !pbr && bit(m.slsf2, 21) {
         out.push("ANISO_LIGHTING");

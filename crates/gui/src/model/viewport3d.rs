@@ -16,7 +16,7 @@ use render3d::perf_log::{self, FrameStats, GapWatch};
 use render3d::scene::{Background, Camera, PointLight, Scene, AUTO_DISTANCE, AUTO_PITCH, AUTO_YAW};
 use render3d::{
     Availability, CompileDone, CompilePool, DebugOutput, EditKind, FrameTiming, LoadReport,
-    ParsedNif, Renderer, ShapeId, ShapeInfo, ShapeStatus, Variant,
+    ParsedNif, ProjectedLayer, Renderer, ShapeId, ShapeInfo, ShapeStatus, Variant,
 };
 use serde_json::json;
 use std::cell::RefCell;
@@ -676,6 +676,9 @@ pub enum V3Cmd {
     },
     /// The variant the next loads' resolver bytes count as (`Renderer::set_load_variant`); sticky.
     SetLoadVariant(Variant),
+    /// The material-object layer (`Renderer::set_projected_layer`, Note GG); sticky. Applied once content is loaded,
+    /// with that content's texture map, before a load in the same batch; answered with `ProjectedMissing`.
+    SetProjectedLayer(Option<ProjectedLayer>),
     /// The debug view (sticky, answered with `Reconfigured`). UV checker = render3d's slot-0 override (kept across
     /// loads, no reload either way).
     SetDebug(DebugView),
@@ -763,6 +766,8 @@ pub enum V3Reply {
     /// `Renderer::debug_supported()`: after the thread starts, after `SetShaders`, and `false` when a `SetDebug` was
     /// refused.
     DebugSupport(bool),
+    /// `Renderer::projected_missing()` after each applied `SetProjectedLayer`.
+    ProjectedMissing(Vec<String>),
 }
 
 /// `%LOCALAPPDATA%\sdc\shader-cache`.
@@ -853,6 +858,10 @@ pub struct Viewport3d {
     /// The variant the next load's resolver bytes count as, and the one the render thread was last told.
     load_variant: Variant,
     load_variant_sent: Variant,
+    /// The material-object layer (Note GG), as last set; replayed to a new render thread.
+    projected: Option<ProjectedLayer>,
+    /// The layer's canonical texture paths the content's texture map could not give (`V3Reply::ProjectedMissing`).
+    pub projected_missing: Vec<String>,
     content: Option<Content>,
     need_load: bool,
     /// The pending load is a reload of the same model (`set_content(.., true)`): a compile failure keeps the frame.
@@ -936,6 +945,8 @@ impl Viewport3d {
             debug_support: false,
             load_variant: Variant::Source,
             load_variant_sent: Variant::Source,
+            projected: None,
+            projected_missing: vec![],
             edits_sent: 0,
             edits_done: 0,
             reconf_sent: 0,
@@ -1515,8 +1526,35 @@ impl Viewport3d {
         if self.look.deferred && ctx.send(V3Cmd::SetDeferred(true)).is_ok() {
             self.reconf_sent += 1;
         }
+        if self.projected.is_some() {
+            let _ = ctx.send(V3Cmd::SetProjectedLayer(self.projected.clone()));
+        }
         self.thread = Some(ctx);
         true
+    }
+
+    /// The material-object layer (Note GG) as last set.
+    pub fn projected(&self) -> Option<&ProjectedLayer> {
+        self.projected.as_ref()
+    }
+
+    /// The material-object layer for every eligible shape (Note GG). The render thread resolves its four textures
+    /// through the loaded content's texture map, only when the layer turns on (None to Some); a value change rewrites
+    /// constants only. Nothing reloads.
+    pub fn set_projected_layer(&mut self, layer: Option<ProjectedLayer>) {
+        if self.projected == layer {
+            return;
+        }
+        if layer.is_none() {
+            self.projected_missing.clear();
+        }
+        self.projected.clone_from(&layer);
+        if let Some(t) = &self.thread {
+            if t.send(V3Cmd::SetProjectedLayer(layer)).is_ok() {
+                // The next request_frame draws it.
+                self.last_sent = None;
+            }
+        }
     }
 
     pub fn debug(&self) -> DebugView {
@@ -1905,6 +1943,9 @@ impl Viewport3d {
                     self.status = Some(DEBUG_UNSUPPORTED.into());
                 }
             }
+            // A reply for a layer turned off since is dropped.
+            V3Reply::ProjectedMissing(p) if self.projected.is_some() => self.projected_missing = p,
+            V3Reply::ProjectedMissing(_) => {}
         }
     }
 }
@@ -2303,6 +2344,8 @@ fn render_loop(
     // fallback (D-P36). A failed retry is told by the check after render only when its error is new.
     let mut want_deferred = false;
     let mut last_coverage: Option<String> = None;
+    // A material-object layer not applied yet: it waits for content, whose texture map resolves its textures.
+    let mut layer_due: Option<Option<ProjectedLayer>> = None;
     while let Ok(first) = rx.recv() {
         // Dropped at the end of the batch, after every other reply: answers each features/settings command.
         let mut ack = ReconfAck(0, &send);
@@ -2397,6 +2440,10 @@ fn render_loop(
                     tex.load = v;
                     None
                 }
+                V3Cmd::SetProjectedLayer(l) => {
+                    layer_due = Some(l);
+                    None
+                }
                 V3Cmd::SetDebug(d) => {
                     let on = d == DebugView::UvChecker;
                     if tex.checker != on {
@@ -2455,6 +2502,16 @@ fn render_loop(
                 render = None;
                 reload = true;
             }
+        }
+        // Before a load in this batch, so the load builds every shape with the layer once.
+        if let (Some(_), Some((_, c))) = (&layer_due, &last) {
+            let l = layer_due.take().expect("checked above");
+            let bsas = RefCell::new(HashMap::new());
+            let errors = RefCell::new(vec![]);
+            r.set_projected_layer(l, &resolver(c.textures(), &bsas, &errors));
+            send(V3Reply::ProjectedMissing(r.projected_missing()));
+            // Shapes re-permuted or rewritten: report them and redraw from the last camera (a load does both itself).
+            compiled_changed |= !reload;
         }
         if reload {
             if let Some((id, c)) = &last {

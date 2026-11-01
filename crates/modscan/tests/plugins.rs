@@ -778,3 +778,21 @@ fn active_plugins_survive_an_ansi_byte_and_a_bom_in_plugins_txt() {
     let inst = Instance::load(r, None).unwrap();
     assert!(active_plugins(&inst).contains(&ap("a.esp", false)));
 }
+
+/// MATO preview (Note GG): a stored plugin's path by name, ASCII case-insensitive; an unknown name is `None`.
+#[test]
+fn plugin_path_lookup() {
+    let d = tempfile::tempdir().unwrap();
+    let mut s = Store::open(&d.path().join("scan.db")).unwrap();
+    let f = modscan::plugin_store::PluginFile {
+        name: "Snow.esp",
+        path: r"C:\mods\A\Snow.esp",
+        size: Some(1),
+        mtime: 0,
+    };
+    s.write_plugin(&f, &esp::PluginFacts::default()).unwrap();
+    let want = Some(std::path::PathBuf::from(r"C:\mods\A\Snow.esp"));
+    assert_eq!(s.plugin_path("Snow.esp").unwrap(), want);
+    assert_eq!(s.plugin_path("sNOW.ESP").unwrap(), want);
+    assert_eq!(s.plugin_path("Other.esp").unwrap(), None);
+}

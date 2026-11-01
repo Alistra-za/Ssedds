@@ -3,8 +3,9 @@ use crate::plugins::{clamp_local, is_light};
 use crate::store::{intern_path, tex_query, Store, TexKey};
 use crate::ScanError;
 use esp::PluginFacts;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::path::PathBuf;
 
 /// Where a plugin came from. `size` is `None` after a failed read, so the row is never reused (read again next scan).
 #[derive(Debug, Clone)]
@@ -271,6 +272,19 @@ impl Store {
             out.insert(row.name.to_ascii_lowercase(), row);
         }
         Ok(out)
+    }
+
+    /// The stored file path of plugin `name` (ASCII case-insensitive, as plugin names are); `None` when not stored.
+    pub fn plugin_path(&self, name: &str) -> Result<Option<PathBuf>, ScanError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT path FROM plugin WHERE name = ?1 COLLATE NOCASE",
+                [name],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .map(PathBuf::from))
     }
 
     /// Load-order FormIDs and winners (ruling R1/R2). `lo`: (plugin id, load-order position) of every active plugin.

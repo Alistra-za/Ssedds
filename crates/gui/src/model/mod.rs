@@ -1936,6 +1936,23 @@ impl AppModel {
                 if self.review.is_none() {
                     return;
                 }
+                // Note GH8: no project means no texture run (`start_export_pass` needs one): the NIF export is due now,
+                // and Review closes as `start_export_pass` closes it, keeping its NIF answers for that export.
+                if self.root.is_none() {
+                    match self.review_gate() {
+                        Ok(_) => {
+                            self.review = None;
+                            self.show_tab(bottom::BottomTab::Files);
+                            self.nif_export_due = true;
+                        }
+                        Err(why) => {
+                            self.status_line = format!("Export not started: {why}");
+                            self.messages
+                                .log(messages::Severity::Info, self.status_line.clone());
+                        }
+                    }
+                    return;
+                }
                 // Never on a stale plan, whoever calls: wait again for the plan or the scan read in flight.
                 if self.planning.is_some() || self.votes_pending.is_some() {
                     self.continue_after_plan = Some(how);

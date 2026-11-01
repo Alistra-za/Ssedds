@@ -1122,7 +1122,7 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     wait_pg(&mut m);
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)");
+    h.get_by_label("In game");
     h.get_by_label(NO_MATCH);
     let m = h.state_mut();
     m.set_view_source(true);
@@ -1264,7 +1264,8 @@ fn edit_opens_on_the_card_picked_before_and_locks_the_shapes_column() {
         h.state().edit.as_ref().unwrap().selection,
         Selection::Shape(s.block)
     );
-    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes");
+    // Note GH4: the toggle names the file while a NIF is selected.
+    let shapes = h.get_by_role_and_label(AkRole::Button, "Shapes of x.nif");
     assert!(
         shapes.accesskit_node().is_disabled(),
         "locked while editing"
@@ -2031,7 +2032,7 @@ fn edit_controls_have_names_and_roles() {
     h.run_steps(2);
     h.get_by_role_and_label(AkRole::ComboBox, "Shader type");
     h.get_by_role_and_label(AkRole::ColorWell, "Specular colour");
-    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)");
+    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)");
     h.get_by_label("Alpha tab").click();
     h.run_steps(2);
     for l in ["Source", "Destination", "Function"] {
@@ -2152,17 +2153,17 @@ fn the_edit_panel_fits_beside_the_3d_view_with_the_header_and_bottom_panel() {
         "Alpha tab",
         "Controllers tab",
         "Extra data tab",
-        "Undo NIF edit",
-        "Redo NIF edit",
     ] {
-        // `get_by_label` panics on two matches: the header's Undo/Redo must not share the panel's names (rule 8.4).
         let r = h.get_by_label(l).rect();
         assert!(
             edit.contains(r.center()),
             "{l} {r:?} outside the panel {edit:?}"
         );
     }
-    // Note FC12 (fix round 1): the header names whose history it acts on.
+    // Note GH2: the panel has no Undo / Redo of its own; the header names whose history it acts on (Note FC12).
+    for l in ["Undo NIF edit", "Redo NIF edit"] {
+        assert!(h.query_by_label(l).is_none(), "{l} is back in the panel");
+    }
     h.get_by_label("Undo (NIF edit history)");
     h.get_by_label("Redo (NIF edit history)");
     // Meshes UI T3: the footer sits under the tabs, inside the panel, with its blocked reason; Note GD2: its button
@@ -3479,7 +3480,7 @@ fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
     h.get_by_label("Blocked: 1 edit cannot be applied.");
     h.get(row(": SLSF1 flags"));
     assert!(h.query_by_label_contains("Slsf1").is_none());
-    h.get_by_label_contains(": Texture slot 0: ");
+    h.get_by_label_contains(": Texture slot 1: ");
     // Closed by hand, Show opens it again.
     h.get_by_label("Pending edits (2)").click();
     h.run_steps(3);
@@ -3490,13 +3491,15 @@ fn a_red_row_opens_the_pending_list_and_rows_read_as_words() {
     h.get(row(": SLSF1 flags"));
 }
 
-/// Meshes UI T3: without an export folder the block stays and says why it cannot export.
+/// Meshes UI T3: without an export folder Review… stays on. Note GH5: an untouched session reads the idle "No edits" line,
+/// not a red block (an edit with no folder reads "Skipped until an export folder is chosen", pinned below).
 #[test]
 fn a_read_only_session_shows_the_no_export_folder_reason() {
     let m = direct(scenes::shared_alpha_and_set());
     let mut h = view(m);
     h.run_steps(3);
-    h.get_by_label(&format!("Blocked: {NO_EXPORT_FOLDER}"));
+    h.get_by_label(NO_EDITS);
+    assert!(h.query_by_label_contains("Blocked").is_none());
     // Note GD2: Review… stays on, so Review can show the reason on the NIF's row.
     assert!(!h.get(review_button()).accesskit_node().is_disabled());
 }
@@ -3567,7 +3570,7 @@ fn a_path_typed_without_enter_is_committed_by_the_review_click() {
     gloss(&mut m, 12.5);
     let mut h = view(m);
     h.run_steps(3);
-    let field = "Diffuse path (slot 0)";
+    let field = "Diffuse path (slot 1)";
     h.get_by_role_and_label(AkRole::TextInput, field).focus();
     h.run_steps(1);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
@@ -3619,6 +3622,14 @@ fn both_histories(ops: usize) -> (tempfile::TempDir, tempfile::TempDir, AppH) {
 }
 
 fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile::TempDir, AppH) {
+    in_the_meshes_view_sized(model, ops, egui::vec2(1400.0, 900.0))
+}
+
+fn in_the_meshes_view_sized(
+    model: sdc_gui::model::AppModel,
+    ops: usize,
+    size: egui::Vec2,
+) -> (tempfile::TempDir, AppH) {
     let d = files(false);
     let mut app = sdc_gui::app::SdcApp::new(model);
     app.meshes.procs = sdc_gui::model::meshes::no_procs;
@@ -3634,12 +3645,10 @@ fn in_the_meshes_view(model: sdc_gui::model::AppModel, ops: usize) -> (tempfile:
         app.meshes.edit.as_mut().unwrap().flush();
     }
     let mut frame = eframe::Frame::_new_kittest();
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1400.0, 900.0))
-        .build_ui_state(
-            move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
-            app,
-        );
+    let mut h = Harness::builder().with_size(size).build_ui_state(
+        move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
+        app,
+    );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
     h.run_steps(4);
@@ -3975,10 +3984,15 @@ fn no_export_folder_blocks_the_nif_row() {
     assert_eq!(m.edit_mod(), None);
     m.open_edit();
     assert_eq!(m.error, None, "the edit opens");
+    // Note GH5: nothing edited yet reads NO_EDITS; the first edit brings the folder's reason.
     let e = m.edit.as_ref().unwrap();
-    assert_eq!(e.blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    assert_eq!(e.blocked.as_deref(), Some(NO_EDITS));
     assert_eq!(NO_EXPORT_FOLDER, "No export folder chosen");
     gloss(&mut m, 12.5);
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EXPORT_FOLDER)
+    );
     assert_eq!(m.edit.as_ref().unwrap().doc_path, autosave(&d));
     assert_eq!(load(&autosave(&d)).unwrap().unwrap().ops.len(), 1);
     assert!(
@@ -4939,8 +4953,8 @@ fn the_clock_row_fits_the_centre_column() {
         nodes.push(h.get_by_label("Play"));
         nodes.push(h.get_by_label("Loop"));
         // v2 B8: the edit-mode toggle above them, too.
-        nodes.push(h.get_by_label("In game (simulated)"));
-        nodes.push(h.get_by_label("Edited source"));
+        nodes.push(h.get_by_label("In game"));
+        nodes.push(h.get_by_label("Source"));
         let speed: Vec<_> = h.query_all_by_label("Speed").collect();
         assert!(!speed.is_empty(), "the Speed label and its value");
         nodes.extend(speed);
@@ -6528,7 +6542,7 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     m.select_edit(Selection::Shape(shape));
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)").click();
+    h.get_by_label("In game").click();
     h.run_steps(4);
     wait_pg(h.state_mut());
     h.run_steps(4);
@@ -6548,7 +6562,7 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     );
     assert_eq!(g.params.uv_offset[0], 0.25, "the edit survives the sim");
 
-    h.get_by_label("Edited source").click();
+    h.get_by_label("Source").click();
     h.run_steps(4);
     let m = h.state();
     assert!(m.view_source);
@@ -6584,6 +6598,91 @@ fn a_second_switch_to_in_game_does_not_read_the_json_again() {
         notes(m, shape)[0],
         r"In game: PGPatcher applies PBRNIFPatcher\x.json."
     );
+}
+
+/// Note GH1 (review D5): two lit shapes, S0 naming `textures\white.dds` (A's x.json matches it; only the PBR copy
+/// exists) and S1 naming `textures\nowhere.dds` (no file, no JSON entry).
+fn supplied_and_missing() -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    let names = [b.string("S0"), b.string("S1")];
+    for (i, name) in names.iter().enumerate() {
+        b.block("BSTriShape", one_tri(*name, 2 + i as i32));
+    }
+    for i in 0..2 {
+        b.block("BSLightingShaderProperty", scenes::lsp(0, 4 + i));
+    }
+    for t in ["textures\\white.dds", "textures\\nowhere.dds"] {
+        b.block("BSShaderTextureSet", scenes::texset(&[t]));
+    }
+    b.bytes()
+}
+
+const PG_SUPPLIED: &str =
+    "1 texture path is replaced by PGPatcher at run time: switch to In game to see them";
+
+/// Note GH1 (A26): the toggle reads `In game` / `Source` in and out of Edit.
+#[test]
+fn the_in_game_toggle_has_one_label_pair_in_and_out_of_edit() {
+    let d = pg_files();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    assert!(m.pair.is_some(), "PGP's copy makes the pair");
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game");
+    h.get_by_label("Source");
+    h.state_mut().open_edit();
+    h.run_steps(4);
+    assert!(h.state().edit.is_some());
+    h.get_by_label("In game");
+    h.get_by_label("Source");
+    for old in ["In game (simulated)", "Edited source"] {
+        assert!(h.query_by_label(old).is_none(), "{old}");
+    }
+}
+
+/// Note GH1 (review D5, brief Review Focus 1): on the source side a path PGPatcher's JSON replaces is one grey line
+/// naming the toggle's In game label, with the path on hover; a path nothing supplies stays a `Missing texture:` line.
+#[test]
+fn source_lists_paths_pgpatcher_supplies_on_one_line_and_keeps_missing_ones() {
+    let d = pg_files();
+    put(
+        d.path(),
+        "mods/A/meshes/x.nif",
+        Some(&supplied_and_missing()),
+    );
+    let mut m = pg_session_in(d.path());
+    assert!(m.view_source);
+    // The source side reads the JSON too.
+    wait_pg(&mut m);
+    // What render3d lists for this content: neither source path is in the scan.
+    m.v3.report = Some(render3d::LoadReport {
+        missing_textures: vec!["textures/white.dds".into(), "textures/nowhere.dds".into()],
+        ..Default::default()
+    });
+    m.poll();
+    assert_eq!(m.edit.as_ref().unwrap().pg_supplied, ["textures/white.dds"]);
+    assert_eq!(
+        m.v3.report.as_ref().unwrap().missing_textures,
+        ["textures/nowhere.dds"]
+    );
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Missing texture: textures/nowhere.dds");
+    assert!(h
+        .query_by_label("Missing texture: textures/white.dds")
+        .is_none());
+    let paths = |h: &Harness<'_, MeshesModel>| h.query_all_by_label("textures/white.dds").count();
+    let before = paths(&h);
+    h.get_by_label(PG_SUPPLIED).hover();
+    h.run_steps(30);
+    assert_eq!(paths(&h), before + 1, "the path on hover");
+    // In game shows PGPatcher's paths: no grey line there.
+    h.state_mut().set_view_source(false);
+    h.state_mut().poll();
+    h.run_steps(4);
+    assert!(h.query_by_label(PG_SUPPLIED).is_none());
 }
 
 /// `n` BSTriShapes, each with its own BSLSP and a texture set naming `textures\white.dds`.
@@ -6989,9 +7088,14 @@ fn a_folder_scan_says_in_game_needs_an_instance() {
 /// Fix F3: an instance that cannot be read says so, in place of the scope line; no shape claims "no match".
 #[test]
 fn an_unreadable_instance_has_its_own_line() {
-    let (d, mut m) = pg_session();
-    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    let d = pg_files();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    // Before Edit: the JSON read starts when the edit opens (Note GH1).
     std::fs::remove_file(d.path().join("ModOrganizer.ini")).unwrap();
+    m.open_edit();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
     m.select_edit(Selection::Shape(shape));
     in_game(&mut m);
     assert!(notes(&m, shape).is_empty());
@@ -9296,7 +9400,7 @@ fn shader_tab_shows_slots_first_and_flags_closed() {
     let mut h = view(m);
     h.run_steps(2);
     let slot = h
-        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 0)")
+        .get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)")
         .rect();
     let ty = h
         .get_by_role_and_label(AkRole::ComboBox, "Shader type")
@@ -9477,7 +9581,7 @@ fn repeated_fix_and_conflict_buttons_have_unique_names() {
     );
     let mut h = view(m);
     h.run_steps(2);
-    h.get_by_role_and_label(AkRole::Button, "Fix slot 0: Not relative to Data");
+    h.get_by_role_and_label(AkRole::Button, "Fix slot 1: Not relative to Data");
     // A conflict: the source's own glossiness changes on disk under the edit.
     let (d, mut m) = export_session();
     m.open_edit();
@@ -9745,12 +9849,12 @@ fn in_game_label_reads_simulated_as() {
     m.select_edit(Selection::Shape(shape));
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)").click();
+    h.get_by_label("In game").click();
     h.run_steps(4);
     wait_pg(h.state_mut());
     h.run_steps(4);
     h.get_by_label(pgpsim::SIMULATED_AS);
-    h.get_by_label("In game (simulated)").hover();
+    h.get_by_label("In game").hover();
     h.run_steps(30);
     assert_eq!(
         h.query_all_by_label(pgpsim::SIMULATED_AS).count(),
@@ -9827,7 +9931,7 @@ fn empty_rmaos_slot_is_a_row() {
     );
     assert_eq!(
         nif::edit::validate::EMPTY_RMAOS,
-        "Slot 5 (RMAOS) is empty: in game the mesh renders fully metallic"
+        "Slot 6 (RMAOS) is empty: in game the mesh renders fully metallic"
     );
     // GD1: the worklist row; the slot is not a `Field`, so the row names it and has no field.
     use sdc_gui::model::meshes::{NifLevel, NifTab};
@@ -10816,4 +10920,598 @@ fn a_cancelled_export_drops_the_overwrite_answer() {
         theirs,
         "no Export without a new answer"
     );
+}
+
+// ---- Note GH5, GH8: the footer before any edit, and Review's NIF export with no project ----
+
+/// Note GH5: nothing edited is the idle state with no export folder too (the folder check used to come first and
+/// showed a red `Blocked: No export folder chosen` over an untouched edit).
+#[test]
+fn an_untouched_edit_with_no_folder_is_idle_not_blocked() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EDITS),
+        "NO_EDITS comes before NO_EXPORT_FOLDER"
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label(NO_EDITS);
+    h.get_by_label("idle");
+    assert!(h.query_by_label_contains("Blocked").is_none());
+}
+
+/// Note GH5: one edit and no folder is Review's own case (a weak `skipped` line, not a block): the footer says the
+/// same, and the Review row still carries `NO_EXPORT_FOLDER`.
+#[test]
+fn an_edit_with_no_folder_reads_skipped_until_a_folder_is_chosen() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert_eq!(
+        m.edit.as_ref().unwrap().blocked.as_deref(),
+        Some(NO_EXPORT_FOLDER)
+    );
+    assert_eq!(review_row(&m).blocked.as_deref(), Some(NO_EXPORT_FOLDER));
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label("Skipped until an export folder is chosen");
+    h.get_by_label("idle");
+    assert!(h.query_by_label_contains("Blocked").is_none());
+}
+
+/// The app in the Meshes view with no project open, gui.toml naming `export` (or nothing), and `ops` pending edits.
+fn no_project_app(export: Option<&Path>, ops: usize) -> (tempfile::TempDir, AppH) {
+    app_data();
+    let settings = sdc_gui::settings::GuiSettings {
+        export_folder: export.map(Path::to_path_buf),
+        ..Default::default()
+    };
+    let model = sdc_gui::model::AppModel::new(settings, None, support::session());
+    assert!(model.root.is_none());
+    in_the_meshes_view(model, ops)
+}
+
+/// Every file under `p` except the scan store, which sqlite may touch when only read.
+fn tree(p: &Path) -> Vec<std::path::PathBuf> {
+    let mut v = vec![];
+    let mut todo = vec![p.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let q = e.path();
+            if q.is_dir() {
+                todo.push(q);
+            } else if !e.file_name().to_string_lossy().starts_with("scan.db") {
+                v.push(q);
+            }
+        }
+    }
+    v.sort();
+    v
+}
+
+/// Note GH8: with no project and gui.toml's folder, Review's Export is on, reads `Export 1 NIF edit`, and writes the
+/// NIF alone under that folder: no texture run, no `sdc-out`.
+#[test]
+fn meshes_only_review_exports_the_nif_edit() {
+    let out = tempfile::tempdir().unwrap();
+    let (_d, mut h) = no_project_app(Some(out.path()), 1);
+    let (_path, out_path, bytes) = nif_out(&h);
+    assert!(out_path.starts_with(out.path()), "{out_path:?}");
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(h.state().model.review_gate(), Ok((0, 0)));
+    let b = h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit");
+    assert!(!b.accesskit_node().is_disabled());
+    h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit")
+        .click();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).ok(), Some(bytes));
+    assert!(out_path.starts_with(out.path().join("meshes")));
+    assert!(h.state().model.review.is_none(), "Review closes");
+    assert!(h.state().model.export.running.is_none(), "no texture run");
+    assert!(h
+        .state()
+        .model
+        .messages
+        .entries()
+        .any(|e| e.text == "NIF edits written: 1 file"));
+    assert!(!out.path().join("sdc-out").exists());
+    assert!(!Path::new("sdc-out").exists());
+}
+
+/// Note GH8 / Review Focus 2: no project and no folder chosen: the gate says so, Export is off, nothing is written.
+#[test]
+fn meshes_only_without_a_folder_writes_nothing() {
+    let (d, mut h) = no_project_app(None, 1);
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().model.review_gate(),
+        Err("No export folder chosen".to_string())
+    );
+    assert!(h.query_all_by_label("No export folder chosen").count() >= 1);
+    let before = tree(d.path());
+    assert!(h
+        .get_by_role_and_label(AkRole::Button, "Export 0 NIF edits")
+        .accesskit_node()
+        .is_disabled());
+    h.state_mut().model.export_from_review();
+    h.run_steps(6);
+    assert!(h.state().model.review.is_some(), "Review stays open");
+    assert!(!h
+        .state()
+        .model
+        .messages
+        .entries()
+        .any(|e| e.text.starts_with("NIF edits")));
+    assert_eq!(tree(d.path()), before);
+    assert!(!d.path().join("sdc-out").exists());
+    assert!(!Path::new("sdc-out").exists());
+}
+
+/// Note GH8: a file Tessalith did not write at the export path is never overwritten without the row's answer.
+#[test]
+fn meshes_only_waits_for_a_foreign_answer() {
+    let out = tempfile::tempdir().unwrap();
+    let (_d, mut h) = no_project_app(Some(out.path()), 1);
+    let (_path, out_path, bytes) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    h.state_mut().model.open_review();
+    h.run_steps(4);
+    assert_eq!(
+        h.state().model.review_gate(),
+        Err("Answer Keep or Overwrite for x.nif".to_string())
+    );
+    h.state_mut().model.export_from_review();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).unwrap(), b"theirs");
+    h.get_by_label("Overwrite it").click();
+    h.run_steps(4);
+    assert_eq!(h.state().model.review_gate(), Ok((0, 0)));
+    h.get_by_role_and_label(AkRole::Button, "Export 1 NIF edit")
+        .click();
+    h.run_steps(6);
+    assert_eq!(std::fs::read(&out_path).unwrap(), bytes);
+}
+
+// ---- Note GH9: right-click `Export this NIF` on the Edit-mode 3D view ----
+
+const EXPORT_THIS_NIF: &str = "Export this NIF";
+
+/// Right-click the Meshes view's 3D image (the click lands on the image centre) and let the menu open.
+fn right_click_3d<S>(h: &mut Harness<'static, S>) {
+    h.get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .click_secondary();
+    h.run_steps(4);
+}
+
+fn is_disabled<S>(h: &Harness<'static, S>, label: &str) -> bool {
+    h.get_by_role_and_label(AkRole::Button, label)
+        .accesskit_node()
+        .is_disabled()
+}
+
+/// Q1, Q2, Q5: a plain right-click offers `Export this NIF`; it writes the open NIF alone and reports as Review does.
+#[test]
+fn right_click_on_the_3d_view_offers_export_this_nif() {
+    let (_t, _d, mut h) = review_app();
+    let (_path, out_path, out) = nif_out(&h);
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none());
+    right_click_3d(&mut h);
+    assert!(!is_disabled(&h, EXPORT_THIS_NIF));
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).ok(),
+        Some(out),
+        "the NIF is written"
+    );
+    assert!(h.state().model.review.is_none(), "no Review");
+    assert!(h.state().model.export.running.is_none(), "no texture run");
+    assert!(
+        h.query_by_label(EXPORT_THIS_NIF).is_none(),
+        "the menu closes"
+    );
+    assert!(
+        h.state()
+            .model
+            .messages
+            .entries()
+            .any(|e| e.text == "NIF edits written: 1 file"),
+        "the result goes through nif_export_result"
+    );
+    assert!(!h.state().meshes.edit.as_ref().unwrap().doc.pending());
+}
+
+/// Q5: the model keeps the result for the app to hand over.
+#[test]
+fn quick_export_keeps_its_result_for_the_app() {
+    let (d, mut m) = export_session();
+    m.open_edit();
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EDITS));
+    gloss(&mut m, 12.5);
+    assert_eq!(m.quick_export_block(), None);
+    m.quick_export();
+    assert_eq!(m.quick_export_result, Some(Ok(1)));
+    assert!(exported(&d).exists());
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EDITS));
+}
+
+/// Review Focus 3: a right-drag orbits and opens no menu.
+#[test]
+fn a_right_drag_orbits_and_opens_no_menu() {
+    let (_t, _d, mut h) = review_app();
+    let yaw = h.state().meshes.v3.orbit.yaw;
+    let c = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect()
+        .center();
+    let btn = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(btn(c, true));
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(c + egui::vec2(10.0 * k as f32, 0.0));
+        h.run_steps(1);
+    }
+    h.event(btn(c + egui::vec2(40.0, 0.0), false));
+    h.run_steps(4);
+    assert_ne!(h.state().meshes.v3.orbit.yaw, yaw, "the drag orbited");
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none(), "no menu");
+}
+
+/// Review Focus 1 (Q3): a file Tessalith did not write is never overwritten by the one-click export: it opens
+/// Review on that row; after Overwrite there, the next one-click writes.
+#[test]
+fn quick_export_never_overwrites_a_foreign_file() {
+    let (_t, _d, mut h) = review_app();
+    let (path, out_path, out) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    right_click_3d(&mut h);
+    assert!(
+        !is_disabled(&h, EXPORT_THIS_NIF),
+        "a foreign file is Review's question"
+    );
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        b"theirs",
+        "nothing written"
+    );
+    assert!(h.state().model.review.is_some(), "Review opens on the row");
+    h.get_by_label(&format!("{path} was not written by Tessalith"));
+    assert!(h
+        .state()
+        .model
+        .messages
+        .entries()
+        .all(|e| !e.text.starts_with("NIF edits")));
+    h.state_mut()
+        .meshes
+        .set_nif_answer(&path, GuardChoice::Overwrite, sha(b"theirs"));
+    h.run_steps(2);
+    right_click_3d(&mut h);
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(6);
+    assert_eq!(
+        std::fs::read(&out_path).unwrap(),
+        out,
+        "the answer let it write"
+    );
+}
+
+/// Final review Minor 2: with a foreign file at the path the enabled item's hover says the click opens Review.
+#[test]
+fn quick_export_hover_says_a_foreign_file_opens_review() {
+    let (_t, _d, mut h) = review_app();
+    let (_path, out_path, _out) = nif_out(&h);
+    std::fs::create_dir_all(out_path.parent().unwrap()).unwrap();
+    std::fs::write(&out_path, b"theirs").unwrap();
+    h.run_steps(4);
+    assert!(h.state().meshes.quick_export_asks());
+    right_click_3d(&mut h);
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    h.get_by_label(
+        "The file on disk was not written by Tessalith: opens Review to answer Keep or Overwrite",
+    );
+    assert!(h
+        .query_by_label("Write this NIF to the export folder now, without Review")
+        .is_none());
+}
+
+/// Q4: with no export folder the item is off with the reason, and `Choose export folder…` asks for the picker.
+#[test]
+fn quick_export_is_off_without_a_folder_and_offers_the_picker() {
+    let (_d, mut m) = export_session();
+    m.set_nif_export_root(None);
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    assert_eq!(m.quick_export_block().as_deref(), Some(NO_EXPORT_FOLDER));
+    let mut h = view(m);
+    h.run_steps(3);
+    assert_eq!(h.query_all_by_label("No export folder chosen").count(), 0);
+    right_click_3d(&mut h);
+    assert!(is_disabled(&h, EXPORT_THIS_NIF));
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    assert!(
+        h.query_all_by_label("No export folder chosen").count() >= 1,
+        "the hover says why"
+    );
+    assert!(!h.state().pick_export_folder_request);
+    h.get_by_role_and_label(AkRole::Button, "Choose export folder…")
+        .click();
+    h.run_steps(2);
+    assert!(h.state().pick_export_folder_request);
+}
+
+/// Q2: while a texture export runs the item is off, with the reason on hover.
+#[test]
+fn quick_export_is_off_while_an_export_runs() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    gloss(&mut m, 12.5);
+    m.export_running = true;
+    assert_eq!(
+        m.quick_export_block().as_deref(),
+        Some("An export is running")
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    right_click_3d(&mut h);
+    assert!(is_disabled(&h, EXPORT_THIS_NIF));
+    let c = h
+        .get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .rect()
+        .center();
+    h.hover_at(c);
+    h.run_steps(3);
+    h.get_by_label("An export is running");
+    h.get_by_role_and_label(AkRole::Button, EXPORT_THIS_NIF)
+        .click();
+    h.run_steps(3);
+    assert_eq!(
+        h.state().quick_export_result,
+        None,
+        "a disabled item writes nothing"
+    );
+}
+
+/// Q1: the set preview's 3D view (the same `image()`) gets no menu.
+#[test]
+fn the_set_preview_has_no_export_menu() {
+    use sdc_gui::model::set_preview::{SetPreview, DEFAULT_CAP};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::pbr_opened_plain(d.path());
+    let key = sdc_gui::model::pbr_export::json_entries(&m)
+        .into_iter()
+        .find(|(v, _)| v.id == "landscape/rock01")
+        .unwrap()
+        .0
+        .key;
+    m.select_set(&key);
+    m.settings.set_view_3d = true;
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(520.0, 1000.0))
+        .build_ui_state(
+            |ui, (m, s): &mut (sdc_gui::model::AppModel, SetPreview)| {
+                sdc_gui::ui::set_preview::draw(ui, m, s)
+            },
+            (m, SetPreview::new(None, None, None, DEFAULT_CAP)),
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    for _ in 0..3 {
+        h.run_steps(4);
+        let (m, s) = h.state_mut();
+        s.poll(&*m);
+    }
+    h.run_steps(4);
+    right_click_3d(&mut h); // finds the 3D image, so the view is drawn
+    assert!(h.query_by_label(EXPORT_THIS_NIF).is_none());
+}
+
+// ---- Note GH2, GH6, GH7: one Undo pair, the preview's minimum height, 1-based slot numbers ----
+
+/// GH2 (N2): the panel has no Undo / Redo of its own; the header's pair and Ctrl+Z step the NIF history.
+#[test]
+fn the_edit_panel_has_no_undo_redo_of_its_own() {
+    use egui::containers::panel::PanelState;
+    let (_t, _d, mut h) = both_histories(1);
+    let edit = PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .unwrap()
+        .outer_rect;
+    for l in ["Undo NIF edit", "Redo NIF edit"] {
+        assert!(h.query_by_label(l).is_none(), "{l} is in the panel");
+    }
+    let in_panel = h
+        .query_all_by_role(AkRole::Button)
+        .filter(|n| edit.contains(n.rect().center()))
+        .filter(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("Undo") || l.starts_with("Redo"))
+        })
+        .count();
+    assert_eq!(in_panel, 0, "an Undo or Redo button inside the edit panel");
+    assert!(!header_button(&h, "Undo").accesskit_node().is_disabled());
+    // The header's own text names the step.
+    let hdr = sdc_gui::ui::header::undo_button(
+        sdc_gui::ui::meshes::undo_target(&h.ctx).as_ref(),
+        true,
+        None,
+    );
+    assert!(hdr.text.starts_with("Undo NIF edit: "), "{}", hdr.text);
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(nif(&h), (0, true), "Ctrl+Z undid the NIF step");
+}
+
+/// GH6 (N6): the lines above the 3D frame give way, so the frame keeps 160 px, fully on screen, while the window has
+/// the room (Review dragged up to 400 px at 1536x864). Taller than that the room is gone: the bottom panel's own cap is
+/// in a main-team file, so past it the frame shrinks (the report's hand-off), but the lines above are already at their
+/// least.
+#[test]
+fn the_preview_keeps_160_px_with_review_open() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let mut tops = vec![];
+    for review_h in [345.0, 380.0, 400.0, 440.0, 480.0] {
+        let r = egui::Rect::from_min_size(
+            egui::pos2(8.0, hgt - review_h),
+            egui::vec2(w - 16.0, review_h),
+        );
+        h.ctx.data_mut(|d| {
+            d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+        });
+        h.run_steps(8);
+        let frame = h
+            .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+            .rect();
+        if review_h <= 400.0 {
+            assert!(
+                frame.height() >= 159.5,
+                "Review {review_h}: preview {frame:?}"
+            );
+            assert!(frame.max.y <= r.min.y, "{frame:?} under Review {r:?}");
+        }
+        tops.push(frame.min.y);
+    }
+    // The lines above give way first: the frame's top stops at the head's least once the room runs short.
+    assert!(
+        tops[0] > tops[4] + 20.0,
+        "the head did not give way: {tops:?}"
+    );
+    assert_eq!(tops[3], tops[4], "the head is at its least: {tops:?}");
+}
+/// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
+#[test]
+fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {
+    use egui::containers::panel::PanelState;
+    let mut m = direct(scenes::shared_alpha_and_set());
+    select(&mut m, "A");
+    let mut h = view(m);
+    h.run_steps(2);
+    h.get_by_role_and_label(AkRole::TextInput, "Diffuse path (slot 1)");
+    h.get_by_role_and_label(AkRole::Button, "Browse for Diffuse (slot 1)");
+    assert!(h.query_by_label_contains("(slot 0)").is_none());
+    let edit = PanelState::load(&h.ctx, egui::Id::new("meshes-edit"))
+        .unwrap()
+        .outer_rect;
+    let name = h
+        .query_all_by_label("Diffuse")
+        .find(|n| edit.contains(n.rect().center()))
+        .expect("the slot's name in the form");
+    name.hover();
+    h.run_steps(30);
+    h.get_by_label_contains("NIF texture index 0");
+}
+
+/// GH7: the form shows the set editor's name for a True PBR slot, and keeps its own where the set editor has none.
+#[test]
+fn true_pbr_slots_use_the_set_editors_names() {
+    const PBR: u32 = 1 << 23;
+    assert_eq!(edit_slot_shown(0, 0, PBR, 2), "Emissive / Skin");
+    assert_eq!(edit_slot_shown(0, 0, PBR, 6), "Coat normal / Fuzz");
+    assert_eq!(edit_slot_shown(0, 0, PBR, 5), "RMAOS");
+    // No set editor label outside True PBR: the form's own names stay.
+    assert_eq!(edit_slot_shown(0, 0, 0, 2), "Rim / back-light");
+    assert_eq!(edit_slot_shown(1, 0, 0, 4), "Env cube");
+}
+
+/// GH2 (N2, the brief's test): Ctrl+Z after Add alpha takes the alpha op back out (the header's step is named for it).
+#[test]
+fn ctrl_z_undoes_add_alpha() {
+    let (_t, _d, mut h) = both_histories(0);
+    let m = &mut h.state_mut().meshes;
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    assert!(
+        e.model.shape(shape).unwrap().alpha.is_none(),
+        "the fixture's lit shape has no alpha"
+    );
+    let at = nif::edit::anchor_shape(&e.model, shape);
+    m.edit_push(
+        vec![Op::AddAlpha {
+            at,
+            flags: 0x00ED,
+            threshold: 128,
+        }],
+        None,
+    );
+    m.edit.as_mut().unwrap().flush();
+    h.run_steps(4);
+    let add_alpha = |h: &AppH| {
+        let e = h.state().meshes.edit.as_ref().unwrap();
+        e.doc
+            .ops
+            .iter()
+            .filter(|d| matches!(d.op, Op::AddAlpha { .. }))
+            .count()
+    };
+    assert_eq!(add_alpha(&h), 1);
+    assert_eq!(
+        h.state().meshes.edit.as_ref().unwrap().history.undo_label(),
+        Some("Add alpha")
+    );
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(add_alpha(&h), 0, "Ctrl+Z took the Add alpha back");
+}
+
+/// GH7: a pending texture row ("Texture slot 2") gives the NIF's own index on hover.
+#[test]
+fn a_pending_texture_row_gives_the_nif_index_on_hover() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[1]).into_owned();
+    let on_shape = nif::edit::anchor_shape(&e.model, shape);
+    // A path outside Windows-1252 is refused: a red row, so the pending list is open.
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at: on_shape,
+            slot: 1,
+            path: "textures\\\u{4e2d}.dds".into(),
+            base,
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label_contains(": Texture slot 2: ").hover();
+    h.run_steps(30);
+    h.get_by_label("NIF texture index 1");
 }
