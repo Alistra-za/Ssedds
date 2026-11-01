@@ -1564,48 +1564,48 @@ type MatoKey = (PathBuf, Option<std::time::SystemTime>, String);
 /// How the MATO record's plugin is read (`std::fs::read`; tests gate it).
 pub type PluginReader = Arc<dyn Fn(&Path) -> std::io::Result<Vec<u8>> + Send + Sync>;
 
-fn cs_default(fields: &[cs_pbr::Field], name: &str) -> f32 {
-    fields
-        .iter()
-        .find(|f| f.name == name)
-        .map_or(0.0, |f| f.default) as f32
+fn cs_field<'a>(fields: &'a [cs_pbr::Field], name: &str) -> Option<&'a cs_pbr::Field> {
+    fields.iter().find(|f| f.name == name)
 }
 
-/// `v` as a finite f32, else `default`.
-fn finite_or(v: Option<&Value>, default: f32) -> f32 {
-    v.and_then(Value::as_f64)
-        .map(|v| v as f32)
-        .filter(|v| v.is_finite())
-        .unwrap_or(default)
+/// `v` as a finite f32 inside `f`'s range (ends included; a field whose range is empty, `lo >= hi`, has none).
+fn cs_value(v: &Value, f: Option<&cs_pbr::Field>) -> Option<f32> {
+    let x = v.as_f64().map(|v| v as f32).filter(|v| v.is_finite())?;
+    let in_range = f.is_none_or(|f| {
+        let (lo, hi) = f.range;
+        lo >= hi || (lo as f32..=hi as f32).contains(&x)
+    });
+    in_range.then_some(x)
 }
 
-/// Number `name` of `o`, else its CS default in `fields` (a missing, wrong-typed or non-finite value).
+/// Number `name` of `o`, else its CS default in `fields` (a missing, wrong-typed, non-finite or out-of-range value).
 fn cs_num(o: &serde_json::Map<String, Value>, fields: &[cs_pbr::Field], name: &str) -> f32 {
-    finite_or(o.get(name), cs_default(fields, name))
+    let f = cs_field(fields, name);
+    o.get(name)
+        .and_then(|v| cs_value(v, f))
+        .unwrap_or(f.map_or(0.0, |f| f.default as f32))
 }
 
 /// The layer from a `cs_mato` block's values and its record's DATA (design D3, D5). `data` None: SnowMaterialObject1P's
-/// coverage (falloff 0.35 / 0.4, noise 48, colour white). A missing or wrong-typed field takes CS's default
-/// (`MATO_FIELDS`, `GLINT_FIELDS`); the glint is on only when `glintParameters.enabled` is true. Values outside the
-/// editor's slider ranges pass as CS reads them (it does not clamp JSON).
+/// coverage (falloff 0.35 / 0.4, noise 48, colour white). A missing, wrong-typed or non-finite field, or one outside
+/// the range the cs_mato card uses for it (`MATO_FIELDS`, `GLINT_FIELDS`; Task 3 fix round 1, I3), takes CS's
+/// default; the glint is on only when `glintParameters.enabled` is true.
 pub fn layer_from_block(
     values: &serde_json::Map<String, Value>,
     data: Option<&esp::MatoData>,
 ) -> ProjectedLayer {
     let mato = &cs_pbr::MATO_FIELDS;
-    // Three finite numbers, else the whole field's default.
+    // Three finite numbers in range, else the whole field's default.
+    let base = cs_field(mato, "baseColorScale");
     let base_color_scale = values
         .get("baseColorScale")
         .and_then(Value::as_array)
         .filter(|a| a.len() == 3)
         .and_then(|a| {
-            let c: Vec<f32> = a
-                .iter()
-                .map(|x| Some(finite_or(Some(x), f32::NAN)).filter(|v| v.is_finite()))
-                .collect::<Option<_>>()?;
+            let c: Vec<f32> = a.iter().map(|x| cs_value(x, base)).collect::<Option<_>>()?;
             Some([c[0], c[1], c[2]])
         })
-        .unwrap_or([cs_default(mato, "baseColorScale"); 3]);
+        .unwrap_or([base.map_or(1.0, |f| f.default as f32); 3]);
     let glint = values
         .get("glintParameters")
         .and_then(Value::as_object)

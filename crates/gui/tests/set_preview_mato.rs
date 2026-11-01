@@ -569,3 +569,53 @@ fn reads_are_kept_per_key() {
     assert_eq!(s.v3.projected(), Some(&snow(0.7)), "served from the cache");
     assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+/// Fix round 1, I3 (controller ruling): a finite value outside the cs_mato card's range for that field
+/// (`MATO_FIELDS` / `GLINT_FIELDS`) takes the field's CS default; the range ends are inside.
+#[test]
+fn out_of_range_values_fall_back() {
+    let l = layer_from_block(
+        &obj(json!({
+            "roughness": -1,
+            "specularLevel": 2,
+            "baseColorScale": [0.5, -0.1, 0.5],
+            "glintParameters": {
+                "enabled": true,
+                "screenSpaceScale": 4,
+                "logMicrofacetDensity": 41,
+                "microfacetRoughness": -0.1,
+                "densityRandomization": 6,
+            },
+        })),
+        None,
+    );
+    assert_eq!((l.roughness, l.specular_level), (1.0, 1.0));
+    assert_eq!(l.base_color_scale, [1.0; 3]);
+    assert_eq!(
+        l.glint,
+        Some(Glint {
+            screen_space_scale: 1.5,
+            log_microfacet_density: 40.0,
+            microfacet_roughness: 0.015,
+            density_randomization: 2.0,
+        })
+    );
+    assert_eq!(
+        layer_from_block(&obj(json!({"baseColorScale": [11, 1, 1]})), None).base_color_scale,
+        [1.0; 3]
+    );
+    // The ends of each range are kept.
+    let l = layer_from_block(
+        &obj(json!({
+            "roughness": 0,
+            "specularLevel": 1,
+            "baseColorScale": [0, 10, 0.5],
+            "glintParameters": {"enabled": true, "screenSpaceScale": 3, "logMicrofacetDensity": 0},
+        })),
+        None,
+    );
+    assert_eq!((l.roughness, l.specular_level), (0.0, 1.0));
+    assert_eq!(l.base_color_scale, [0.0, 10.0, 0.5]);
+    let g = l.glint.unwrap();
+    assert_eq!((g.screen_space_scale, g.log_microfacet_density), (3.0, 0.0));
+}
