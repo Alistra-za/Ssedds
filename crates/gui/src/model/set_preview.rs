@@ -1561,6 +1561,9 @@ pub fn mato_missing_text(path: &str) -> String {
 /// (plugin path, its mtime, EDID lower case): what one record read depends on.
 type MatoKey = (PathBuf, Option<std::time::SystemTime>, String);
 
+/// How the MATO record's plugin is read (`std::fs::read`; tests gate it).
+pub type PluginReader = Arc<dyn Fn(&Path) -> std::io::Result<Vec<u8>> + Send + Sync>;
+
 fn cs_default(fields: &[cs_pbr::Field], name: &str) -> f32 {
     fields
         .iter()
@@ -1698,8 +1701,11 @@ pub struct SetPreview {
     mato_data: Option<esp::MatoData>,
     /// A record was picked and its DATA is read or being read (false: default coverage).
     mato_found: bool,
-    mato_reading: bool,
+    /// Keys being read, picked or not: at most one read per key, and a finished one is cached under its own key.
+    mato_inflight: HashSet<MatoKey>,
     mato_cache: HashMap<MatoKey, Option<esp::MatoData>>,
+    /// Reads a plugin file (`std::fs::read`; a test seam).
+    mato_reader: PluginReader,
     /// The record is to be picked again on the next shown frame (the layer turned on, the set changed).
     mato_due: bool,
     /// The next pick runs even for an unchanged record (the layer turned on): its plugin may have changed on disk.
@@ -1775,8 +1781,9 @@ impl SetPreview {
             mato_key: None,
             mato_data: None,
             mato_found: false,
-            mato_reading: false,
+            mato_inflight: HashSet::new(),
             mato_cache: HashMap::new(),
+            mato_reader: Arc::new(|p: &Path| std::fs::read(p)),
             mato_due: false,
             mato_repick: false,
         }
@@ -1847,7 +1854,7 @@ impl SetPreview {
             })
             || self.querying.is_some()
             || self.loading.is_some()
-            || self.mato_reading
+            || !self.mato_inflight.is_empty()
             || (self.want_scene && !self.enc.paused && (self.shown || self.visible))
     }
 
@@ -2070,23 +2077,27 @@ impl SetPreview {
                     }
                     self.want_scene = true;
                 }
-                SpMsg::MatoRead { key, result }
-                    if self.mato_reading && self.mato_key.as_ref() == Some(&key) =>
-                {
-                    self.mato_reading = false;
+                SpMsg::MatoRead { key, result } if self.mato_inflight.remove(&key) => {
+                    // A read for a key that is no longer picked is cached for a later pick, never shown.
+                    let current = self.mato_key.as_ref() == Some(&key);
                     match result {
                         Ok(d) => {
                             self.mato_cache.insert(key, d);
-                            self.mato_data = d;
-                            self.mato_found = d.is_some();
+                            if current {
+                                self.mato_data = d;
+                                self.mato_found = d.is_some();
+                            }
                         }
                         // Counts as no record; not cached, so the next pick reads again.
-                        Err(e) => {
+                        Err(e) if current => {
                             self.mato_found = false;
                             self.notice(e);
                         }
+                        Err(_) => {}
                     }
-                    self.push_layer();
+                    if current {
+                        self.push_layer();
+                    }
                 }
                 _ => {}
             }
@@ -2577,12 +2588,17 @@ impl SetPreview {
         }
     }
 
+    /// Test seam: reads the MATO record's plugin with `r` instead of `std::fs::read`.
+    #[doc(hidden)]
+    pub fn set_plugin_reader(&mut self, r: PluginReader) {
+        self.mato_reader = r;
+    }
+
     fn forget_mato(&mut self) {
         self.mato_rec = None;
         self.mato_key = None;
         self.mato_data = None;
         self.mato_found = false;
-        self.mato_reading = false;
         self.mato_due = true;
     }
 
@@ -2616,7 +2632,6 @@ impl SetPreview {
         self.mato_key = None;
         self.mato_data = None;
         self.mato_found = false;
-        self.mato_reading = false;
         let Some(w) = rec else {
             return;
         };
@@ -2641,13 +2656,16 @@ impl SetPreview {
             self.mato_found = d.is_some();
             return;
         }
+        // Pending: counts as found. A key already being read is never read again (one read per key).
         self.mato_found = true;
-        self.mato_reading = true;
-        let (edid, same) = (w.edid, key.clone());
+        if !self.mato_inflight.insert(key.clone()) {
+            return;
+        }
+        let (edid, same, read) = (w.edid, key.clone(), self.mato_reader.clone());
         spawn(
             self.tx.clone(),
             move || {
-                let result = std::fs::read(&key.0)
+                let result = read(&key.0)
                     .map(|b| esp::mato_data(&b, &edid))
                     .map_err(|e| format!("{}: {e}", key.0.display()));
                 SpMsg::MatoRead { key, result }

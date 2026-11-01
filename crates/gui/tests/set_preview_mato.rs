@@ -459,3 +459,113 @@ fn turning_on_rereads_a_changed_plugin() {
     run(&mut s, &m);
     assert_eq!(s.v3.projected().map(|l| l.falloff_scale), Some(0.7));
 }
+
+/// A plugin reader that counts its calls and blocks each one until the test sends on the returned gate.
+fn gated_reader() -> (
+    PluginReader,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let rx = std::sync::Mutex::new(rx);
+    let calls = n.clone();
+    let r: PluginReader = std::sync::Arc::new(move |p: &Path| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = rx.lock().unwrap().recv();
+        std::fs::read(p)
+    });
+    (r, n, tx)
+}
+
+/// One shown frame with input (no waiting for work in flight).
+fn frame(s: &mut SetPreview, m: &AppModel) {
+    s.shown = true;
+    s.input = true;
+    s.poll(m);
+}
+
+/// Spins (no sleeps) until `n` reads have started.
+fn reads_started(n: &std::sync::atomic::AtomicUsize, want: usize) {
+    let t = Instant::now();
+    while n.load(std::sync::atomic::Ordering::SeqCst) < want {
+        assert!(
+            t.elapsed() < Duration::from_secs(30),
+            "the read did not start"
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// Fix round 1, I2: one read per key. A→B→A while A's read is pending reuses it (default coverage until it lands); a
+/// result for a key that is no longer current is cached but never reaches the layer.
+#[test]
+fn reads_are_kept_per_key() {
+    let inst = scan_fixture::instance_fixture("+A\n");
+    let db = scanned(inst.path());
+    let dir = tempfile::tempdir().unwrap();
+    let (mut m, mut s) = snow_preview(&db, dir.path());
+    let (a, b) = (rock_key(&m), other_key(&m));
+    let b_id = sdc_gui::model::sets::set_views(&m)
+        .into_iter()
+        .find(|v| v.key == b)
+        .unwrap()
+        .id;
+    m.add_cs_block(&b_id, Kind::Mato); // no EDIDs: default coverage
+    let (reader, n, gate) = gated_reader();
+    s.set_plugin_reader(reader);
+    let default = default_layer([1.0; 3], 1.0, 1.0);
+    let snow = |falloff_scale: f32| ProjectedLayer {
+        falloff_scale,
+        falloff_bias: 0.2,
+        noise_uv_scale: 30.0,
+        colour: [0.9, 0.8, 0.7],
+        ..default.clone()
+    };
+    s.set_mato_layer(true);
+    frame(&mut s, &m);
+    reads_started(&n, 1);
+    assert_eq!(
+        s.v3.projected(),
+        Some(&default),
+        "pending: default coverage"
+    );
+    assert!(s.busy());
+    m.select_set(&b);
+    frame(&mut s, &m);
+    m.select_set(&a);
+    frame(&mut s, &m);
+    assert_eq!(s.v3.projected(), Some(&default));
+    gate.send(()).unwrap();
+    run(&mut s, &m);
+    assert_eq!(s.v3.projected(), Some(&snow(0.5)));
+    assert_eq!(
+        n.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "A was read once"
+    );
+    // A new key for A (the plugin changed), pending while the user moves to B: its result is cached, not shown on B.
+    let esm = inst.path().join("Game/Data/Skyrim.esm");
+    let mut f = SNOW;
+    f[0] = 0.7;
+    std::fs::write(&esm, skyrim_esm(f)).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&esm)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(3600))
+        .unwrap();
+    s.set_mato_layer(false);
+    s.set_mato_layer(true);
+    frame(&mut s, &m);
+    reads_started(&n, 2);
+    m.select_set(&b);
+    frame(&mut s, &m);
+    gate.send(()).unwrap();
+    run(&mut s, &m);
+    assert_eq!(s.v3.projected(), Some(&default), "B keeps its own coverage");
+    m.select_set(&a);
+    frame(&mut s, &m);
+    assert_eq!(s.v3.projected(), Some(&snow(0.7)), "served from the cache");
+    assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
