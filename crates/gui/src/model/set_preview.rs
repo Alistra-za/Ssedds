@@ -1555,7 +1555,7 @@ pub const MATO_NO_RECORD: &str = "No MATO record in the load order; showing defa
 pub const MATO_PBR_ONLY: &str = "The JSON values apply to PBR shapes only.";
 /// The toggle's label and hover (Note GG); the toggle shows only for a set with a `cs_mato` block.
 pub const MATO_TOGGLE: &str = "Material object layer";
-pub const MATO_HOVER: &str = "Shows the snow/ash layer the game draws on statics that use this material object. Applies to PBR shapes; skinned shapes are not shown.";
+pub const MATO_HOVER: &str = "Shows the snow/ash layer the game draws on statics that use this material object. The material values change PBR shapes only; skinned, parallax and eye shapes draw without the layer.";
 
 pub fn mato_missing_text(path: &str) -> String {
     format!("{path} is not in the load order; showing a plain fallback")

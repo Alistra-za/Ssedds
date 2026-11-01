@@ -842,5 +842,5 @@ fn toggle_hover_text() {
     settle(&mut h);
     toggle(&h).hover();
     h.run_steps(12);
-    h.get_by_label("Shows the snow/ash layer the game draws on statics that use this material object. Applies to PBR shapes; skinned shapes are not shown.");
+    h.get_by_label("Shows the snow/ash layer the game draws on statics that use this material object. The material values change PBR shapes only; skinned, parallax and eye shapes draw without the layer.");
 }
