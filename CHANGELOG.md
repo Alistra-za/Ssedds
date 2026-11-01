@@ -4,6 +4,19 @@
 
 - The host plugins (chaiNNer, GIMP, Paint.NET, Photoshop) moved to branch `host-plugins` (bug fixes only, not kept in parity with the engine). `main` no longer builds them.
 - BC6H (HDR) at encoder effort `slowest` and `max` now uses a peak-preserving mode: small, very bright highlights such as a sun keep their brightness (venice_sunset's peak goes from 0.22 to 0.92 of the source). Other blocks encode as `veryslow`. Effort `veryslow` (the default) and below are unchanged. `--on-existing if-changed` re-encodes `pbr_emissive` and `hdr_sky`, the two types that are BC6H by default, once after upgrading. A texture of another type set to BC6H by hand is not re-encoded; to get the new mode for it, re-export it with `--on-existing overwrite`.
+- Meshes view: one flat list of NIF files titled **Meshes**, with a search over path or mod, an **Any mod** picker and chips (Wins, All, Overridden, Conflicted, Problems). Mod chips sit on the rows. **Show in Meshes** from a texture's Used by meshes adds a "Uses <texture>" chip.
+- NIF edits in the worklist: NIF warnings are worklist rows, **Export NIF** is a Review row with **Diff…** (a block diff), and NIF edits need an export folder you chose. An empty RMAOS slot is an amber row. Clip timing is editable. Cancelling Review writes no NIF edits.
+- The 3D **In game** preview simulates PGPatcher 2.3.1: a stock-patcher line, a JSON that would crash the game stops the run, and `disabled` in a complex material JSON is honoured.
+- Header and editor: **Export** stays neutral until the project is clean, and there is no inherited export folder. The set editor is one scrolling column; helpers are a collapsible group. Presets and the TruePBR JSON editor are centre-column tabs with **Pop out**. A built-in preset offers only Duplicate. One type picker. Problems rows accept their suggestion in one click. Diagnostic codes are on the hover and in Messages, not in the labels. Labels are plainer, with one word per concept.
+- Review: opens at 40 % of the window height, asks Half size as a question, waits for overwrite answers, lists stale outputs with **Delete**, and offers hand remedies as row buttons. Enter never saves, deletes or exports; Esc only closes.
+- Unsaved edits survive a crash: the next open restores them, with a toast that can undo it. After a lost graphics device the app restarts.
+- Automatic decisions (the ones Tessalith makes without asking) are recorded in `sdc.toml`, so the GUI and CLI agree on them.
+- After an upgrade, a notice says which outputs re-encode and why. `sdc validate`'s cube check on a 2D file (`_e` or under `textures\cubemaps\`) warns instead of failing.
+- Fixes:
+  - NIF validate reads non-ASCII texture paths and BSX names as Windows-1252, the same as apply.
+  - The 2D and set previews update when a helper's Invert or Read changes, or when a bake, cube face or derive source changes.
+  - Renaming a large selection no longer slows down quadratically.
+  - Dragging the Alpha threshold slider on a shared alpha property no longer loses the split.
 
 ## 1.1.0
 
