@@ -44,9 +44,7 @@ fn the_start_screen_offers_open_folder_recent_and_the_drop_hint() {
         h.query_all_by_label("Sets").next().is_none(),
         "no Sets column"
     );
-    for l in ["Mode", "Save"] {
-        h.get_by_label(l);
-    }
+    h.get_by_label("Save");
     header_export_label(&h);
 }
 

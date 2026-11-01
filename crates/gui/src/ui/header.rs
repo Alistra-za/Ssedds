@@ -1,4 +1,4 @@
-//! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the column eyes,
+//! The header (layout v2 A4): one row, Open ▾ · Undo · Redo | MO2… · Preset | the view tabs · the column eyes,
 //! then Export to ▾ · Save · Export at the right edge; then the status line and banner. Drawn in both views (C7).
 use super::meshes::UndoTarget;
 use crate::model::picker::{self, PickerPurpose};
@@ -30,14 +30,14 @@ const PATH_MIN_CHARS: usize = 12;
 /// Why the export folder cannot change now.
 pub const EXPORT_RUNNING_HOVER: &str = "An export is running: change the folder after it ends";
 
-fn target_name(t: Target) -> &'static str {
+pub(super) fn target_name(t: Target) -> &'static str {
     match t {
         Target::Cs => "cs",
         Target::Vanilla => "vanilla",
     }
 }
 
-fn target_help(t: Target) -> &'static str {
+pub(super) fn target_help(t: Target) -> &'static str {
     match t {
         Target::Cs => "Community Shaders: TruePBR sets and its packed maps",
         Target::Vanilla => {
@@ -83,7 +83,7 @@ pub fn draw(
     status(ui, model);
 }
 
-/// A4, left to right: Open ▾ · Undo · Redo | MO2… + Mode · Preset | the view tabs · the eyes (Textures view only),
+/// A4, left to right: Open ▾ · Undo · Redo | MO2… · Preset | the view tabs · the eyes (Textures view only),
 /// then Export to ▾ · Save · Export pushed to the right edge.
 fn row(
     ui: &mut egui::Ui,
@@ -95,7 +95,11 @@ fn row(
     open_menu(ui, model);
     undo_redo(ui, model);
     ui.separator();
-    mode_combo(ui, model, scan);
+    // Note F?16: the Mode control is in the Presets tab; MO2… stands alone, where the app has a scan model.
+    if let Some(m) = scan {
+        fit(ui, button_width(ui, "MO2…") + ui.spacing().item_spacing.x);
+        super::meshes::mo2_button(ui, m);
+    }
     preset_combo(ui, model);
     ui.separator();
     view_toggle(ui);
@@ -629,58 +633,6 @@ fn undo_redo(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-/// MO2… and Mode as one framed unit (Note BH6); MO2… only where the app has a scan model.
-fn mode_combo(
-    ui: &mut egui::Ui,
-    model: &mut AppModel,
-    scan: Option<&mut crate::model::meshes::MeshesModel>,
-) {
-    let gap = ui.spacing().item_spacing.x;
-    let mo2 = if scan.is_some() {
-        button_width(ui, "MO2…") + gap
-    } else {
-        0.0
-    };
-    fit(
-        ui,
-        mo2 + button_width(ui, "Mode") + gap + ui.spacing().combo_width + 8.0,
-    );
-    egui::Frame::new()
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(3, 0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(m) = scan {
-                    super::meshes::mo2_button(ui, m);
-                }
-                mode_picker(ui, model);
-            });
-        });
-}
-
-fn mode_picker(ui: &mut egui::Ui, model: &mut AppModel) {
-    ui.label("Mode");
-    let mut picked = model.target;
-    ui.add_enabled_ui(model.project.is_some(), |ui| {
-        egui::ComboBox::from_id_salt("mode")
-            .selected_text(target_name(model.target))
-            .show_ui(ui, |ui| {
-                for t in [Target::Cs, Target::Vanilla] {
-                    ui.selectable_value(&mut picked, t, target_name(t))
-                        .on_hover_text(target_help(t));
-                }
-            })
-            .response
-            .on_hover_text(
-                "The target the textures are converted for: cs or vanilla. Saved in sdc.toml as target.",
-            );
-    });
-    if picked != model.target {
-        model.set_target(picked);
-    }
-}
-
 /// The project's preset (AM12): the target's default, or a preset of this target (a user preset appears once saved).
 fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
     let default = format!(
@@ -688,6 +640,7 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         engine::presets::default_preset_for(model.target)
     );
     let cur = model.project_preset();
+    let mode = target_name(model.target);
     let gap = ui.spacing().item_spacing.x;
     fit(
         ui,
@@ -728,7 +681,11 @@ fn preset_combo(ui: &mut egui::Ui, model: &mut AppModel) {
         .selected_text(cur.clone().unwrap_or_else(|| default.clone()))
         .show_ui(ui, |ui| body(ui))
         .response
-        .on_hover_text("The preset the folder converts with. Saved in sdc.toml as preset.");
+        .on_hover_ui(|ui| {
+            ui.label(format!(
+                "The preset the folder converts with. Saved in sdc.toml as preset. Mode: {mode}; the list shows this mode's presets. Change the mode in Presets…."
+            ));
+        });
     // Note FC1 (AM14): a Problems row's `Choose preset…` opens the same menu under the combo, as a popup the header
     // owns (egui 0.36 has no public way to open a combo). A request is taken by the next pass that draws this combo
     // and honoured only within two passes of the click: one left while the combo was not drawn is dropped then, as

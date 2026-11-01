@@ -11,7 +11,7 @@ The window has two views, picked in the header: the Textures view (converter and
 The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](#the-2d-preview)).
 
 1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](#header).
-2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project.
+2. **MO2…, Preset** (header). **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The Mode (the target, `cs` or `vanilla`) is set in the [Presets](#presets) tab, not in the header. All three are saved with the project.
 3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns.
 4. **Export to ▾** (header, right; **More ▾** with no project open). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export](#export).
 5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same.
@@ -32,9 +32,8 @@ The line under the header is the status line: the file and set counts, a VRAM es
 |---|---|
 | **Open** | A menu: **Open folder…** (pick a source folder), then your recent folders (the last ten), or a greyed "No recent folders". You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
 | **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
-| **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Framed together with **MO2…**. |
 | **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
-| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
+| **Preset** | The preset the folder converts with (hover names the Mode; change it in **Presets…**): the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
 | **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
 | **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. Right after the view tabs, Textures view with a folder open only. |
 | **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. Until you choose a folder for the project (the folder you picked for another mod is not inherited) it reads **Export to: not chosen ▾**, and Review lists "No export folder chosen" with a **Choose the export folder…** button. With no project open the menu is a plain **More ▾**. A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab; the JSON's file name is its top field). |
@@ -452,6 +451,8 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 - **Toksvig gloss bake (opt-in).** Setting a `_n`'s *Normal handling* to **Renormalise and bake**, in a set with a complex-material `_m`, also bakes the normal's variance into that `_m`'s gloss. Off by default.
 
 ## Presets
+
+At the top of the tab, **This project (sdc.toml)** holds the **Mode** row: the project's target, `cs` or `vanilla`, saved in `sdc.toml` as `target` (it was in the header). It is greyed out with no folder open or a read-only `sdc.toml`. The project's target wins over a preset's own **Target**, as in `sdc.exe`; the editor's **Target** below sets the preset file's own value.
 
 **Presets…** (the last entry of the Preset combo in the header, or *Open the preset creator* in the command palette) opens the preset creator as a tab of the centre column. While Presets or the JSON editor is open there, tabs over the centre (**Selection**, **Presets**, **TruePBR JSON**) pick what it shows; clicking a texture or set brings **Selection** back. **Pop out** shows the view in a window of its own, for a second monitor; **Dock** puts it back in the centre; **Close** closes it. It edits your own presets, the files in `%APPDATA%\sdc\presets\` that the command line also loads.
 

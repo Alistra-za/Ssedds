@@ -1,4 +1,5 @@
 //! Note AM: the preset creator, a centre tab since Note FB7 (kittest). No presets folder: nothing can be written.
+mod support;
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use sdc_gui::model::AppModel;
@@ -282,6 +283,145 @@ fn the_families_show_in_order_with_their_hints() {
     let complex = h.get_by_label_contains("complex material —").rect().top();
     assert!(pbr < emissive && emissive < van, "{emissive}");
     assert!(van < glow && van < complex, "{glow} {complex}");
+}
+
+/// Note F?16: the Presets tab's project Mode row (the combo moved out of the header).
+fn mode_name(target: &str) -> String {
+    format!("Mode (this project): {target}")
+}
+
+fn preset_combo_text(h: &Harness<'static, AppModel>) -> String {
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .filter_map(|n| {
+            n.accesskit_node()
+                .value()
+                .or(n.accesskit_node().label())
+                .map(|v| v.to_string())
+        })
+        .find(|v| v.starts_with("default ("))
+        .expect("the Preset combo")
+}
+
+#[test]
+fn the_presets_tab_sets_the_project_mode() {
+    use engine::config::Target;
+    let d = tempfile::tempdir().unwrap();
+    let mut h = harness(support::pbr_opened(d.path()));
+    h.run();
+    h.query_all_by_role(eframe::egui::accesskit::Role::ComboBox)
+        .find(|n| {
+            n.accesskit_node()
+                .value()
+                .or(n.accesskit_node().label())
+                .is_some_and(|v| v.starts_with("default ("))
+        })
+        .expect("the Preset combo")
+        .click();
+    h.run();
+    h.get_by_label("Presets…").click();
+    h.run();
+    h.run();
+    h.state_mut().presets_model().select("cs-quality");
+    h.run();
+    h.get_by_label(&mode_name("cs")).click();
+    h.run();
+    h.get_by_role_and_label(eframe::egui::accesskit::Role::Button, "vanilla")
+        .click();
+    h.run();
+    // The target the plan reports lands with the re-plan.
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert_eq!(h.state().target, Target::Vanilla);
+    let text = h.state().project.as_ref().unwrap().text();
+    assert!(text.contains("target = \"vanilla\""), "{text}");
+    assert_eq!(h.state().undo_label(), Some("Mode"));
+    // Review Focus 7: the preset draft is untouched.
+    assert!(!h.state_mut().presets_model().dirty());
+    h.get_by_label(&mode_name("vanilla"));
+    let want = format!(
+        "default ({})",
+        engine::presets::default_preset_for(Target::Vanilla)
+    );
+    assert_eq!(preset_combo_text(&h), want);
+    h.state_mut().undo();
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    assert_eq!(h.state().target, Target::Cs);
+    h.get_by_label(&mode_name("cs"));
+}
+
+#[test]
+fn the_mode_row_is_off_with_no_folder() {
+    let mut m = AppModel::placeholder(GuiSettings::default());
+    m.open_presets();
+    let mut h = harness(m);
+    h.run();
+    let name = mode_name("cs");
+    let combo = h.get_by_label(&name);
+    assert!(combo.accesskit_node().is_disabled());
+    combo.hover();
+    h.run();
+    h.get_by_label_contains("Open a folder first");
+}
+
+#[test]
+fn the_mode_row_is_off_when_read_only() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    std::fs::write(d.path().join("textures/sdc.toml"), "this is = [not toml").unwrap();
+    m.reload_documents();
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    assert!(m.project.as_ref().unwrap().read_only());
+    m.open_presets();
+    let mut h = harness(m);
+    h.run();
+    let name = mode_name("cs");
+    let combo = h.get_by_label(&name);
+    assert!(combo.accesskit_node().is_disabled());
+    combo.hover();
+    h.run();
+    h.get_by_label_contains("sdc.toml is read-only");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("textures/sdc.toml")).unwrap(),
+        "this is = [not toml"
+    );
+}
+
+#[test]
+fn the_mode_row_shows_in_the_popped_out_window() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    m.open_presets();
+    m.presets_popped = true;
+    let mut h = harness(m);
+    h.run();
+    h.run();
+    h.get_by_label(&mode_name("cs"));
+    h.get_by_label("This project (sdc.toml)");
+}
+
+/// The plan's 1280 px capture of the Presets tab, as a test: the Mode row is there and its pieces do not overlap.
+#[test]
+fn the_mode_row_fits_at_1280() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = support::opened(d.path());
+    m.open_presets();
+    let mut h = Harness::builder()
+        .with_size(eframe::egui::vec2(1280.0, 800.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    let heading = h.get_by_label("This project (sdc.toml)").rect();
+    let label = h.get_by_label("Mode").rect();
+    let combo = h.get_by_label(&mode_name("cs")).rect();
+    let note = h.get_by_label("Wins over a preset's own Target.").rect();
+    let all = [heading, label, combo, note];
+    for (i, a) in all.iter().enumerate() {
+        assert!(a.right() <= 1280.5, "{a:?} runs off the window");
+        for b in &all[i + 1..] {
+            assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a:?} {b:?}");
+        }
+    }
 }
 
 /// The PBR / CS family comes first and is long: fold it so the Vanilla rows are on screen.

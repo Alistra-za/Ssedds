@@ -16,12 +16,11 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
 /// The controls every Textures header must show (plus "Export to: …", matched by its start).
-const CONTROLS: [&str; 11] = [
+const CONTROLS: [&str; 10] = [
     "Open",
     "Undo",
     "Redo",
     "MO2…",
-    "Mode",
     "Preset",
     "Textures view",
     "Meshes view",
@@ -148,7 +147,6 @@ fn assert_one_row_in_the_spec_order(h: &H) {
         ("Open", h.get_by_label("Open").rect()),
         ("Undo", h.get_by_label("Undo").rect()),
         ("Redo", h.get_by_label("Redo").rect()),
-        ("Mode", h.get_by_label("Mode").rect()),
         ("Preset", h.get_by_label("Preset").rect()),
         ("Textures view", h.get_by_label("Textures view").rect()),
         ("Meshes view", h.get_by_label("Meshes view").rect()),
@@ -178,7 +176,7 @@ fn assert_one_row_in_the_spec_order(h: &H) {
         );
     }
     // Export ends the row at the right edge, only the panel margin past it.
-    assert!(1600.0 - order[9].1.right() <= 16.5, "{:?}", order[9].1);
+    assert!(1600.0 - order[8].1.right() <= 16.5, "{:?}", order[8].1);
 }
 
 /// Task 12 (Note CN, owner answer 5): with an "Also export as" tick on, the header is the same one row, and the
@@ -305,6 +303,44 @@ fn the_export_chip_holds_at_three_widths() {
     }
 }
 
+/// Note F?16 (owner O7): the Mode control left the header for the Presets tab; the Preset menu stays. Plus the plan's
+/// capture check as a test: at 1100, 1280 and 1600 px nothing overlaps and MO2… stands in the row.
+#[test]
+fn the_header_has_no_mode_control() {
+    let d = tempfile::tempdir().unwrap();
+    for (w, meshes_view) in [
+        (1440.0, false),
+        (800.0, false),
+        (1440.0, true),
+        (800.0, true),
+        (1100.0, false),
+        (1280.0, false),
+        (1600.0, false),
+    ] {
+        let m = pbr_opened(&d.path().join(format!("{w}-{meshes_view}")));
+        let h = harness(m, w, meshes_view);
+        assert_no_overlap(&h, "header", w);
+        let header = outer(&h, "header");
+        let inside = |r: egui::Rect| header.contains_rect(r);
+        assert!(
+            !h.query_all_by_label("Mode").any(|n| inside(n.rect())),
+            "at {w}: the header has a Mode label"
+        );
+        assert!(
+            !h.query_all_by_role(Role::ComboBox).any(|n| {
+                inside(n.rect())
+                    && n.accesskit_node()
+                        .value()
+                        .or(n.accesskit_node().label())
+                        .is_some_and(|v| v == "cs" || v == "vanilla")
+            }),
+            "at {w}: the header has a Mode combo"
+        );
+        h.get_by_label("Preset");
+        h.get_by_label("MO2…");
+    }
+}
+
 /// Note BH15: the columns' eye toggles keep their accessible names and say whether the column shows.
 #[test]
 fn the_column_toggles_are_eyes_named_for_their_columns() {
@@ -411,7 +447,7 @@ fn the_meshes_header_never_overlaps() {
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, true);
         assert_no_overlap(&h, "header", w);
-        for c in ["Open", "Undo", "MO2…", "Mode", "Meshes view", "Save"] {
+        for c in ["Open", "Undo", "MO2…", "Meshes view", "Save"] {
             h.get_by_label(c);
         }
         header_export_label(&h);
