@@ -2388,6 +2388,56 @@ fn the_project_read_lands_after_polling_and_an_older_revs_answer_is_dropped() {
     );
 }
 
+/// Note GH3 fix round 2: at most one pill read runs at a time. Three key changes while a read is held start nothing;
+/// when it ends its answer is dropped and only the newest key's read starts (the keys in between never do).
+#[test]
+fn one_project_read_runs_at_a_time_and_only_the_newest_key_starts_next() {
+    use std::sync::atomic::Ordering;
+    let (d, mut m) = project_textures();
+    let gate = Arc::new(std::sync::Mutex::new(()));
+    let held = gate.lock().unwrap();
+    m.project_gate = Some(gate.clone());
+    m.set_project_root(Some(&d.path().join("plain")));
+    m.set_project_textures(1, &["textures/pbr/xmead/ale_bc.dds".to_string()]);
+    assert!(m.project_nifs().is_none());
+    assert_eq!(m.project_alive.load(Ordering::SeqCst), 1);
+    for (rev, p) in [
+        (2, "textures/none.dds"),
+        (3, "textures/none2.dds"),
+        (4, "textures/other/ale_bc.dds"),
+    ] {
+        m.set_project_textures(rev, &[p.to_string()]);
+        assert!(
+            m.project_nifs().is_none(),
+            "rev {rev}: no pill while a read runs"
+        );
+        m.poll();
+        assert_eq!(
+            m.project_alive.load(Ordering::SeqCst),
+            1,
+            "rev {rev}: one worker"
+        );
+    }
+    assert_eq!(
+        m.project_started,
+        [Some(1)],
+        "nothing starts while rev 1's read is held"
+    );
+    drop(held);
+    wait_project(&mut m);
+    assert_eq!(
+        m.project_started,
+        [Some(1), Some(4)],
+        "revs 2 and 3 never start"
+    );
+    assert_eq!(
+        rows_of(&mut m),
+        [row("meshes/other.nif", "A")],
+        "rev 4's answer"
+    );
+    assert_eq!(m.project_alive.load(Ordering::SeqCst), 0);
+}
+
 /// Note GH3 fix round 1: the pill's on/off is kept per project root: A off, then B, then A again keeps A off.
 #[test]
 fn the_pill_state_is_kept_per_project_root() {

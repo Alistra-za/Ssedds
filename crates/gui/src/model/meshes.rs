@@ -20,7 +20,7 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -184,17 +184,16 @@ type RowLists = (
 /// Note GH3: the This project pill's NIF paths and the project mod (`None`: the NIFs that use the opened folder's
 /// textures), with every input read: the root, the scan target (its `mods\`), the textures' rev and the rows read.
 struct ProjectCache {
-    key: (PathBuf, Option<ScanTarget>, Option<u64>),
+    key: ProjectKey,
     rows: (Arc<Vec<NifEntry>>, Arc<Vec<NifEntry>>),
     project_mod: Option<String>,
-    state: ProjectState,
+    /// Empty until the read lands (in `project_read`).
+    nifs: Arc<HashSet<String>>,
 }
 
-/// The pill's NIF paths: read on a worker, then held.
-enum ProjectState {
-    Reading(Receiver<Result<HashSet<String>, String>>),
-    Done(Arc<HashSet<String>>),
-}
+type ProjectKey = (PathBuf, Option<ScanTarget>, Option<u64>);
+/// The pill read's answer: the NIF paths, or the store error.
+type ProjectAnswer = Result<HashSet<String>, String>;
 
 /// What the pill's worker reads: the project mod's NIF copies, or the users of the folder's textures.
 enum ProjectJob {
@@ -203,7 +202,7 @@ enum ProjectJob {
 }
 
 /// Note GH3: the pill's store read, off the UI thread, from a read-only connection.
-fn read_project(db: &Path, job: ProjectJob) -> Result<HashSet<String>, String> {
+fn read_project(db: &Path, job: ProjectJob) -> ProjectAnswer {
     let store = Store::open_read_only(db).map_err(db_err)?;
     match job {
         ProjectJob::Mod(id) => {
@@ -529,9 +528,19 @@ pub struct MeshesModel {
     /// The opened folder's output game paths with their PBR twins (`set_project_textures`), and their rev.
     project_tex: Option<(u64, Arc<HashSet<String>>)>,
     project_cache: Option<ProjectCache>,
+    /// The one pill read running (Note GH3 fix round 2) and the inputs it reads for.
+    project_read: Option<(ProjectCache, Receiver<ProjectAnswer>)>,
     /// How often the textures' match set or the pill's NIF set was built (tests pin the cache with it).
     #[doc(hidden)]
     pub project_builds: u64,
+    /// Tests: when set, each pill read waits on this lock before it reads (a held read).
+    #[doc(hidden)]
+    pub project_gate: Option<Arc<std::sync::Mutex<()>>>,
+    /// Tests: the pill reads alive now, and the textures rev of each read started.
+    #[doc(hidden)]
+    pub project_alive: Arc<AtomicUsize>,
+    #[doc(hidden)]
+    pub project_started: Vec<Option<u64>>,
     /// Copy id of the selected NIF row.
     pub selected_nif: Option<i64>,
     /// The selected row itself, kept apart from the lists (a new search replaces them).
@@ -686,7 +695,11 @@ impl MeshesModel {
             project_on: false,
             project_tex: None,
             project_cache: None,
+            project_read: None,
             project_builds: 0,
+            project_gate: None,
+            project_alive: Arc::default(),
+            project_started: vec![],
             selected_nif: None,
             selected_info: None,
             shapes: vec![],
@@ -1489,40 +1502,53 @@ impl MeshesModel {
 
     /// Note GH3: the This project pill: the project mod (`None`: the NIFs that use the opened folder's textures) and
     /// the NIF paths it lists. `None` when there is no pill: no folder open, no NIF in it, or the store read for the
-    /// current inputs still running (no partial count). A changed input starts one read on a worker (rule 9.1) and
-    /// drops the one in flight; `poll` takes the answer. While the store is unsettled (Note GC15) a changed input waits
-    /// for the next completed scan.
+    /// current inputs not landed yet (no partial count). A changed input starts a read on a worker (rule 9.1), but at
+    /// most one runs: a change while one runs waits, and when it ends (`poll`) its answer is dropped unless its inputs
+    /// are still the current ones, and the current inputs' read starts then (inputs in between never start). While the
+    /// store is unsettled (Note GC15) a changed input waits for the next completed scan.
     pub fn project_nifs(&mut self) -> Option<(Option<String>, Arc<HashSet<String>>)> {
+        let key = self.project_key()?;
+        if !self
+            .project_cache
+            .as_ref()
+            .is_some_and(|c| self.project_current(c, &key))
+        {
+            if self.project_read.is_some() || self.store_unsettled {
+                return None;
+            }
+            self.start_project_read(key.clone());
+            if !self
+                .project_cache
+                .as_ref()
+                .is_some_and(|c| self.project_current(c, &key))
+            {
+                return None;
+            }
+        }
+        let c = self.project_cache.as_ref()?;
+        (!c.nifs.is_empty()).then(|| (c.project_mod.clone(), c.nifs.clone()))
+    }
+
+    /// The pill's inputs now; `None` with no folder open.
+    fn project_key(&self) -> Option<ProjectKey> {
         let root = self.project_root.clone()?;
-        let key = (
+        Some((
             root,
             self.target.clone(),
             self.project_tex.as_ref().map(|(r, _)| *r),
-        );
-        let fresh = self.project_cache.as_ref().is_some_and(|c| {
-            c.key == key
-                && Arc::ptr_eq(&c.rows.0, &self.winners)
-                && Arc::ptr_eq(&c.rows.1, &self.losers)
-        });
-        if !fresh {
-            if self.store_unsettled {
-                return None;
-            }
-            self.start_project_read(key);
-        }
-        let c = self.project_cache.as_ref()?;
-        match &c.state {
-            ProjectState::Done(n) if !n.is_empty() => Some((c.project_mod.clone(), n.clone())),
-            _ => None,
-        }
+        ))
     }
 
-    /// The pill's store read for the current inputs is running.
+    /// `c` was read for `key` and the rows on hand.
+    fn project_current(&self, c: &ProjectCache, key: &ProjectKey) -> bool {
+        c.key == *key
+            && Arc::ptr_eq(&c.rows.0, &self.winners)
+            && Arc::ptr_eq(&c.rows.1, &self.losers)
+    }
+
+    /// A pill read is running.
     pub fn project_reading(&self) -> bool {
-        matches!(
-            self.project_cache.as_ref().map(|c| &c.state),
-            Some(ProjectState::Reading(_))
-        )
+        self.project_read.is_some()
     }
 
     /// `project_nifs` while the pill is on: what the list is cut to.
@@ -1535,9 +1561,9 @@ impl MeshesModel {
     }
 
     /// The project mod is the folder `root` when it sits directly in the MO2 instance's `mods\`: the read lists its
-    /// NIF copies' paths. Else it lists the NIFs any copy of which names one of `project_tex` in a slot. Replacing the
-    /// cache drops the read in flight, so an answer for older inputs is never taken.
-    fn start_project_read(&mut self, key: (PathBuf, Option<ScanTarget>, Option<u64>)) {
+    /// NIF copies' paths. Else it lists the NIFs any copy of which names one of `project_tex` in a slot. With nothing
+    /// to read the (empty) answer is on hand at once.
+    fn start_project_read(&mut self, key: ProjectKey) {
         self.project_builds += 1;
         let root = &key.0;
         let mods_dir = match &self.target {
@@ -1563,49 +1589,62 @@ impl MeshesModel {
             let tex = self.project_tex.as_ref().map(|(_, t)| t.clone());
             (None, tex.map(ProjectJob::Textures))
         };
-        let db = self.store.as_ref().and(self.store_path.clone());
-        let state = match (job, db) {
-            (Some(job), Some(db)) => {
-                let (tx, rx) = channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(read_project(&db, job)); // newer inputs replaced this read: nobody listens
-                });
-                ProjectState::Reading(rx)
-            }
-            _ => ProjectState::Done(Arc::default()),
-        };
-        self.project_cache = Some(ProjectCache {
+        let rev = key.2;
+        let c = ProjectCache {
             key,
             rows: (self.winners.clone(), self.losers.clone()),
             project_mod,
-            state,
+            nifs: Arc::default(),
+        };
+        let db = self.store.as_ref().and(self.store_path.clone());
+        let (Some(job), Some(db)) = (job, db) else {
+            self.project_cache = Some(c);
+            return;
+        };
+        let (tx, rx) = channel();
+        let (gate, alive) = (self.project_gate.clone(), self.project_alive.clone());
+        alive.fetch_add(1, Ordering::SeqCst);
+        self.project_started.push(rev);
+        std::thread::spawn(move || {
+            let r = {
+                let _held = gate.as_ref().map(|g| g.lock());
+                read_project(&db, job)
+            };
+            alive.fetch_sub(1, Ordering::SeqCst);
+            let _ = tx.send(r);
         });
+        self.project_read = Some((c, rx));
     }
 
-    /// Takes the pill's finished read. True when one landed.
+    /// Takes the pill's finished read: kept when its inputs are still the current ones, else dropped; then the
+    /// current inputs' read starts if they have none. True when the pill's answer changed.
     fn poll_project(&mut self) -> bool {
-        let Some(c) = &mut self.project_cache else {
+        let Some((_, rx)) = &self.project_read else {
             return false;
         };
-        let ProjectState::Reading(rx) = &c.state else {
-            return false;
-        };
-        let nifs = match rx.try_recv() {
-            Ok(Ok(n)) => n,
-            Ok(Err(e)) => {
-                self.error = Some(e);
-                HashSet::new()
-            }
+        let r = match rx.try_recv() {
+            Ok(r) => r,
             Err(std::sync::mpsc::TryRecvError::Empty) => return false,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.error = Some(db_err("reading the project's meshes stopped"));
-                HashSet::new()
+                Err(db_err("reading the project's meshes stopped"))
             }
         };
-        c.state = ProjectState::Done(Arc::new(nifs));
-        true
+        let Some((mut c, _)) = self.project_read.take() else {
+            return false;
+        };
+        let current = self
+            .project_key()
+            .is_some_and(|k| self.project_current(&c, &k));
+        if current {
+            c.nifs = Arc::new(r.unwrap_or_else(|e| {
+                self.error = Some(e);
+                HashSet::new()
+            }));
+            self.project_cache = Some(c);
+        }
+        self.project_nifs();
+        current
     }
-
     fn build_visible(
         &mut self,
         project_mod: Option<&str>,
