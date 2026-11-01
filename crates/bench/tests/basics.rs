@@ -68,6 +68,59 @@ fn encode_one_writes_a_decodable_bc7_max_dds() {
     assert!(sdc_bench::encodeone::encode_one("bc7", "slowest", &src, &dst).is_err());
 }
 
+/// Level 0 as the engine pipeline encodes it: load -> preprocess -> mips -> quantise -> encode_level.
+fn engine_level0(src: &std::path::Path, p: &engine::config::Profile) -> Vec<u8> {
+    let (img, _) = engine::load::load_image(src).unwrap();
+    let work = engine::ops::preprocess(img, p);
+    let l0 = &engine::mips::build_chain(&work, p)[0];
+    let input = engine::quantize::to_encoder_input(l0, &work, p);
+    engine::encode::encode_level(&input, l0.width, l0.height, p, &Default::default()).unwrap()
+}
+
+#[test]
+fn encode_one_writes_the_engines_bytes() {
+    use engine::config::{Effort, Format, Subtype, Target};
+    if !encoders_sys::BC7E_MAX_NATIVE {
+        eprintln!("skipped: no patch-0002 bc7e objects");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (src, dst) = (dir.path().join("n.png"), dir.path().join("n.dds"));
+    // Opaque white noise (DECISIONS fix batch 41): bc7e picks rotated mode 4/5 for many blocks. At Veryslow the
+    // engine's alpha fix rewrites some of them; at Max it measured a no-op (0 of ~1800 rotated blocks per 256x256).
+    let mut s = 0x1234_5678u32;
+    image::ImageBuffer::from_fn(64, 64, |_, _| {
+        let mut c = [255u8; 4];
+        for v in &mut c[..3] {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *v = (s >> 24) as u8;
+        }
+        image::Rgba(c)
+    })
+    .save(&src)
+    .unwrap();
+    let reg = engine::presets::PresetRegistry::builtin().unwrap();
+    for (fmt, level, st, format) in [
+        ("bc7", "max", Subtype::Diffuse, Format::Bc7),
+        ("bc7", "max", Subtype::GenericData, Format::Bc7),
+        ("bc3", "default", Subtype::Diffuse, Format::Bc3),
+        ("bc4", "default", Subtype::Height, Format::Bc4),
+        ("bc4", "default", Subtype::MsnSpecular, Format::Bc4),
+        ("bc5", "default", Subtype::Flow, Format::Bc5),
+        ("bc5", "default", Subtype::GenericTwoChannel, Format::Bc5),
+    ] {
+        let mut p = reg.profile("cs-quality", Target::Cs, st).unwrap();
+        p.format = format;
+        if format == Format::Bc7 {
+            p.encoder.effort = Effort::Max;
+        }
+        sdc_bench::encodeone::encode_one(fmt, level, &src, &dst).unwrap();
+        let ours = std::fs::read(&dst).unwrap();
+        let want = engine_level0(&src, &p);
+        assert_eq!(ddsraw::payload(&ours).unwrap(), &want[..], "{fmt} {st:?}");
+    }
+}
+
 #[test]
 fn reads_bench_results_csv() {
     let Some(root) = corpus::corpus_root() else {
