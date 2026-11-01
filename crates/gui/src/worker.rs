@@ -1,12 +1,12 @@
 //! Engine work off the UI thread (M3a spec §3): every call runs on its own thread with a fresh `CancelToken`,
 //! catches panics at the thread boundary (spec §7.6) and reports through one channel the UI drains each frame.
 use crate::model::items::PlanView;
-use crate::model::preview::{dds_preview, decode_levels, PreviewOut};
+use crate::model::preview::{dds_preview, dds_thumbnail, decode_levels, PreviewOut};
 use encoders_sys::Bc1Model;
 use engine::api::{BatchRequest, BatchSummary, CancelToken, EngineError, PlanProgress};
 use engine::events::{EngineEvent, EventSink, Reporter, VecSink};
-use engine::policy::ResolvedJob;
-use engine::session::{Session, SourcePreview};
+use engine::policy::{ResolvedJob, SourceStamp};
+use engine::session::{Session, SourcePreview, Thumbnail};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -146,6 +146,12 @@ pub enum WorkerMsg {
     ReportSaved {
         path: std::path::PathBuf,
         result: Result<(), String>,
+    },
+    /// Note FI1: the tile image of the skipped DDS `path` as it was at `stamp` (`spawn_dds_thumbs`).
+    DdsThumb {
+        path: PathBuf,
+        stamp: SourceStamp,
+        thumb: Result<Arc<Thumbnail>, String>,
     },
 }
 
@@ -427,6 +433,24 @@ pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, 
             },
         );
         let _ = tx.send(WorkerMsg::Encoded { token, result });
+    });
+}
+
+/// Note FI1: decode the skipped DDS inputs' tile images in order, one message each.
+/// shortcut: `dds_thumbnail` reads the whole file (`fs::read`), so a folder of 4K DDS reads every byte once per
+/// session; read the header and the tail mips only, or keep the thumbs in the DZ analysis disk cache, if open time
+/// shows it.
+pub fn spawn_dds_thumbs(tx: Sender<WorkerMsg>, paths: Vec<(PathBuf, SourceStamp)>, bc1: Bc1Model) {
+    spawn_guarded(tx, "dds thumbnails", move |tx| {
+        for (path, stamp) in paths {
+            // A decoder panic fails this file only (it lands as a refused file, not read again), not the batch.
+            let thumb = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                dds_thumbnail(&path, bc1)
+            }))
+            .unwrap_or_else(|_| Err("the DDS decoder panicked".to_string()))
+            .map(Arc::new);
+            let _ = tx.send(WorkerMsg::DdsThumb { path, stamp, thumb });
+        }
     });
 }
 

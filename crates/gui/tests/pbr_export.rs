@@ -1315,6 +1315,137 @@ fn an_unfinished_vanilla_export_says_the_copies_were_not_made() {
     );
 }
 
+/// Note FI2: a released mod of three all-DDS PBR sets plus a plain `misc/notes.png` (so Export has a file to write),
+/// opened as the app opens it; the export folder `<dir>/export` is chosen and empty.
+fn released_mod(dir: &std::path::Path) -> sdc_gui::model::AppModel {
+    let root = dds_pbr_sets(dir, &["a", "b", "c"]);
+    let misc = root.join("misc");
+    std::fs::create_dir_all(&misc).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, y| image::Rgb([x as u8 * 4, y as u8 * 4, 90u8]))
+        .save(misc.join("notes.png"))
+        .unwrap();
+    opened_as_the_app(root, dir.join("export"))
+}
+
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets adds no
+/// Blocking row.
+#[test]
+fn a_released_mod_of_dds_sets_adds_no_blocking_rows() {
+    use sdc_gui::model::bottom::{flagged, problems, Level};
+    let d = tempfile::tempdir().unwrap();
+    let root = dds_pbr_sets(d.path(), &["a", "b", "c"]);
+    let m = opened_as_the_app(root, d.path().join("export"));
+    assert_eq!(m.sets.len(), 3);
+    let rows = problems(&m);
+    let level = |l: Level| rows.iter().filter(|p| p.level == l).count();
+    assert_eq!(
+        (level(Level::Blocks), level(Level::Decide)),
+        (0, 0),
+        "{rows:?}"
+    );
+    // Measured (Note FI2 Step 1): the sets add no Warning row and no set badge.
+    assert_eq!(level(Level::Warning), 0, "{rows:?}");
+    assert_eq!(flagged(&m).sets.len(), 0);
+}
+
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): a released mod of DDS sets writes no
+/// JSON and leaves its own JSON alone. Its sets are not JSON sets: their DDS members have no job, so no slots.
+#[test]
+fn a_released_mod_of_dds_sets_writes_no_json() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = released_mod(d.path());
+    // The released mod's own JSON, in the opened folder.
+    let src = m.root.clone().unwrap().join("PBRNIFPatcher/mod.json");
+    std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+    let bytes = br#"{"default": [{"match_normal": "pbr\\a\\a_n.dds"}]}"#;
+    std::fs::write(&src, bytes).unwrap();
+    assert_eq!(m.sets.iter().filter(|s| s.key.contains("/pbr/")).count(), 3);
+    assert_eq!(m.export_files(), 1);
+    assert!(json_entries(&m).is_empty());
+    m.open_review();
+    assert!(
+        !m.review_json()
+            .iter()
+            .any(|l| l.kind == sdc_gui::model::review::JsonKind::PgPatcher),
+        "{:?}",
+        m.review_json()
+    );
+    export_and_wait(&mut m);
+    assert!(!d.path().join("export/PBRNIFPatcher").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), bytes);
+}
+
+/// Note FI2 guard (passes before and after; the set count needs the engine fix): added DDS sets add no entry to
+/// Tessalith's own JSON.
+#[test]
+fn a_tessalith_json_gains_no_entry_without_a_change() {
+    use sdc_gui::model::review::{DiskState, JsonKind};
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    export_and_wait(&mut m);
+    let path = pgp_json_path(&m);
+    let first = std::fs::read(&path).unwrap();
+    dds_pbr_sets(d.path(), &["a", "b", "c"]);
+    m.replan();
+    idle(&mut m);
+    assert_eq!(
+        m.sets.iter().filter(|s| s.key.contains("pbr/a/a")).count(),
+        1,
+        "the all-DDS set a is listed once"
+    );
+    m.open_review();
+    let line = m
+        .review_json()
+        .into_iter()
+        .find(|l| l.kind == JsonKind::PgPatcher)
+        .expect("the JSON line, as before");
+    assert_eq!(line.state, DiskState::Ours, "never `will be replaced`");
+    let ids: Vec<String> = json_entries(&m).into_iter().map(|(v, _)| v.id).collect();
+    assert_eq!(ids, ["landscape/rock01"]);
+    export_and_wait(&mut m);
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        first,
+        "the PNG set's entries only"
+    );
+}
+
+/// Note FI2 guard: a PNG PBR set with nothing to re-export keeps its entry.
+#[test]
+fn an_up_to_date_png_set_keeps_its_json_entry() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_ready(d.path());
+    export_and_wait(&mut m);
+    let path = pgp_json_path(&m);
+    let first = std::fs::read_to_string(&path).unwrap();
+    assert!(first.contains("rock01"), "{first}");
+    m.open_review();
+    export_and_wait(&mut m);
+    assert!(json_entries(&m)
+        .iter()
+        .any(|(v, _)| v.id == "landscape/rock01"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+}
+
+/// Note FI2 guard: a foreign PGPatcher JSON in the export folder is never listed or replaced.
+#[test]
+fn a_foreign_json_in_the_export_folder_is_kept() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = released_mod(d.path());
+    let foreign = pgp_json_path(&m);
+    std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
+    let bytes = br#"{"default": []}"#;
+    std::fs::write(&foreign, bytes).unwrap();
+    m.open_review();
+    assert!(
+        !m.review_json().iter().any(|l| l.path == foreign),
+        "never `will be replaced` or `will be written`: {:?}",
+        m.review_json()
+    );
+    export_and_wait(&mut m);
+    assert_eq!(std::fs::read(&foreign).unwrap(), bytes);
+}
+
 // Audit 08f-6's "the overwrite question never replaces an open dialog" ended with the question (Note FC5): Review
 // asks before the export, and a JSON with no answer at the end is kept with a note
 // (`model::tests::a_json_edited_during_the_export_is_kept_with_a_note_and_no_dialog`).

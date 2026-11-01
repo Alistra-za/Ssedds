@@ -311,3 +311,54 @@ fn an_older_recovery_file_is_left_alone() {
     assert!(rec.exists());
     assert!(!restore_toast(&m));
 }
+
+// ---- Note FI4: FC1's automatic types alone are not recovery text.
+
+/// Three lone normals opened as the app opens them (High accept): the plan records 3 types and nothing else.
+fn three_types(dir: &Path) -> (PathBuf, AppModel) {
+    let root = dir.join("textures");
+    let r = root.join("a");
+    std::fs::create_dir_all(&r).unwrap();
+    for n in ["x_n.png", "y_n.png", "z_n.png"] {
+        image::RgbImage::from_pixel(16, 16, image::Rgb([128, 128, 255]))
+            .save(r.join(n))
+            .unwrap();
+    }
+    let m = opened_as_the_app(root.clone(), dir.join("export"));
+    assert_eq!(m.undo_label(), Some("Set 3 types automatically"));
+    (root, m)
+}
+
+fn has_toml(files: &[(PathBuf, String)]) -> bool {
+    files.iter().any(|(p, _)| p.ends_with("sdc.toml"))
+}
+
+#[test]
+fn an_automatic_only_state_leaves_no_recovery_text() {
+    let d = tempfile::tempdir().unwrap();
+    let (_, mut m) = three_types(d.path());
+    assert!(m.is_dirty());
+    assert!(!has_toml(&m.recovery_snapshot()));
+    assert!(m.recovery_changed().is_some_and(|f| !has_toml(&f)));
+    m.set_field("a/x_n.png", "format", serde_json::json!("bc7"));
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    assert!(has_toml(&m.recovery_snapshot()));
+    // The panic hook's copy is refreshed when the state flips.
+    assert!(m.recovery_changed().is_some_and(|f| has_toml(&f)));
+}
+
+#[test]
+fn an_automatic_only_close_and_reopen_offers_no_restore() {
+    let d = tempfile::tempdir().unwrap();
+    let (root, mut m) = three_types(d.path());
+    // What the panic hook would write in this state.
+    sdc_gui::crash_log::write_recovery(&m.recovery_changed().unwrap_or_default());
+    assert!(m.request_close());
+    let file = root.join("sdc.toml");
+    assert!(!recovery_path(&file).exists());
+    drop(m);
+    let m = opened_as_the_app(root, d.path().join("export"));
+    // No crash-restore step: the top step is the recording again.
+    assert!(!restore_toast(&m));
+    assert_eq!(m.undo_label(), Some("Set 3 types automatically"));
+}

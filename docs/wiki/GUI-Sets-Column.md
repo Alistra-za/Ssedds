@@ -6,6 +6,8 @@ The second column of the Textures view: one card per material set, its filter, a
 
 Textures are grouped into material sets, one **card** per set. The column is editable: it changes which textures belong to which set.
 
+A set whose files are all DDS inputs Tessalith does not re-encode (a released mod's) is listed too, and its files are not *Not in a set*. It is a "vanilla" set with empty slots and no PGPatcher JSON entry: its DDS files are not encoded, so they fill no slot and give no match, and it is not in the TruePBR panel or the JSON editor. Re-encoding its diffuse (**Re-encode this file**) makes it a full set, with its JSON entry when it is a PBR set; re-encoding only another of its files does not.
+
 ## Set cards
 
 A card's first row has:
@@ -31,7 +33,7 @@ Right-click a **?** chip for **Remove from set**: it takes that line (an `add`/`
 
 Members in no slot follow as plain thumbnails. The open set's card is highlighted. A set you just moved keeps a bright outline for about a third of a second, then it fades out.
 
-In a narrow Sets column (a card narrower than 150 points) the pill and "⚠ n" move to a second row.
+When the Sets column is too narrow to leave the name at least 80 points beside the pill and the "⚠ n" and "ⓘ n" buttons, those move to a second row under the name, so the name is never shown as "…". The "Drop here to start a new set" hint wraps instead of being cut.
 
 The column lays out only the cards on screen, so it stays smooth with hundreds of sets. The cost:
 
@@ -87,12 +89,12 @@ Right-clicking a slot row in the set editor, or a member chip on a card, opens a
 
 - The slot commands *From this set*, *Path* and *Clear*. Each is one undo step.
 - *From another set*: links the slot to a map of another set. The link writes that map's output path when it has one (a TruePBR set's packed output), otherwise the `textures\...` path its export writes (the source's folder with the output's name, so `leaf_normal.png` links as `leaf_n.dds`). A map with neither is greyed out, so a link never points at nothing. A link needs the same slot kind, so the shared slots (glow / skin_sk, coat / fuzz) never offer the other kind.
-- *Pin slot (sdc)* / *Unpin slot (sdc)*. A pinned slot shows a lock icon and keeps its fill in Tessalith; the Slot commands window has a box per slot named *Pin slot N (always use this file)*, with "locked" on hover.
+- *Pin this slot (always use this file)* / *Unpin this slot* (hover: "Pinned slots refuse other files (sdc.toml pin)"). A pinned slot shows a lock icon and keeps its fill in Tessalith; the Slot commands window has a box per slot named *Pin slot N (always use this file)*, with "locked" on hover.
   - It refuses a drag in or out and the slot commands. Bulk edits skip it with the reason *slot locked*, or *slot locked in <set>* when the fill is borrowed from another set.
   - Automatic re-typing leaves it alone (Tessalith writes no sub-type into it). You can still change the texture's sub-type by hand.
   - Pinning the Diffuse slot of an Advanced Skin set also stops the automatic Advanced Skin reading: the diffuse, and packing, read as they would without that shader, unless its sub-type is already written as `skin_albedo`.
   - Pinning or unpinning re-plans, so the cards update. The pin is saved in `sdc-project.toml` and is never written to the PGPatcher JSON.
-- *Keep original texture (PGPatcher lock)* / *Stop keeping original texture (PGPatcher lock)*, on a set that writes a PGPatcher entry (a TruePBR set under Community Shaders). It turns the slot's PGPatcher lock key on or off (`lock_diffuse`, `lock_normal`, `lock_emissive`, `lock_parallax`, `lock_rmaos`, `lock_cnr`, `lock_subsurface`), the same key as in the Texture locks group, as one undo step. PGPatcher then leaves the mesh's own texture in that slot.
+- *Keep the original texture* / *Let PGPatcher replace the texture* (hover: "PGPatcher lock: lock_<slot> in the JSON"), on a set that writes a PGPatcher entry (a TruePBR set under Community Shaders). It turns the slot's PGPatcher lock key on or off (`lock_diffuse`, `lock_normal`, `lock_emissive`, `lock_parallax`, `lock_rmaos`, `lock_cnr`, `lock_subsurface`), the same key as in the Texture locks group, as one undo step. PGPatcher then leaves the mesh's own texture in that slot.
   - The card shows a grey padlock over the dimmed thumbnail, captioned *kept by PGPatcher*. Its hover says "Kept by PGPatcher (lock_<slot>): the mesh's original texture is used here" and, with a mod scan, lists the textures the set's meshes have in that slot ("…" until it is read; read again after a scan). The member thumbnail shows a small grey padlock.
   - On a set that writes no PGPatcher entry, a stored lock key shows "lock stored, not written (no PGPatcher entry)".
   - The file is still exported, and Tessalith stops writing its own path for that slot. A slot command (`slotN`) on the same slot still wins in PGPatcher, so a warning says "slotN overrides the lock (PGPatcher applies slotN last)".

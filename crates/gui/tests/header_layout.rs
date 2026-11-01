@@ -16,12 +16,11 @@ type H = Harness<'static, (AppModel, State, MeshesModel)>;
 const WIDTHS: [f32; 4] = [1440.0, 1024.0, 800.0, 640.0];
 
 /// The controls every Textures header must show (plus "Export to: …", matched by its start).
-const CONTROLS: [&str; 11] = [
+const CONTROLS: [&str; 10] = [
     "Open",
     "Undo",
     "Redo",
     "MO2…",
-    "Mode",
     "Preset",
     "Textures view",
     "Meshes view",
@@ -43,7 +42,7 @@ fn harness_sized(m: AppModel, size: egui::Vec2, meshes_view: bool) -> H {
             if meshes_view {
                 // K6: the app's Meshes branch (K3): the header, the bottom panel, then the view.
                 sdc_gui::ui::header::draw(ui, m, Some(&mut *me));
-                sdc_gui::ui::bottom::draw(ui, m, &mut s.drawer);
+                sdc_gui::ui::bottom::draw(ui, m, &mut s.drawer, false);
                 sdc_gui::ui::meshes::show(ui, me);
             } else {
                 sdc_gui::ui::draw_with_scan(ui, m, s, Some(me));
@@ -142,13 +141,29 @@ fn the_header_is_one_row_in_the_spec_order() {
     assert_one_row_in_the_spec_order(&h);
 }
 
+/// Note CD2: the header is one row from about 1280 pt (measured after Note FI16 took Mode out and FI5 fixed the Undo
+/// slot width); narrower, Save wraps onto the second line.
+#[test]
+fn the_header_is_one_row_from_1280() {
+    let d = tempfile::tempdir().unwrap();
+    for (w, one_row) in [(1280.0, true), (1260.0, false)] {
+        let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
+        let open = h.get_by_label("Open").rect().center().y;
+        let save = h.get_by_label("Save").rect();
+        assert_eq!(
+            save.min.y <= open && open <= save.max.y,
+            one_row,
+            "at {w}: Save {save:?}, Open's centre at y {open}"
+        );
+    }
+}
+
 /// The assertions of `the_header_is_one_row_in_the_spec_order`, on a 1600 px harness (P20: shared, not restated).
 fn assert_one_row_in_the_spec_order(h: &H) {
     let order = [
         ("Open", h.get_by_label("Open").rect()),
         ("Undo", h.get_by_label("Undo").rect()),
         ("Redo", h.get_by_label("Redo").rect()),
-        ("Mode", h.get_by_label("Mode").rect()),
         ("Preset", h.get_by_label("Preset").rect()),
         ("Textures view", h.get_by_label("Textures view").rect()),
         ("Meshes view", h.get_by_label("Meshes view").rect()),
@@ -178,7 +193,7 @@ fn assert_one_row_in_the_spec_order(h: &H) {
         );
     }
     // Export ends the row at the right edge, only the panel margin past it.
-    assert!(1600.0 - order[9].1.right() <= 16.5, "{:?}", order[9].1);
+    assert!(1600.0 - order[8].1.right() <= 16.5, "{:?}", order[8].1);
 }
 
 /// Task 12 (Note CN, owner answer 5): with an "Also export as" tick on, the header is the same one row, and the
@@ -270,6 +285,77 @@ fn the_export_folder_shows_its_tail_and_the_whole_path_on_hover() {
     h.run();
     // The tooltip: the whole path, alone.
     h.get_by_label(&full);
+}
+
+/// Note FI5: at 1100, 1280 and 1600 px the export chip (`not chosen`, or a long folder cut in the middle) stays on the
+/// row, before Save and inside the window, and nothing overlaps (the capture check of the plan's Task 5, as a test).
+#[test]
+fn the_export_chip_holds_at_three_widths() {
+    let d = tempfile::tempdir().unwrap();
+    for w in [1100.0, 1280.0, 1600.0] {
+        for chosen in [false, true] {
+            let dir = d.path().join(format!("{w}-{chosen}"));
+            let mut m = opened_unchosen(&dir);
+            if chosen {
+                let mut deep = dir.clone();
+                for i in 0..8 {
+                    deep = deep.join(format!("a rather long folder name number {i}"));
+                }
+                choose_export(&mut m, deep.join("mods").join("My Mod"));
+            }
+            let h = harness(m, w, false);
+            assert_no_overlap(&h, "header", w);
+            let chip = h.get_by_label_contains("Export to: ").rect();
+            let save = h.get_by_label("Save").rect();
+            let export = h.get_by_label(&header_export_label(&h)).rect();
+            assert!(
+                chip.right() <= save.left() && export.right() <= w,
+                "at {w} (chosen {chosen}): {chip:?} {save:?} {export:?}"
+            );
+            assert!(
+                chip.min.y <= export.center().y && export.center().y <= chip.max.y,
+                "at {w}: the chip is off Export's row"
+            );
+        }
+    }
+}
+
+/// Note FI16 (owner O7): the Mode control left the header for the Presets tab; the Preset menu stays. Plus the plan's
+/// capture check as a test: at 1100, 1280 and 1600 px nothing overlaps and MO2… stands in the row.
+#[test]
+fn the_header_has_no_mode_control() {
+    let d = tempfile::tempdir().unwrap();
+    for (w, meshes_view) in [
+        (1440.0, false),
+        (800.0, false),
+        (1440.0, true),
+        (800.0, true),
+        (1100.0, false),
+        (1280.0, false),
+        (1600.0, false),
+    ] {
+        let m = pbr_opened(&d.path().join(format!("{w}-{meshes_view}")));
+        let h = harness(m, w, meshes_view);
+        assert_no_overlap(&h, "header", w);
+        let header = outer(&h, "header");
+        let inside = |r: egui::Rect| header.contains_rect(r);
+        assert!(
+            !h.query_all_by_label("Mode").any(|n| inside(n.rect())),
+            "at {w}: the header has a Mode label"
+        );
+        assert!(
+            !h.query_all_by_role(Role::ComboBox).any(|n| {
+                inside(n.rect())
+                    && n.accesskit_node()
+                        .value()
+                        .or(n.accesskit_node().label())
+                        .is_some_and(|v| v == "cs" || v == "vanilla")
+            }),
+            "at {w}: the header has a Mode combo"
+        );
+        h.get_by_label("Preset");
+        h.get_by_label("MO2…");
+    }
 }
 
 /// Note BH15: the columns' eye toggles keep their accessible names and say whether the column shows.
@@ -378,7 +464,7 @@ fn the_meshes_header_never_overlaps() {
     for w in WIDTHS {
         let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, true);
         assert_no_overlap(&h, "header", w);
-        for c in ["Open", "Undo", "MO2…", "Mode", "Meshes view", "Save"] {
+        for c in ["Open", "Undo", "MO2…", "Meshes view", "Save"] {
             h.get_by_label(c);
         }
         header_export_label(&h);
@@ -397,7 +483,7 @@ fn the_meshes_header_never_overlaps() {
 /// The 3D view's height under this row (at least 72 % of the centre at 1024×768) is checked by
 /// `set_preview_layout::in_3d_the_viewport_takes_most_of_the_centre`.
 /// Note AO: the set header's input name box and its ▾ never overlap each other or run off the window, and the box keeps
-/// at least 160 pt (the locked folder label included).
+/// at least 160 pt (Note FI17: the box holds the whole path; there is no locked folder label).
 #[test]
 fn the_set_header_input_name_box_never_overlaps() {
     let d = tempfile::tempdir().unwrap();
@@ -417,9 +503,8 @@ fn the_set_header_input_name_box_never_overlaps() {
                     .label(sdc_gui::ui::input_name::HINT),
             )
             .rect();
-        let locked = h.get_by_label("textures/landscape/").rect();
         let drop = h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).rect();
-        let all = [locked, edit, drop];
+        let all = [edit, drop];
         for (i, a) in all.iter().enumerate() {
             assert!(a.right() <= w + 0.5, "at {w}: {a:?} runs off the window");
             for b in &all[i + 1..] {
@@ -429,10 +514,7 @@ fn the_set_header_input_name_box_never_overlaps() {
                 );
             }
         }
-        assert!(
-            edit.right() - locked.left() >= 160.0 - 1.0,
-            "at {w} the box is {locked:?}..{edit:?}"
-        );
+        assert!(edit.width() >= 160.0 - 1.0, "at {w} the box is {edit:?}");
     }
 }
 

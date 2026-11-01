@@ -80,12 +80,20 @@ On the set editor heading, the **input name** box shows the path the set's textu
 - **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step. Clicking away from an invalid or unchanged name also puts the old one back. The set's TruePBR settings, pins and borrows follow it.
 - A name that cannot be used (outside the project's folder, a name another file already has, a pinned slot) gets a red outline, with the reason on hover, and is never applied.
 
-The folder part of the name is locked: it is dimmed, and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`. Drag it or its teal lock icon (the "Path lock" handle), or press **Ctrl+Left / Ctrl+Right** in the box, to lock more or less of the path. The lock lasts for the session and is not saved. The **▾** at the right lists the known paths under the locked part (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear). Click one to use it.
+The box works on path segments, the parts between two `/`:
+
+- A **double-click** selects the segment under the pointer. A **drag** that crosses a `/` selects whole segments; hold **Alt** to select single characters. **Ctrl+A** selects everything.
+- **Ctrl+Left / Ctrl+Right** jump to the previous segment's start or the next segment's end; with **Shift** they extend the selection.
+- A `/` takes two presses of **Backspace** (or **Delete**) to remove: the first highlights it and says "Backspace again to remove the folder separator". A held Backspace stops at a `/`.
+- **Ctrl+Up / Ctrl+Down** list the known names for the segment under the cursor. For a folder, the list shows the folders beside it; those that also hold the rest of the path are marked **✓** ("Has …" on hover) and come first. For the last segment, it shows the textures in that folder. **Up/Down** highlight a row, **Enter** or a click replaces only that segment, and **Esc** closes the list without changing anything. Picking a folder opens the next segment's list at once, with the old name highlighted when the new folder has it; when it doesn't, the closest names come first, nothing is highlighted, and the old name stays. With everything selected, Ctrl+Up/Down opens the ▾ list with every known path, not only those in the name's folder.
+- A name that is no known texture shows its last segment in amber, with "No known texture at …" on hover. You can still use it.
+
+The **▾** at the right lists the known paths under the folder before the last segment (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear). Click one to use it. When that folder has none, use **Ctrl+Down** on a folder in the box, or **Ctrl+A** then **Ctrl+Down** for every path.
 
 On a TruePBR set in the 2D view, the **Match** box beside the name box picks the slot the ▾ list works on:
 
-- **Match 1 · diffuse** is the list above.
-- **Match 2 · normal** to **Match 8 · backlight** list the textures the mod scan saw in that slot. A pick sets that slot's match in the PGPatcher JSON and renames nothing.
+- **Match 1 · Diffuse** is the list above.
+- **Match 2 · Normal _n** to **Match 8 · Subsurface _s** (named as the set editor names the slot, with the key, `match2` and so on, on hover) list the textures the mod scan saw in that slot. A pick sets that slot's match in the PGPatcher JSON and renames nothing.
 - Tick **All slots** in the list to see every known texture; a pick still goes to the selected match.
 
 The box starts at the set's lowest unused match (Match 2 for a set whose only match is its own diffuse), or at the one you last chose for that set (`gui.toml` keeps it per project and set), and never moves by itself.

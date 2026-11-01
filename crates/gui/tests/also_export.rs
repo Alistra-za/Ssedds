@@ -820,12 +820,12 @@ fn reviews_also_section_shows_the_ticks_location_and_skip_list() {
         checkbox(&h, l);
     }
     let loc = h.state().also_location().display().to_string();
-    let node = h.get_by_label_contains("Export location: ");
+    let node = h.get_by_label_contains("Also folders go in: ");
     // egui gives a Label's text to AccessKit as its value, which is its accessible name.
     let a = node.accesskit_node();
     assert_eq!(
         a.label().or(a.value()).unwrap_or_default(),
-        format!("Export location: {loc}")
+        format!("Also folders go in: {loc}")
     );
     // No recipe drags in Review: a link to Advanced instead.
     assert!(!has_label(&h, "Diffuse brightness"));
@@ -1205,7 +1205,7 @@ fn the_also_controls_are_off_while_an_export_runs() {
     let running = sdc_gui::model::also::EXPORT_RUNNING;
     assert!(hover_says(
         &mut h,
-        |h| h.get_by_label("Choose the Also export location…"),
+        |h| h.get_by_label("Choose where the Also folders go…"),
         running
     ));
     // M1: the export is the reason, not a file dialog.

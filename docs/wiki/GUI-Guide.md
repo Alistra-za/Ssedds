@@ -9,9 +9,9 @@ A map of the GUI (`tessalith.exe`): the main window with its areas numbered, eac
 The picture shows a small made-up mod. The [2D preview](GUI-Preview.md) is not shown: it replaces the centre when you double-click a tile.
 
 1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](GUI-Main-Window.md#header).
-2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project. See [Header](GUI-Main-Window.md#header).
+2. **MO2…, Preset** (header). **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The Mode (the target, `cs` or `vanilla`) is set in the [Presets](GUI-Presets.md#presets) tab, not in the header. All three are saved with the project. See [Header](GUI-Main-Window.md#header).
 3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns. See [Header](GUI-Main-Window.md#header).
-4. **Export to ▾** (header, right; **More ▾** until a folder is chosen). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export to](GUI-Main-Window.md#export-to).
+4. **Export to ▾** (header, right; **More ▾** with no project open). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export to](GUI-Main-Window.md#export-to).
 5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same. See [Keyboard](GUI-Keyboard.md#keyboard).
 6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](GUI-Main-Window.md#export) and [Review and Export](GUI-Review-and-Export.md).
 7. **Texture filters** (top of the Textures column). Pills with counts (*Undecided*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures column](GUI-Textures-Column.md#filters).

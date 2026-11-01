@@ -4,7 +4,7 @@ The GUI's view of the meshes a mod scan found: the mesh list, its filters, the s
 
 ## The Meshes view
 
-Switch to it with the **Meshes** tab in the header. The Meshes view draws the same one-row header as the Textures view (Open, Undo, Redo, MO2…, Mode, Preset, the view tabs, Export to, Save, Export) with the status line under it; only the column eyes are missing.
+Switch to it with the **Meshes** tab in the header. The Meshes view draws the same one-row header as the Textures view (Open, Undo, Redo, MO2…, Preset, the view tabs, Export to, Save, Export) with the status line under it; only the column eyes are missing.
 
 ![The Meshes view with a mesh selected.](../img/gui/GUI-Meshes/meshes-view.png)
 

@@ -1857,3 +1857,174 @@ fn a_pressed_slot_thumbnail_scales_to_097() {
         assert!((x - THUMB).abs() <= 0.5, "reduce motion, held: {x}");
     }
 }
+
+/// Note FI6: the top of the first slot row (the "Diffuse" card title in the centre, right of the Sets column).
+fn diffuse_top(h: &Harness<'static, AppModel>) -> f32 {
+    let left = h.get_by_label("Slot commands…").rect().min.x;
+    h.query_all_by_label("Diffuse")
+        .map(|n| n.rect())
+        .filter(|r| r.min.x >= left - 1.0)
+        .map(|r| r.min.y)
+        .fold(f32::MAX, f32::min)
+}
+
+/// Scroll the centre under `at` by `dy` points with the wheel, as a user would.
+fn wheel(h: &mut Harness<'static, AppModel>, at: eframe::egui::Pos2, dy: f32) {
+    h.event(eframe::egui::Event::PointerMoved(at));
+    h.run();
+    h.event(eframe::egui::Event::MouseWheel {
+        unit: eframe::egui::MouseWheelUnit::Point,
+        delta: eframe::egui::vec2(0.0, dy),
+        modifiers: eframe::egui::Modifiers::NONE,
+        phase: eframe::egui::TouchPhase::Move,
+    });
+    // The wheel scrolls smoothly over several frames.
+    h.run_steps(30);
+}
+
+/// Short, so both the texture panel and the set editor overflow and scroll.
+fn short_harness(m: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(1400.0, 300.0))
+        .build_ui_state(|ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+fn set_keys(m: &AppModel) -> Vec<String> {
+    m.sets.iter().map(|s| s.key.clone()).collect()
+}
+
+#[test]
+fn the_set_editor_opens_at_its_top_after_a_scrolled_texture() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let set = m.selection.clone();
+    let mut h = short_harness(m);
+    h.run();
+    let top = diffuse_top(&h);
+    let diffuse = h
+        .state()
+        .items
+        .iter()
+        .find(|i| i.name == "rock01.png")
+        .unwrap()
+        .key
+        .clone();
+    h.state_mut().select_item(&diffuse);
+    h.run();
+    let back = h.get_by_label_contains("← ").rect();
+    wheel(
+        &mut h,
+        eframe::egui::pos2(back.min.x + 40.0, back.min.y + 150.0),
+        -3000.0,
+    );
+    assert!(
+        h.get_by_label_contains("← ").rect().min.y < back.min.y - 20.0,
+        "the texture panel scrolled"
+    );
+    match set {
+        sdc_gui::model::Selection::Set(k) => h.state_mut().select_set(&k),
+        s => panic!("{s:?}"),
+    }
+    h.run();
+    assert!(
+        (diffuse_top(&h) - top).abs() < 1.0,
+        "the first slot row is at the top: {} vs {top}",
+        diffuse_top(&h)
+    );
+}
+
+#[test]
+fn going_back_to_a_set_opens_it_at_its_top() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    let mut keys = set_keys(&m);
+    assert!(keys.len() >= 2, "{keys:?}");
+    // rock01 first: its editor is the tall one.
+    keys.sort_by_key(|k| !k.ends_with("landscape/rock01"));
+    m.select_set(&keys[0]);
+    let mut h = short_harness(m);
+    h.run();
+    let top = diffuse_top(&h);
+    let at = eframe::egui::pos2(
+        h.get_by_label("Slot commands…").rect().min.x + 40.0,
+        top + 30.0,
+    );
+    wheel(&mut h, at, -3000.0);
+    assert!(diffuse_top(&h) < top - 20.0, "set A's editor scrolled");
+    // B is scrolled too, so the old shared offset would survive the way back.
+    h.state_mut().select_set(&keys[1]);
+    h.run();
+    let top_b = diffuse_top(&h);
+    wheel(&mut h, at, -3000.0);
+    assert!(diffuse_top(&h) < top_b - 20.0, "set B's editor scrolled");
+    h.state_mut().select_set(&keys[0]);
+    h.run();
+    assert!(
+        (diffuse_top(&h) - top).abs() < 1.0,
+        "set A reopens at its top: {} vs {top}",
+        diffuse_top(&h)
+    );
+}
+
+/// A guard: it passes before the fix too. The reset fires on a switch only, never on a re-plan of the same set.
+#[test]
+fn the_offset_survives_a_replan_of_the_same_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    rock_selected(&mut m);
+    let mut h = short_harness(m);
+    h.run();
+    let top = diffuse_top(&h);
+    let at = eframe::egui::pos2(
+        h.get_by_label("Slot commands…").rect().min.x + 40.0,
+        top + 30.0,
+    );
+    wheel(&mut h, at, -3000.0);
+    let scrolled = diffuse_top(&h);
+    assert!(scrolled < top - 20.0, "the editor scrolled");
+    h.state_mut().set_json_value(
+        "landscape/rock01",
+        "roughness_scale",
+        Some(serde_json::json!(0.5)),
+    );
+    assert!(h.state_mut().wait_idle(std::time::Duration::from_secs(60)));
+    h.run();
+    h.run();
+    assert!(
+        (diffuse_top(&h) - scrolled).abs() < 1.0,
+        "the offset is kept: {} vs {scrolled}",
+        diffuse_top(&h)
+    );
+}
+
+#[test]
+fn the_bulk_panel_opens_at_its_top_after_a_scrolled_set() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = pbr_opened_plain(d.path());
+    m.select_all_visible();
+    assert!(m.in_bulk());
+    let mut h = short_harness(m);
+    h.run();
+    let colour = |h: &Harness<'static, AppModel>| h.get_by_label("Colour").rect().min.y;
+    let x = h.get_by_label("Colour").rect().min.x + 40.0;
+    // The set editor is scrolled first; the bulk panel then opens at its top, not at that offset.
+    rock_selected(h.state_mut());
+    h.run();
+    h.state_mut().select_all_visible();
+    h.run();
+    let top = colour(&h);
+    rock_selected(h.state_mut());
+    h.run();
+    let at = eframe::egui::pos2(x, diffuse_top(&h) + 30.0);
+    wheel(&mut h, at, -3000.0);
+    h.state_mut().select_all_visible();
+    h.run();
+    assert!(
+        (colour(&h) - top).abs() < 1.0,
+        "the bulk panel is at its top: {} vs {top}",
+        colour(&h)
+    );
+}

@@ -44,6 +44,8 @@ The buttons say what they do:
 | Copy settings | Cancel, Apply; no Enter default |
 | Slot commands | Close; no Enter default |
 
+Both unsaved-changes dialogs name the files with unsaved changes (`sdc.toml`, `sdc-project.toml`, or both). The automatic types of a plan alone, with no edit of yours, do not ask.
+
 ![Unsaved changes, on closing the window.](../img/gui/GUI-Dialogs/close-unsaved.png)
 
 ![Unsaved changes, on opening another folder.](../img/gui/GUI-Dialogs/open-unsaved.png)

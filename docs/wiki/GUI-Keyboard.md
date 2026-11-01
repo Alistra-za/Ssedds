@@ -8,7 +8,7 @@ Press **F1** (or **?**) for the list of shortcuts, grouped by where they work. T
 
 ### Command palette
 
-Press **Ctrl+K** for the command palette. Type part of an action's, a texture's or a set's name: the letters in order are enough. Names that start with what you typed come first, then names that contain it. Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, and Esc closes the palette.
+Press **Ctrl+K** for the command palette. Type part of an action's, a texture's or a set's name: the letters in order are enough. Names that start with what you typed come first, then names that contain it. Up and Down move the highlight, Enter runs the highlighted action or selects the texture or set as a click does and scrolls its column to it, and Esc closes the palette. A new palette highlights nothing, and Enter does nothing until you type or move with the arrows (so it never starts Export by chance); the F1 sheet says so too.
 
 ![The command palette.](../img/gui/GUI-Keyboard/command-palette.png)
 

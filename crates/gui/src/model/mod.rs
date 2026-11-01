@@ -38,6 +38,7 @@ pub mod plugin_refs;
 pub mod presets;
 pub mod preview;
 pub mod readout;
+mod reencode;
 pub mod rename;
 pub mod review;
 pub mod rnm;
@@ -57,14 +58,14 @@ pub mod viewport3d;
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
 use crate::worker::{
-    spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
+    spawn_dds_thumbs, spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
 };
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
 use engine::policy::{AcceptSuggestions, SourceStamp};
 use engine::presets::ConfigFile;
-use engine::session::Session;
+use engine::session::{Session, Thumbnail};
 use items::*;
 use serde_json::json;
 use std::path::PathBuf;
@@ -144,8 +145,8 @@ pub enum Selection {
 
 pub use texture_view::Filter;
 
-/// (sdc.toml rev, dirty), (sdc-project.toml rev, dirty, read-only).
-type RecoveryKey = (Option<(u64, bool)>, Option<(u64, bool, bool)>);
+/// (sdc.toml rev, dirty, only automatic types unsaved), (sdc-project.toml rev, dirty, read-only).
+type RecoveryKey = (Option<(u64, bool, bool)>, Option<(u64, bool, bool)>);
 
 /// Which of the two project files a dialog or save error is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -412,6 +413,18 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
+    /// Note FI15: the opened folder's output game paths and their revision (see `output_game_paths`).
+    game_paths: (u64, Vec<String>),
+    /// Note FI1: skipped DDS inputs' tile images by path, with the stamp they were decoded at; cleared on open and
+    /// reload.
+    dds_thumbs: std::collections::HashMap<PathBuf, (SourceStamp, Arc<Thumbnail>)>,
+    /// The DDS tile images asked for and not landed yet (no second request while one is out; the repaint gate).
+    dds_thumbs_asked: std::collections::HashMap<PathBuf, SourceStamp>,
+    /// DDS tile images the decoder refused, with the stamp it refused (not read again until the file changes).
+    dds_thumbs_failed: std::collections::HashMap<PathBuf, SourceStamp>,
+    /// Paths sent to `spawn_dds_thumbs` so far (tests: a re-plan reuses the cache).
+    #[doc(hidden)]
+    pub dds_thumb_requests: usize,
     /// The artist check results and what they were computed from (DECISIONS Note CL).
     pub(crate) check_state: checks::CheckState,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
@@ -544,6 +557,8 @@ pub struct AppModel {
     /// Note FC8 (CP10): a BC7 weighting pick whose own value may have hidden an inherited one: (item key, pick, the
     /// pick's history merge key). The settled plan checks it and completes the pick in the same step.
     weighting_follow: Option<(String, String, String)>,
+    /// Note FI3: a re-encode step's history merge key; the FC1 recording its settled plan makes joins that step.
+    reencode_follow: Option<String>,
     /// The last Generate job id, so a new dialog's ids never repeat a closed one's.
     pub(crate) gen_ids: u64,
     /// Generate dialogs opened so far; the preview zoom is reset when this changes.
@@ -720,6 +735,11 @@ impl AppModel {
             target: Target::Cs,
             items: vec![],
             items_rev: 0,
+            game_paths: (0, vec![]),
+            dds_thumbs: Default::default(),
+            dds_thumbs_asked: Default::default(),
+            dds_thumbs_failed: Default::default(),
+            dds_thumb_requests: 0,
             check_state: Default::default(),
             inputs_rev: 0,
             item_index: Default::default(),
@@ -819,6 +839,7 @@ impl AppModel {
             gen_select: None,
             after_commit: Vec::new(),
             weighting_follow: None,
+            reencode_follow: None,
             gen_ids: 0,
             gen_opens: 0,
             report_saving: false,
@@ -914,6 +935,7 @@ impl AppModel {
         self.gen_cancel();
         self.gen_select = None;
         self.weighting_follow = None;
+        self.reencode_follow = None;
         self.after_commit.clear();
         self.drop_provenance_note();
         // Every dialog that can be open here belongs to the previous folder (`OpenUnsaved` and `ExportRunning`
@@ -938,6 +960,10 @@ impl AppModel {
         self.sizes.clear_folder();
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
+        // Note FI1: the previous folder's DDS tile images.
+        self.dds_thumbs.clear();
+        self.dds_thumbs_asked.clear();
+        self.dds_thumbs_failed.clear();
         self.drawer_epoch += 1;
         self.folder_epoch += 1;
         self.dropped_fills.clear();
@@ -1398,9 +1424,19 @@ impl AppModel {
             changed = true;
             self.picked(d);
         }
+        let mut thumbs_landed = false;
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
-            self.handle(msg);
+            match msg {
+                WorkerMsg::DdsThumb { path, stamp, thumb } => {
+                    thumbs_landed |= self.dds_thumb_landed(path, stamp, thumb)
+                }
+                msg => self.handle(msg),
+            }
+        }
+        // Note FI1: one invalidation for every DDS tile image of this poll (the tile cache keys on the revision).
+        if thumbs_landed {
+            self.invalidate_views();
         }
         // Last, so a plan that landed above is checked in this poll (K1).
         changed |= self.refresh_checks();
@@ -1458,6 +1494,7 @@ impl AppModel {
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
                     "save-report" => self.report_saving = false,
+                    "dds thumbnails" => self.dds_thumbs_asked.clear(),
                     _ => {}
                 }
                 self.raise_error(format!("internal error in {what}: {message}"));
@@ -1999,11 +2036,11 @@ impl AppModel {
     /// one is flagged with it. Returns the number of items flagged.
     pub fn check_sources(&mut self) -> usize {
         // A hand edit of a clean `sdc.toml` is simply taken (nothing to lose): the next plan reads it. With unsaved
-        // edits the save dialog still asks (audit 2026-10-14 finding 3).
-        let hand_edited = self
-            .project
-            .as_ref()
-            .is_some_and(|p| !p.is_dirty() && p.changed_on_disk());
+        // edits the save dialog still asks (audit 2026-10-14 finding 3). Automatic types alone are recorded again
+        // (Note FI4).
+        let hand_edited = self.project.as_ref().is_some_and(|p| {
+            (!p.is_dirty() || self.only_automatic_unsaved()) && p.changed_on_disk()
+        });
         if hand_edited {
             if let Some(p) = self.project.as_mut() {
                 p.reload();
@@ -2062,6 +2099,10 @@ impl AppModel {
 
     /// Plan again after sources changed on disk; the session cache reloads only the changed files.
     pub fn reload_changed(&mut self) {
+        // Note FI1: the DDS tile images are read again with the reload.
+        self.dds_thumbs.clear();
+        self.dds_thumbs_asked.clear();
+        self.dds_thumbs_failed.clear();
         self.replan();
     }
 
@@ -2408,6 +2449,8 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        self.refresh_game_paths();
+        self.request_dds_thumbs();
         // K1: the checks run on this plan's analyses at the end of the poll that lands it.
         self.check_state.plans_applied += 1;
         self.invalidate_views();
@@ -2425,7 +2468,7 @@ impl AppModel {
         // The JSON rows are added once the plan settles (`finish_plan`): they read the settled sets.
         self.stale_json.clear();
         // The count of undecided textures is shown (amber) in the Textures column header.
-        self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        self.status_line = self.counts_line();
         // The undo note stays through the plan the undo started, and goes with the next one.
         if matches!(self.undo_note_at, Some((_, true))) {
             self.drop_undo_note();
@@ -2468,6 +2511,68 @@ impl AppModel {
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
         self.refresh_mesh_votes(true);
+    }
+
+    /// Note FI1: a DDS tile with no image takes the cached one when its stamp matches; the rest are decoded on one
+    /// worker (none asked twice while out).
+    fn request_dds_thumbs(&mut self) {
+        let mut ask = vec![];
+        for item in self.items.iter_mut() {
+            let Some(stamp) = item
+                .stamp
+                .filter(|_| item.kind == ItemKind::Dds && item.thumb.is_none())
+            else {
+                continue;
+            };
+            match self.dds_thumbs.get(&item.input) {
+                Some((s, t)) if *s == stamp => item.thumb = Some(t.clone()),
+                _ if self.dds_thumbs_asked.get(&item.input) == Some(&stamp)
+                    || self.dds_thumbs_failed.get(&item.input) == Some(&stamp) => {}
+                _ => ask.push((item.input.clone(), stamp)),
+            }
+        }
+        let Some(session) = self.session.as_ref().filter(|_| !ask.is_empty()) else {
+            return;
+        };
+        self.dds_thumb_requests += ask.len();
+        self.dds_thumbs_asked.extend(ask.iter().cloned());
+        spawn_dds_thumbs(self.tx.clone(), ask, session.bc1_model());
+    }
+
+    /// Note FI1: a DDS tile image landed. True when an item took it (the caller invalidates the views once). An
+    /// error keeps only the refused stamp (not read again until the file changes): the tile stays grey and the
+    /// preview gives the reason.
+    fn dds_thumb_landed(
+        &mut self,
+        path: PathBuf,
+        stamp: SourceStamp,
+        thumb: Result<Arc<Thumbnail>, String>,
+    ) -> bool {
+        if self.dds_thumbs_asked.get(&path) == Some(&stamp) {
+            self.dds_thumbs_asked.remove(&path);
+        }
+        let Ok(thumb) = thumb else {
+            self.dds_thumbs_failed.insert(path, stamp);
+            return false;
+        };
+        let mut took = false;
+        for item in self
+            .items
+            .iter_mut()
+            .filter(|i| i.kind == ItemKind::Dds && i.input == path && i.stamp == Some(stamp))
+        {
+            item.thumb = Some(thumb.clone());
+            took = true;
+        }
+        if took {
+            self.dds_thumbs.insert(path, (stamp, thumb));
+        }
+        took
+    }
+
+    /// Note FI1: DDS tile images are still being decoded (the window keeps polling).
+    pub fn dds_thumbs_pending(&self) -> bool {
+        !self.dds_thumbs_asked.is_empty()
     }
 
     /// The tail of `apply_plan`, once the scan-database evidence of this plan is in.
@@ -2545,6 +2650,38 @@ impl AppModel {
 
     pub fn items_rev(&self) -> u64 {
         self.items_rev
+    }
+
+    /// Note FI15: every item's output game path (a skipped DDS included), from its `textures/` component on, with
+    /// `/`, lowercased by the engine's output-key fold (equal to the ASCII fold for ASCII paths), sorted and
+    /// deduplicated; paths with no `textures/` component are left out. The `u64` changes only when the list does,
+    /// so the Meshes view can key a cache on it.
+    pub fn output_game_paths(&self) -> (u64, &[String]) {
+        (self.game_paths.0, &self.game_paths.1)
+    }
+
+    /// Rebuilt once per landed plan. `job_key` is the engine's output key: root-relative, `/`, lowercased.
+    // shortcut: the engine key folds Unicode, so a non-ASCII folder name may not match the NIF side's ASCII fold;
+    // carry an ASCII-folded game path on TextureItem if a non-ASCII path is ever reported.
+    fn refresh_game_paths(&mut self) {
+        let mut paths: Vec<String> = self
+            .items
+            .iter()
+            .filter_map(|i| {
+                let k = &i.job_key;
+                let at = if k.starts_with("textures/") {
+                    0
+                } else {
+                    k.find("/textures/")? + 1
+                };
+                Some(k[at..].to_string())
+            })
+            .collect();
+        paths.sort();
+        paths.dedup();
+        if paths != self.game_paths.1 {
+            self.game_paths = (self.game_paths.0 + 1, paths);
+        }
     }
 
     /// Call after writing `items` or `sets` in place (tests); a plan does it itself.
@@ -2804,6 +2941,7 @@ impl AppModel {
         self.reset_type_follow();
         // Note FC8 ledger minor: a weighting re-write queued for the plan of the step undone no longer applies.
         self.weighting_follow = None;
+        self.reencode_follow = None;
         // Only a document the step changed is restored: `restore` marks it dirty, and an untouched one must stay clean
         // (no empty sdc-project.toml on Save, no spurious changed-on-disk dialog).
         if let Some(p) = self.project.as_mut().filter(|p| p.text() != s.sdc_toml) {
@@ -2858,13 +2996,23 @@ impl AppModel {
         Some(UNDO_NOTE_FOR.saturating_sub(now.saturating_duration_since(at)))
     }
 
+    /// "1 texture, 1 set" / "3 textures, 2 sets" (Note FI14).
+    fn counts_line(&self) -> String {
+        let (t, s) = (self.items.len(), self.sets.len());
+        format!(
+            "{t} texture{}, {s} set{}",
+            review::plural(t),
+            review::plural(s)
+        )
+    }
+
     /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
     /// note (AF10, AF11), which stays; the encoding note went with the undo's `reset_type_follow`.
     fn undo_noted(&mut self, verb: &str, label: &str) {
         self.drop_undo_note();
         let n = format!("{verb}: {label}.");
         // In front of the normal status text, not in place of it; the plan the step started rewrites the counts.
-        let counts = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        let counts = self.counts_line();
         self.status_line = match &self.status_note {
             Some(c) => format!("{n} {c} {counts}"),
             None => format!("{n} {counts}"),
@@ -3401,9 +3549,29 @@ impl AppModel {
                 .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
     }
 
+    /// Note FI4 (owner O1 (b)): the only unsaved change is FC1's automatic recording, still the top step. It neither
+    /// asks on close, open or reload nor marks the title; Save stays live and writes it.
+    /// shortcut: a user edit followed by its Undo leaves `pushes` advanced, so that state prompts although the text
+    /// equals the automatic state; compare the document with the recording's snapshot if users report it.
+    pub fn only_automatic_unsaved(&self) -> bool {
+        self.auto_note
+            .as_ref()
+            .is_some_and(|a| a.clean_before && a.step == self.history.pushes)
+            && !self
+                .sets_doc
+                .as_ref()
+                .is_some_and(crate::sets_doc::SetsDoc::is_dirty)
+            && self.tentative_edits().is_none()
+    }
+
+    /// Unsaved changes the close, open and reload dialogs ask about: a user's, not only automatic ones (Note FI4).
+    pub fn prompts_unsaved(&self) -> bool {
+        self.is_dirty() && !self.only_automatic_unsaved()
+    }
+
     /// The unsaved `sdc.toml` edits stashed by a blame that is still tentative (the retry plan has not landed), so
     /// prompts and recovery still see them (review M1 of #9).
-    fn tentative_edits(&self) -> Option<String> {
+    pub(crate) fn tentative_edits(&self) -> Option<String> {
         self.project
             .as_ref()
             .filter(|_| self.ignored_by_plan)
@@ -3413,7 +3581,9 @@ impl AppModel {
     /// The unsaved documents as `(file, text)`, for the panic hook's recovery files (Note AR).
     pub fn recovery_snapshot(&self) -> Vec<(std::path::PathBuf, String)> {
         let mut out = vec![];
-        if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty()) {
+        // Note FI4: automatic types alone are recorded again on the next plan, so a restore never offers them.
+        let only_auto = self.only_automatic_unsaved();
+        if let Some(p) = self.project.as_ref().filter(|p| p.is_dirty() && !only_auto) {
             out.push((p.path().to_path_buf(), p.text()));
         }
         if let (Some(p), Some(text)) = (self.project.as_ref(), self.tentative_edits()) {
@@ -3433,7 +3603,9 @@ impl AppModel {
     /// app refreshes the panic hook's copy only then).
     pub fn recovery_changed(&mut self) -> Option<Vec<(std::path::PathBuf, String)>> {
         let key = (
-            self.project.as_ref().map(|p| (p.rev(), p.is_dirty())),
+            self.project
+                .as_ref()
+                .map(|p| (p.rev(), p.is_dirty(), self.only_automatic_unsaved())),
             self.sets_doc
                 .as_ref()
                 .map(|s| (s.rev(), s.is_dirty(), s.read_only())),
@@ -3496,7 +3668,7 @@ impl AppModel {
         #[allow(clippy::permissions_set_readonly_false)]
         perm.set_readonly(false);
         std::fs::set_permissions(path, perm).map_err(fail)?;
-        if self.is_dirty() {
+        if self.prompts_unsaved() {
             self.status_line = "Read-only flag cleared: Save to write your changes".into();
             self.refresh_banner();
         } else {
@@ -3590,7 +3762,7 @@ impl AppModel {
     /// Reload both documents from disk (the banner's Reload), then plan once.
     /// The banner's Reload: at once when nothing is unsaved, else ask first (`Dialog::ReloadUnsaved`).
     pub fn request_reload(&mut self) {
-        if self.is_dirty() {
+        if self.prompts_unsaved() {
             self.dialog = Some(Dialog::ReloadUnsaved);
         } else {
             self.reload_documents();
@@ -3705,7 +3877,7 @@ impl AppModel {
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Open(root));
             false
-        } else if self.is_dirty() {
+        } else if self.prompts_unsaved() {
             self.dialog = Some(Dialog::OpenUnsaved(root));
             false
         } else {
@@ -3771,7 +3943,7 @@ impl AppModel {
         } else if self.gen_writing() {
             self.defer_until_generated(AfterExport::Close);
             false
-        } else if self.is_dirty() {
+        } else if self.prompts_unsaved() {
             self.dialog = Some(Dialog::CloseUnsaved);
             false
         } else {

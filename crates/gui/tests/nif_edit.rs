@@ -11415,6 +11415,236 @@ fn the_preview_keeps_160_px_with_review_open() {
     );
     assert_eq!(tops[3], tops[4], "the head is at its least: {tops:?}");
 }
+
+/// Note FI18 (1; HANDOFF 2026-11-01 owed item 1, GH3): the app hands the opened folder's output game paths to the
+/// Meshes side each frame. Idle frames build nothing (the rev is unchanged); a newly added output reaches it on the
+/// next frame.
+#[test]
+fn the_meshes_side_gets_a_new_output_path_on_the_next_frame() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let png = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([90, 120, 30]))
+            .save(p)
+            .unwrap();
+    };
+    let root = t.path().join("mod");
+    png(&root.join("textures/xmead/ale.png"));
+    let model = support::opened_as_the_app(root.clone(), t.path().join("export"));
+    let mut app = sdc_gui::app::SdcApp::new(model);
+    app.meshes.procs = sdc_gui::model::meshes::no_procs;
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
+            app,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(4);
+    let rev = h.state().model.output_game_paths().0;
+    let builds = h.state().meshes.project_builds;
+    h.run_steps(5);
+    assert_eq!(h.state().model.output_game_paths().0, rev, "idle: same rev");
+    assert_eq!(
+        h.state().meshes.project_builds,
+        builds,
+        "idle frames build nothing"
+    );
+    png(&root.join("textures/xmead/mead.png"));
+    h.state_mut().model.replan();
+    assert!(h
+        .state_mut()
+        .model
+        .wait_idle(std::time::Duration::from_secs(60)));
+    let (rev2, paths) = h.state().model.output_game_paths();
+    assert!(rev2 > rev);
+    assert!(
+        paths.iter().any(|p| p == "textures/xmead/mead.dds"),
+        "{paths:?}"
+    );
+    h.step();
+    assert!(
+        h.state().meshes.project_builds > builds,
+        "the Meshes side did not get the new paths"
+    );
+}
+
+/// Note FI18 (2; HANDOFF owed item 2, GH6/N6; ruling R3): in the Meshes view with a NIF selected, the bottom panel
+/// stops where the 3D frame keeps its 160 px (GH6). A Review dragged to 600 px at 1536x864 is cut down so the frame
+/// keeps 160 px, fully above the panel; in the Textures view (NIF still selected) it stays 600.
+#[test]
+fn the_bottom_panel_is_capped_only_in_the_meshes_view_with_a_nif() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    assert!(h.state().meshes.selected_nif.is_some());
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let frame = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(frame.height() >= 159.5, "40 % Review: preview {frame:?}");
+    let tall = |h: &mut AppH| {
+        let r =
+            egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+        h.ctx.data_mut(|d| {
+            d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+        });
+        h.run_steps(8);
+    };
+    tall(&mut h);
+    let capped = review_height(&h);
+    assert!(capped < 600.0, "Meshes view: Review {capped}");
+    let frame = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    let top = hgt - capped;
+    assert!(frame.height() >= 159.5, "600 px Review: preview {frame:?}");
+    assert!(frame.max.y <= top + 0.5, "{frame:?} under Review at {top}");
+    // The Textures view, the NIF still selected: the panel is not capped.
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    tall(&mut h);
+    assert!(h.state().meshes.selected_nif.is_some());
+    assert_eq!(
+        review_height(&h),
+        600.0,
+        "the Textures view's Review is uncapped"
+    );
+}
+
+/// UI-D final review Minor 7: `NIF_ROOM`'s 211 px was measured at 1536x864; at 1280x720 a capped Review still leaves
+/// the 3D frame its 160 px, fully above the panel.
+#[test]
+fn the_meshes_cap_keeps_160_px_at_1280x720() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1280.0, 720.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let r = egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+    });
+    h.run_steps(8);
+    let capped = review_height(&h);
+    assert!(capped < 600.0, "Review {capped}");
+    let frame = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(frame.height() >= 159.5, "preview {frame:?}");
+    assert!(frame.max.y <= hgt - capped + 0.5, "{frame:?} under Review");
+}
+
+fn review_height(h: &AppH) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("bottom-review"))
+        .unwrap()
+        .outer_rect
+        .height()
+}
+
+/// Note FI18 (2): Review's 40 % default obeys the cap too. At 1536x600 the default (240) is over it.
+#[test]
+fn reviews_default_height_obeys_the_meshes_cap() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(1536.0, 600.0));
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let r = review_height(&h);
+    assert!((120.0..239.0).contains(&r), "Review opened at {r}");
+}
+
+/// Note FI18 (2; review minor 1): the cap is the Meshes view's limit, not the user's height. A Review set to 600 px in
+/// the Textures view is capped for frames in the Meshes view and is 600 px again back in the Textures view (the
+/// panel state is written once, as a drag would, and not re-injected).
+#[test]
+fn the_meshes_cap_keeps_the_users_review_height() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    let r = egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+    });
+    h.run_steps(4);
+    assert_eq!(review_height(&h), 600.0, "Textures view: Review");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    assert!(review_height(&h) < 600.0, "Meshes view: capped");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    assert_eq!(review_height(&h), 600.0, "back in the Textures view");
+}
+
+/// UI-D final review Minor 8: a drag of Review's edge in the Meshes view that ends at the cap is the user's height
+/// too; the Textures view keeps it and does not restore the older 600 px.
+#[test]
+fn a_drag_to_the_cap_is_the_users_height() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    h.state_mut().model.open_review();
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    let r = egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+    h.ctx.data_mut(|d| {
+        d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+    });
+    h.run_steps(4);
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, true);
+    h.run_steps(4);
+    let capped = review_height(&h);
+    assert!(capped < 600.0, "Meshes view: capped");
+    // Drag the top edge up: the panel stays at the cap.
+    let edge = egui::pos2(w / 2.0, hgt - capped);
+    h.event(egui::Event::PointerMoved(edge));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    for dy in [10.0, 20.0, 30.0] {
+        h.event(egui::Event::PointerMoved(edge - egui::vec2(0.0, dy)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: edge - egui::vec2(0.0, 30.0),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(4);
+    assert!((review_height(&h) - capped).abs() < 1.0, "still at the cap");
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    h.run_steps(4);
+    assert!(
+        (review_height(&h) - capped).abs() < 1.0,
+        "the Textures view restored {} over the user's {capped}",
+        review_height(&h)
+    );
+}
+
 /// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
 #[test]
 fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {

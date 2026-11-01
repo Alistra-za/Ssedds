@@ -4,7 +4,7 @@ The left column of the Textures view: one tile per source file, its filters, sor
 
 ## Textures (left)
 
-One tile per file, with a thumbnail, its name and badges. An amber border means the texture still needs an answer ([Deciding](GUI-Texture-Panel.md#deciding)). Click a tile to select it, double-click it for the preview.
+One tile per file, with a thumbnail, its name and badges. A DDS input Tessalith does not re-encode shows the file as stored: its tile image arrives shortly after the plan lands (a grey box until then, or for a DDS that cannot be previewed). An amber border means the texture still needs an answer ([Deciding](GUI-Texture-Panel.md#deciding)). Click a tile to select it, double-click it for the preview.
 
 Helper files (raw AO, metallic, roughness, specular, opacity and other masks, RNM layers) are not tiles. They are rows in the **Helpers** group under the tiles; see [Helper textures](GUI-Helpers-RNM-and-Cubemaps.md#helper-textures). A cube made of six face files is one item, named `<output name> (6 faces)` ([Cubemaps](GUI-Helpers-RNM-and-Cubemaps.md#cubemaps)).
 

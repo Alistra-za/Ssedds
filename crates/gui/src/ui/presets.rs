@@ -42,6 +42,57 @@ enum Act {
     ResetAll,
 }
 
+/// Note FI16 (owner O7): the project's Mode (`target` in `sdc.toml`), moved here from the header. A pick is returned for
+/// the caller to apply once the `PresetsModel` borrow ends. The project's target wins over a preset's own Target.
+fn project_mode(ui: &mut egui::Ui, model: &AppModel) -> Option<Target> {
+    use super::header::{target_help, target_name};
+    ui.weak("This project (sdc.toml)");
+    let off = if model.project.is_none() {
+        Some("Open a folder first".to_string())
+    } else {
+        model.toml_read_only_reason()
+    };
+    let mut picked = model.target;
+    ui.horizontal(|ui| {
+        ui.label("Mode");
+        ui.add_enabled_ui(off.is_none(), |ui| {
+            let r = egui::ComboBox::from_id_salt("mode")
+                .selected_text(target_name(model.target))
+                .show_ui(ui, |ui| {
+                    for t in [Target::Cs, Target::Vanilla] {
+                        ui.selectable_value(&mut picked, t, target_name(t))
+                            .on_hover_text(target_help(t));
+                    }
+                })
+                .response;
+            let enabled = ui.is_enabled();
+            r.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::ComboBox,
+                    enabled,
+                    format!("Mode (this project): {}", target_name(model.target)),
+                )
+            });
+            match &off {
+                Some(why) => {
+                    r.on_disabled_hover_text(why);
+                }
+                None => {
+                    r.on_hover_text(
+                        "The target the textures are converted for: cs or vanilla. Saved in sdc.toml as target.",
+                    );
+                }
+            }
+        });
+    });
+    ui.weak("Wins over a preset's own Target.")
+        .on_hover_text(
+            "The project's target in sdc.toml is used before the preset's Target (sdc.exe does the same).",
+        );
+    ui.separator();
+    (picked != model.target).then_some(picked)
+}
+
 /// The creator, in the centre column or in its popped-out window (Note FB7).
 pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
     let ctx = ui.ctx().clone();
@@ -53,6 +104,7 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
         });
     });
     let target = model.target;
+    let mode = project_mode(ui, model);
     let pm = model.presets_model();
     let mut acts = vec![];
     top_bar(ui, pm, &mut acts);
@@ -67,6 +119,9 @@ pub fn view(ui: &mut egui::Ui, model: &mut AppModel) {
             .show(ui, |ui| body(ui, pm, &mut acts));
     }
     discard_prompt(ctx, model, &mut acts);
+    if let Some(t) = mode {
+        model.set_target(t);
+    }
     let mut saved = false;
     for a in acts {
         let pm = model.presets_model();

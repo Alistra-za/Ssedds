@@ -1348,3 +1348,90 @@ fn a_stale_sdc_sidecar_is_rewritten_on_the_next_run() {
         serde_json::from_str(&std::fs::read_to_string(&side).unwrap()).unwrap();
     assert_eq!(v, m["armor/iron.dds"].raw);
 }
+
+/// A 64 px BC1 DDS at `path`, written by the engine's writer.
+fn bc1_dds(path: &Path) {
+    use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+    let desc = DdsDesc {
+        width: 64,
+        height: 64,
+        format: engine::config::Format::Bc1,
+        srgb: false,
+        header: ResolvedHeader::Legacy,
+    };
+    let data = vec![[0x00, 0xF8, 0x00, 0xF8, 0, 0, 0, 0].repeat(256)];
+    std::fs::write(path, dds_bytes(&desc, &data).unwrap()).unwrap();
+}
+
+/// Plans `textures/pbr/rock` holding `files` (`.dds` written as BC1, else a PNG) under CS, no overrides.
+fn plan_rock(dir: &Path, files: &[&str]) -> (Plan, Vec<EngineEvent>) {
+    let t = dir.join("textures/pbr/rock");
+    std::fs::create_dir_all(&t).unwrap();
+    for f in files {
+        if f.ends_with(".dds") {
+            bc1_dds(&t.join(f));
+        } else {
+            ImageBuffer::from_fn(64, 64, |x, y| Rgb([x as u8 * 4, y as u8 * 4, 90]))
+                .save(t.join(f))
+                .unwrap();
+        }
+    }
+    let mut r = BatchRequest::new(vec![dir.join("textures")], dir.join("out"), Target::Cs);
+    r.recursive = true;
+    r.accept = AcceptSuggestions::High;
+    let sink = Arc::new(VecSink::default());
+    let rep = Reporter::new(sink.clone(), new_batch_id());
+    let plan = Engine::new()
+        .unwrap()
+        .plan(r, &rep, &CancelToken::default())
+        .unwrap();
+    (plan, sink.take())
+}
+
+fn set_resolved(ev: &[EngineEvent]) -> Vec<&EngineEvent> {
+    ev.iter()
+        .filter(|e| matches!(e.kind, EventKind::SetResolved { .. }))
+        .collect()
+}
+
+#[test]
+fn an_all_dds_set_resolves() {
+    // Note FI2: a set with no image member still resolves, so the GUI lists it.
+    let d = tempfile::tempdir().unwrap();
+    let (plan, ev) = plan_rock(d.path(), &["rock.dds", "rock_n.dds"]);
+    let sets = set_resolved(&ev);
+    assert_eq!(sets.len(), 1, "{sets:?}");
+    let EventKind::SetResolved { members, .. } = &sets[0].kind else {
+        unreachable!()
+    };
+    assert_eq!(members.len(), 2, "{members:?}");
+    let key = sets[0].set.clone();
+    assert!(key.is_some());
+    for f in ["rock.dds", "rock_n.dds"] {
+        assert!(
+            plan.skipped
+                .iter()
+                .any(|s| s.path.ends_with(f) && s.code == Some(Code::InDdsSkipped) && s.set == key),
+            "{f}: {:?}",
+            plan.skipped
+        );
+    }
+}
+
+#[test]
+fn a_mixed_set_resolves_once_as_before() {
+    // Note FI2 guard (Review Focus 1): a set with an image member resolves once, its pbr flag and pick unchanged.
+    let d = tempfile::tempdir().unwrap();
+    let (_, ev) = plan_rock(d.path(), &["rock.png", "rock_n.dds"]);
+    let sets = set_resolved(&ev);
+    assert_eq!(sets.len(), 1, "{sets:?}");
+    let EventKind::SetResolved { pbr, shader, .. } = &sets[0].kind else {
+        unreachable!()
+    };
+    // Measured on main 8e41d853 before the fix.
+    assert!(*pbr);
+    assert_eq!(
+        shader.as_ref().map(|p| p.shader),
+        Some(engine::shader::Shader::Pbr)
+    );
+}

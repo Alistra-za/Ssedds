@@ -6,7 +6,7 @@ use super::settings_panel::{
 use super::status::{AMBER, RED};
 use super::type_picker::{self, TypeKind};
 use crate::model::bottom::{problems, Level};
-use crate::model::code_text::code_line;
+use crate::model::code_text::{ack_label, ack_label_for_texture, code_line};
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{
@@ -17,6 +17,12 @@ use eframe::egui;
 use engine::config::{AlphaPolicy, CubeLayout, Subtype, Target};
 use engine::manifest::RecodeWhy;
 use engine::presets::{AlsoTarget, ExportConfig};
+use std::path::Path;
+
+/// Note FI5: what the Also location reads while no export folder is chosen (the fallback is never shown as a path).
+const NOT_CHOSEN_YET: &str = "the export folder (not chosen yet)";
+/// Note FI5: what a JSON line's path starts with while no export folder is chosen.
+const NOT_CHOSEN_ROOT: &str = "‹export folder›";
 
 /// What a click on an undecided row asks for.
 pub enum RowPick {
@@ -126,7 +132,8 @@ pub fn undecided_row(
                     // Note FB8: the sentence, with the code on its hover.
                     ui.label(code_line(*code)).on_hover_text(code.as_str());
                     if ui
-                        .button("Acknowledge for this texture")
+                        .button(ack_label_for_texture(*code))
+                        .on_hover_text(code_line(*code))
                         .on_disabled_hover_text(why)
                         .clicked()
                     {
@@ -221,6 +228,8 @@ pub fn fix_buttons(
                 }
                 Decision::AlphaMeaning => {
                     ui.menu_button("Decide…", |ui| {
+                        // Note FI11 (D14): the question, as Review's inline row asks it.
+                        ui.label(egui::RichText::new("Alpha means:").weak());
                         for (v, label) in alpha_options() {
                             let Ok(policy) = serde_json::from_value::<AlphaPolicy>(v) else {
                                 continue;
@@ -242,7 +251,8 @@ pub fn fix_buttons(
                 }
                 Decision::Acknowledge(code) => {
                     if ui
-                        .button("Acknowledge")
+                        .button(ack_label(*code))
+                        .on_hover_text(code_line(*code))
                         .on_disabled_hover_text(why)
                         .clicked()
                     {
@@ -286,8 +296,12 @@ pub(super) fn plural(n: usize) -> &'static str {
 }
 
 /// R6: one line per JSON file under What will be written.
-fn json_line_text(l: &JsonLine) -> String {
-    let path = l.path.display();
+/// Note FI5: with `unchosen` (the export folder's fallback name) the path is shown under `‹export folder›`.
+fn json_line_text(l: &JsonLine, unchosen: Option<&Path>) -> String {
+    let path = match unchosen.and_then(|r| l.path.strip_prefix(r).ok()) {
+        Some(rel) => format!("{NOT_CHOSEN_ROOT}\\{}", rel.display()),
+        None => l.path.display().to_string(),
+    };
     match (l.state, l.kind) {
         (DiskState::New, _) => format!("{path}: will be written"),
         (DiskState::Ours, _) => format!("{path}: will be replaced (written by Tessalith)"),
@@ -342,6 +356,7 @@ fn nif_row_text(
 enum Footer<'a> {
     Heading(String),
     Nif(&'a crate::model::meshes::NifReviewRow),
+    NifWaiting(&'a crate::model::meshes::NifReviewRow),
     Stale(&'a engine::manifest::StaleOutput),
     Written(usize),
     Json(&'a JsonLine),
@@ -550,8 +565,15 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                 }
             }
         });
-        ui.weak("Export location");
-        let loc = m.also_location().display().to_string();
+        ui.weak("Also folders go in");
+        // Note FI5: with no export folder chosen and no own location, the fallback is a name, never a `sdc-out` path.
+        let unchosen = m.export_folder_chosen().is_none()
+            && m.sets_doc.as_ref().and_then(|d| d.also_location()).is_none();
+        let loc = if unchosen {
+            NOT_CHOSEN_YET.to_string()
+        } else {
+            m.also_location().display().to_string()
+        };
         egui::Sides::new().shrink_left().truncate().show(
             ui,
             |ui| {
@@ -560,17 +582,20 @@ fn also_section(ui: &mut egui::Ui, m: &AppModel, gate: Option<&str>, act: &mut O
                 });
                 let chars = (ui.available_width() / glyph).floor().max(8.0) as usize;
                 let r = ui.add(egui::Label::new(super::header::elide_middle(&loc, chars)));
-                let name = format!("Export location: {loc}");
+                let name = format!("Also folders go in: {loc}");
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
                 r.on_hover_text(&loc);
             },
             |ui| {
-                let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
+                let r = ui.add_enabled(
+                    !m.picker.busy(),
+                    egui::Button::new("Choose where the Also folders go…"),
+                );
                 r.widget_info(|| {
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
                         r.enabled(),
-                        "Choose the Also export location…",
+                        "Choose where the Also folders go…",
                     )
                 });
                 let r = r
@@ -724,6 +749,14 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
     let any_suggestion = undecided
         .iter()
         .any(|k| matches!(m.subtype_question(k), Some(Some(_))));
+    // Note FI11 (A11): Accept all takes type suggestions only; an alpha meaning needs the user's answer.
+    let any_alpha = undecided.iter().any(|k| {
+        m.item(k).is_some_and(|i| {
+            i.decisions
+                .iter()
+                .any(|d| matches!(d, Decision::AlphaMeaning))
+        })
+    });
     let gate = m.review_gate();
     let nif_folder = m.export_folder_chosen();
     let folder_chosen = nif_folder.is_some();
@@ -753,6 +786,18 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     nif_written.len()
                 )));
                 list.extend(nif_written.iter().map(|r| Footer::Nif(r)));
+            }
+            // Note FI7 (O5): the Blockers column already names the missing folder, so these are not Warnings.
+            let nif_waiting: Vec<_> = nif_rows
+                .iter()
+                .filter(|r| r.blocked.as_deref() == Some(NO_EXPORT_FOLDER))
+                .collect();
+            if !nif_waiting.is_empty() {
+                list.push(Footer::Heading(format!(
+                    "NIF edits skipped until an export folder is chosen ({})",
+                    nif_waiting.len()
+                )));
+                list.extend(nif_waiting.iter().map(|r| Footer::NifWaiting(r)));
             }
             // FC11: not a gate. A row Tessalith still owns (its stamp matches) has Delete, on a click only.
             if !m.stale.is_empty() {
@@ -788,6 +833,13 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     ui.add(egui::Label::new(&t).truncate())
                                         .on_hover_text(format!("{}: {t}", r.path));
                                 }
+                                Footer::NifWaiting(r) => {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(&r.path).weak())
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&r.path);
+                                }
                                 Footer::Stale(s) => {
                                     if let Some(a) = stale_row(ui, m, s, off) {
                                         act = Some(a);
@@ -798,7 +850,8 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     ui.label(format!("{files} DDS file{}", plural(*files)));
                                 }
                                 Footer::Json(l) => {
-                                    ui.label(json_line_text(l));
+                                    let fallback = (!folder_chosen).then(|| m.export_root());
+                                    ui.label(json_line_text(l, fallback.as_deref()));
                                 }
                             });
                         }
@@ -855,7 +908,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         || nif_rows
             .iter()
             .any(|r| r.blocked.is_none() && r.foreign.is_some());
-    let nif_skipped: Vec<_> = nif_rows.iter().filter(|r| r.blocked.is_some()).collect();
+    let nif_skipped: Vec<_> = nif_rows
+        .iter()
+        .filter(|r| r.blocked.as_deref().is_some_and(|b| b != NO_EXPORT_FOLDER))
+        .collect();
     let n_cols = if also_on { 4 } else { 3 };
     let heading = |i: usize| match i {
         0 => ("Blockers", format!("Blockers ({blockers})")),
@@ -881,14 +937,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
             if !folder_chosen {
                 ui.horizontal_wrapped(|ui| {
                     ui.colored_label(RED, NO_EXPORT_FOLDER);
-                    let r = ui.add_enabled(!m.picker.busy(), egui::Button::new("Choose…"));
-                    r.widget_info(|| {
-                        egui::WidgetInfo::labeled(
-                            egui::WidgetType::Button,
-                            r.enabled(),
-                            "Choose the export folder…",
-                        )
-                    });
+                    // Rule 5.4: the visible text is the accessible name.
+                    let r = ui.add_enabled(
+                        !m.picker.busy(),
+                        egui::Button::new("Choose the export folder…"),
+                    );
                     let r = r
                         .on_hover_text("Choose where converted textures are written")
                         .on_disabled_hover_text(picker::BUSY_HOVER);
@@ -959,10 +1012,11 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                     egui::Button::new("Accept all suggestions"),
                 )
                 .on_hover_text("Decide every texture that has a suggestion; the others stay listed")
-                .on_disabled_hover_text(
-                    off.as_deref()
-                        .unwrap_or("No undecided texture has a suggestion"),
-                );
+                .on_disabled_hover_text(off.as_deref().unwrap_or(if any_alpha {
+                    "Only type suggestions are accepted here; an alpha meaning needs your answer"
+                } else {
+                    "No undecided texture has a suggestion"
+                }));
             if accept.clicked() {
                 act = Some(Act::AcceptAll);
             }

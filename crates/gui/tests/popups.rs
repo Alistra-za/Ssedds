@@ -34,7 +34,7 @@ fn harness() -> (tempfile::TempDir, H) {
     // Note FC12: the selector starts at the set's lowest unused match; the slot-1 list is the one under test.
     h.get_by_value("Match 2").click();
     h.run();
-    h.get_by_label("Match 1 · diffuse").click();
+    h.get_by_label("Match 1 · Diffuse").click();
     h.run();
     h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
     h.run();

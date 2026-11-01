@@ -2062,3 +2062,99 @@ fn a_generated_p_fills_the_height_slot_until_a_real_p_replaces_it() {
         .iter()
         .any(|p| format!("{p:?}").contains("GEN-REPLACED")));
 }
+
+/// Note FI2: a set of DDS files is a set: listed, and "Not in a set" is about names only.
+#[test]
+fn an_all_dds_folder_shows_its_set() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    bc1_dds(&root.join("rock/rock.dds"));
+    bc1_dds(&root.join("rock/rock_n.dds"));
+    let m = opened_as_the_app(root, d.path().join("export"));
+    assert_eq!(m.sets.len(), 1, "{:?}", m.sets);
+    assert_eq!(m.sets[0].members.len(), 2);
+    assert_eq!(m.not_in_set_count(), 0);
+    // The settings panel's `← set` link shows when the item's set key is a listed set (settings_panel.rs).
+    let it = m.item("rock/rock.dds").expect("the DDS item");
+    let sk = it.set_key.clone().expect("a set key");
+    assert!(m.sets.iter().any(|s| s.key == sk));
+}
+
+fn png64(path: &std::path::Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    image::ImageBuffer::from_fn(64, 64, |x, y| image::Rgb([x as u8 * 4, y as u8 * 4, 90u8]))
+        .save(path)
+        .unwrap();
+}
+
+#[test]
+fn output_game_paths_lists_the_folders_textures() {
+    let d = tempfile::tempdir().unwrap();
+    png64(&d.path().join("textures/pbr/xmead/Ale_BC.png"));
+    bc1_dds(&d.path().join("textures/pbr/xmead/ale_bc_n.dds"));
+    let mut m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    let (rev, paths) = m.output_game_paths();
+    assert_eq!(
+        paths,
+        [
+            "textures/pbr/xmead/ale_bc.dds",
+            "textures/pbr/xmead/ale_bc_n.dds"
+        ]
+    );
+    // A re-plan with no change keeps the revision.
+    m.replan();
+    idle(&mut m);
+    assert_eq!(m.output_game_paths().0, rev);
+    // Adding a file bumps it.
+    png64(&d.path().join("textures/pbr/xmead/Ale_Extra.png"));
+    m.replan();
+    idle(&mut m);
+    let (rev2, paths) = m.output_game_paths();
+    assert!(rev2 > rev);
+    assert_eq!(paths.len(), 3, "{paths:?}");
+}
+
+#[test]
+fn output_game_paths_leaves_out_a_path_with_no_textures_component() {
+    let d = tempfile::tempdir().unwrap();
+    // `loose.png` outputs at the export root; its sibling under `textures/` must still be listed.
+    png64(&d.path().join("loose.png"));
+    png64(&d.path().join("textures/c.png"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    assert!(m.item("loose.png").is_some_and(|i| i.job.is_some()));
+    assert_eq!(m.output_game_paths().1, ["textures/c.dds"]);
+}
+
+#[test]
+fn output_game_paths_starts_at_textures_after_a_prefix() {
+    let d = tempfile::tempdir().unwrap();
+    png64(&d.path().join("mymod/textures/x.png"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    assert_eq!(m.output_game_paths().1, ["textures/x.dds"]);
+}
+
+#[test]
+fn output_game_paths_dedups_two_inputs_with_one_output() {
+    let d = tempfile::tempdir().unwrap();
+    png64(&d.path().join("textures/Ale_BC.png"));
+    bc1_dds(&d.path().join("textures/ale_bc.dds"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    let both = m
+        .items
+        .iter()
+        .filter(|i| i.job_key == "textures/ale_bc.dds")
+        .count();
+    assert_eq!(both, 2, "the fixture must give two inputs one output");
+    assert_eq!(m.output_game_paths().1, ["textures/ale_bc.dds"]);
+}
+
+#[test]
+fn output_game_paths_includes_a_skipped_dds() {
+    let d = tempfile::tempdir().unwrap();
+    bc1_dds(&d.path().join("textures/Rock/Rock.dds"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    assert!(m
+        .item("textures/Rock/Rock.dds")
+        .is_some_and(|i| i.job.is_none()));
+    assert_eq!(m.output_game_paths().1, ["textures/rock/rock.dds"]);
+}

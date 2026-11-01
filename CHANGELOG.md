@@ -13,6 +13,11 @@
 - Unsaved edits survive a crash: the next open restores them, with a toast that can undo it. After a lost graphics device the app restarts.
 - Automatic decisions (the ones Tessalith makes without asking) are recorded in `sdc.toml`, so the GUI and CLI agree on them.
 - After an upgrade, a notice says which outputs re-encode and why. `sdc validate`'s cube check on a 2D file (`_e` or under `textures\cubemaps\`) warns instead of failing.
+- GUI review D: a DDS input can be re-encoded (**Re-encode this file**, or **Re-encode *n* DDS files** in the bulk panel), shows its stored image on its tile, and an all-DDS set is listed as a set.
+- Header: **Mode** moved to the **Presets** tab (This project); **Export to** reads "not chosen" until a folder is chosen (**More ▾** only with no project open); Review's button is **Choose the export folder…**; the header's Review/Export text counts NIF edits, also with no folder open.
+- Renamed: *Pin this slot (always use this file)*, *Keep the original texture* / *Let PGPatcher replace the texture*, the **PGPatcher JSON** editor (was TruePBR JSON) and its **+ Add a delete section**. "Used by plugins" numbers slots from 1.
+- The input name box edits the whole path by segment (double-click, Ctrl+Left/Right, Ctrl+Up/Down lists); the path lock rail is gone.
+- The command palette's Enter acts only after you type or move the highlight. Automatic types alone no longer ask on close. In the Meshes view with a NIF selected the bottom panel leaves room for the 3D preview.
 - Fixes:
   - NIF validate reads non-ASCII texture paths and BSX names as Windows-1252, the same as apply.
   - The 2D and set previews update when a helper's Invert or Read changes, or when a bake, cube face or derive source changes.

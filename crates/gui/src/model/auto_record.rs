@@ -19,16 +19,33 @@ use serde_json::json;
 pub(crate) struct AutoNote {
     /// The row's text, `{n} types set automatically (High confidence)`; its count is the step label's.
     pub text: String,
-    /// `key: value`, one per written value (a threshold rides on its policy's line), for the row's hover.
+    /// `file name: value`, one per written value (a threshold rides on its policy's line), for the row's hover; the
+    /// last line explains High confidence when a sub-type was set.
     pub lines: Vec<String>,
     /// The `history.pushes` the step left: the row offers Undo only while it is the top step.
     pub step: u64,
+    /// Note FI4: nothing prompted to be saved just before it, so while it is the top step nothing does.
+    pub clean_before: bool,
 }
 
-/// A written value as the row lists it: `normal`, `cutout`.
+/// A written value as the row lists it: `cutout`, a number.
 fn show(v: &serde_json::Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), str::to_string)
 }
+
+/// A written sub-type as the type picker shows it (`landscape diffuse`), not its id.
+fn show_type(v: &serde_json::Value) -> String {
+    serde_json::from_value::<Subtype>(v.clone())
+        .map_or_else(|_| show(v), super::labels::subtype_name)
+}
+
+/// The file's name, not its folder or game path (the hover lists files; the folder is in the Textures tree).
+fn file_name(key: &str) -> &str {
+    key.rsplit(['/', '\\']).next().unwrap_or(key)
+}
+
+/// Ends the row's hover when a sub-type was set (Note FI11, A17).
+const HIGH_CONFIDENCE: &str = "High confidence: the file name and the pixels agree on the type.";
 
 impl AppModel {
     /// What auto-accept picks for `key` from the plan: its top name-based suggestion when High (a `[files]` sub-type
@@ -131,7 +148,12 @@ impl AppModel {
                 if let Some(new) =
                     new.filter(|n| *n != old && doc.file_value(&k, "subtype") == Some(old.clone()))
                 {
-                    lines.push(format!("{k}: {} → {}", show(&old), show(&new)));
+                    lines.push(format!(
+                        "{}: {} → {}",
+                        file_name(&k),
+                        show_type(&old),
+                        show_type(&new)
+                    ));
                     writes.push((k, "subtype", new));
                 }
             }
@@ -162,11 +184,21 @@ impl AppModel {
                 }
                 if f != "alpha.threshold" {
                     only_types &= f == "subtype";
-                    lines.push(format!("{}: {}", i.key, show(&v)));
+                    let v = if f == "subtype" {
+                        show_type(&v)
+                    } else {
+                        show(&v)
+                    };
+                    lines.push(format!("{}: {v}", file_name(&i.key)));
                 }
                 writes.push((i.key.clone(), f, v));
             }
         }
+        // Note FI3: after a re-encode step still on top, the recording joins it (`set_reencode`).
+        let join = self
+            .reencode_follow
+            .take()
+            .filter(|k| self.history.undo.last().and_then(|c| c.merge.as_ref()) == Some(k));
         if writes.is_empty() {
             return false;
         }
@@ -177,6 +209,17 @@ impl AppModel {
         for (k, f, _) in &writes {
             self.history.auto_written.insert((k.clone(), f));
         }
+        if let Some(k) = join {
+            // One step with the re-encode (its label stays), so no row of its own offers a separate Undo.
+            let pushes = self.history.pushes;
+            self.edit_docs(&label, Some(k), true, |p, _| {
+                for (k, f, v) in &writes {
+                    p.set_file_value(k, f, v);
+                }
+            });
+            return self.history.pushes != pushes;
+        }
+        let clean_before = !self.prompts_unsaved();
         let wrote = self.batch_edit(&label, |m| {
             m.edit("Set automatically", |p| {
                 for (k, f, v) in &writes {
@@ -185,10 +228,15 @@ impl AppModel {
             })
         });
         if wrote {
+            let typed = writes.iter().any(|(_, f, _)| *f == "subtype");
             self.auto_note = Some(AutoNote {
                 text: format!("{n} {noun}{s} set automatically (High confidence)"),
-                lines,
+                lines: lines
+                    .into_iter()
+                    .chain(typed.then(|| HIGH_CONFIDENCE.to_string()))
+                    .collect(),
                 step: self.history.pushes,
+                clean_before,
             });
             self.invalidate_views();
         }

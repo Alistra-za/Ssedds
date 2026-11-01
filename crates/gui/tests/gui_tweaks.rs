@@ -314,7 +314,7 @@ fn the_json_editor_shows_each_set_and_adds_a_delete_section_that_crosses_out_the
         h.query_all_by_label("Show").count() >= 1,
         "the rock set's pill"
     );
-    h.get_by_label("+ Delete section").click();
+    h.get_by_label("+ Add a delete section").click();
     h.run();
     assert_eq!(h.state().0.sections().len(), 1);
     h.get_by_label("Delete section 1");
@@ -324,7 +324,7 @@ fn the_json_editor_shows_each_set_and_adds_a_delete_section_that_crosses_out_the
         .set_section_value(0, "match1", Some(json!("landscape\\rock01")));
     h.run();
     h.get_by_label_contains("Delete section 1 deletes the shapes this set is for");
-    h.get_by_label("Close TruePBR JSON").click();
+    h.get_by_label("Close PGPatcher JSON").click();
     h.run();
     assert!(!h.state().0.json_editor_open);
 }

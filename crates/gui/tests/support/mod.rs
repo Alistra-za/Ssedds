@@ -313,6 +313,32 @@ pub fn slopes_to_normals(hf: &[f64], w: usize, k: f64) -> Vec<[f64; 3]> {
         .collect()
 }
 
+/// A 64 px BC1 DDS at `path` (parent folders made), written by the engine's writer, never copied.
+pub fn bc1_dds(path: &Path) {
+    use engine::dds::{dds_bytes, DdsDesc, ResolvedHeader};
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let desc = DdsDesc {
+        width: 64,
+        height: 64,
+        format: engine::config::Format::Bc1,
+        srgb: false,
+        header: ResolvedHeader::Legacy,
+    };
+    let data = vec![[0x00, 0xF8, 0x00, 0xF8, 0, 0, 0, 0].repeat(256)];
+    std::fs::write(path, dds_bytes(&desc, &data).unwrap()).unwrap();
+}
+
+/// Note FI2: a released mod's all-DDS PBR sets: `textures/pbr/<s>/<s>.dds`, `<s>_n.dds` and `<s>_rmaos.dds` for each
+/// of `sets` under `dir`; returns the `textures` folder.
+pub fn dds_pbr_sets(dir: &Path, sets: &[&str]) -> PathBuf {
+    for s in sets {
+        for suffix in ["", "_n", "_rmaos"] {
+            bc1_dds(&dir.join(format!("textures/pbr/{s}/{s}{suffix}.dds")));
+        }
+    }
+    dir.join("textures")
+}
+
 /// A unit normal stored as 8-bit RGB, `(n + 1) / 2`.
 pub fn normal_rgb(n: [f64; 3]) -> [u8; 3] {
     n.map(|c| ((c.clamp(-1.0, 1.0) * 0.5 + 0.5) * 255.0).round() as u8)

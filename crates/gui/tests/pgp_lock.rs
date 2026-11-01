@@ -18,8 +18,8 @@ use std::time::Duration;
 use support::*;
 
 const SET: &str = "landscape/rock01";
-const KEEP: &str = "Keep original texture (PGPatcher lock)";
-const STOP: &str = "Stop keeping original texture (PGPatcher lock)";
+const KEEP: &str = "Keep the original texture (PGPatcher won't replace it)";
+const STOP: &str = "Let PGPatcher replace the texture";
 const CAPTION: &str = "The original texture in this spot is used";
 const HOVER: &str = "Kept by PGPatcher (lock_rmaos): the mesh's original texture is used here";
 
@@ -234,14 +234,14 @@ fn the_sdc_pin_is_renamed_and_still_works() {
     let menu = m.slot_menu(SET, SlotKind::Normal);
     let pin = menu
         .iter()
-        .find(|e| e.label == "Pin slot (sdc)")
+        .find(|e| e.label == "Pin this slot (always use this file)")
         .expect("pin entry");
     assert_eq!(m.run_menu(pin.action.clone()), None);
     assert!(m.slot_locked(SET, 2));
     assert!(m
         .slot_menu(SET, SlotKind::Normal)
         .iter()
-        .any(|e| e.label == "Unpin slot (sdc)"));
+        .any(|e| e.label == "Unpin this slot"));
 }
 
 fn harness(model: AppModel) -> Harness<'static, AppModel> {

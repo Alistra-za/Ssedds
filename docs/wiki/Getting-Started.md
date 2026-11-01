@@ -161,13 +161,13 @@ Install the output as [Installing the output](Validation-and-Output.md#installin
 The GUI runs the same engine and reads and writes the same `sdc.toml`, so you can switch between the two at any point.
 
 1. Start `tessalith.exe`. The start screen has one large **Open folder** button (and your recent folders below it). Click it and pick `C:\Work\IronPlate`, or drag the folder onto the window. Nothing is written yet.
-2. Check **Mode** in the header. It should read `cs`. Changing it writes `target` to `sdc.toml`.
+2. Check **Mode** at the top of the **Presets** tab (**Presets…** in the header's Preset menu). It should read `cs`. Changing it writes `target` to `sdc.toml`.
 3. The Textures column on the left shows a tile per file. The three raw maps show "Packed into ..." because they feed the `_rmaos`. A tile with an amber border is undecided. Click the **Undecided** pill above the tiles to see only those (**Filter ▾** has the other filters and the sort).
 4. Click a tile. The centre column shows its settings in groups (Type, Colour, Alpha, Mipmaps, Compression), and each value says where it came from. A sub-type the GUI accepted reads **(auto)**; hover it to see why.
 5. For an amber tile, answer the question shown in the centre column: the sub-type buttons, the alpha buttons (*Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*), *DirectX* or *OpenGL* for a normal map's green channel, or **Acknowledge for this texture** for a blocking warning. Each answer is written to `sdc.toml` as a `[files]` entry.
 6. Click the `ironplate` set in the Sets column on the right. Its card shows the set's status, its shader and a lettered chip per slot. The set editor shows a row for each slot (Diffuse, Normal, RMAOS and so on) and the set's **Shader**, which should read `pbr` (auto). On the RMAOS card you can set fills for missing channels; for this example set Specular to 128 to match the `sdc.toml` from Part 1.
 7. Fill in the TruePBR settings for the set (Material, Features and the rest) if you want values other than the defaults. Leave **Matching** on the diffuse path.
-8. Check **Export to** in the header (its menu has **Choose export folder…**). It is not drawn until you choose a folder: use **More ▾ → Choose export folder…**, or the **Choose…** button in Review. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
+8. Check **Export to** in the header (its menu has **Choose export folder…**). It reads **Export to: not chosen** until you choose a folder: use its **Choose export folder…**, or the **Choose the export folder…** button in Review. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
 9. Press **Export**. If the Review tab opens first, fix or tick what it lists and press its Export ([Export](GUI-Review-and-Export.md#export)).
 10. When the export finishes, the GUI writes `<export folder>\PBRNIFPatcher\<name>.json` for every PBR set that exported fully.
 
@@ -175,6 +175,6 @@ To get an equivalent command line, press **Copy CLI command** in the Files tab a
 
 ## Where to go next
 
-- [GUI guide](GUI-Guide.md) for bulk editing, renaming, the 3D preview and the TruePBR JSON editor.
+- [GUI guide](GUI-Guide.md) for bulk editing, renaming, the 3D preview and editing the PGPatcher JSON.
 - [Mod scanning](Mod-Scanning.md) to let the GUI learn alpha modes and shaders from the meshes that use your textures.
 - [Presets and targets](Presets-and-Targets.md) to switch to Vanilla output (with complex material `_m` maps if you want them), or to smaller BC1 files.

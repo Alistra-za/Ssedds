@@ -440,7 +440,7 @@ fn build_problems(m: &AppModel) -> Vec<Problem> {
                 _ => None,
             })
             .collect();
-        let text = format!("Undecided: {}", parts.join("; "));
+        let text = format!("Undecided: {}", parts.join(". "));
         let suggested = i.decisions.iter().find_map(|d| match d {
             Decision::Subtype { suggested } => *suggested,
             _ => None,
