@@ -145,6 +145,11 @@ fn section(ui: &mut egui::Ui, name: &str, body: impl FnOnce(&mut egui::Ui)) {
         .show(ui, body);
 }
 
+/// Slack kept off the inspector grid's width for the scroll bar and the grid's own cell padding (rule 3.7).
+const GRID_MARGIN: f32 = 24.0;
+/// The narrowest an inspector column gets.
+const MIN_COL: f32 = 60.0;
+
 /// A field's row text: the bulk panel's label, else the key as words ("alpha.compare" is "Alpha compare").
 fn field_text(field: &str) -> String {
     let label = crate::model::bulk::field_label(field);
@@ -159,14 +164,13 @@ fn inspector(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState)
     let mut open_presets = false;
     section(ui, "Preset inspector", |ui| {
         // D10: the drawer names the texture first (A18).
-        let heading = match &model.selection {
-            Selection::Item(key) if !model.in_bulk() => {
-                format!(
-                    "How {}'s settings resolve",
-                    key.rsplit('/').next().unwrap_or(key)
-                )
-            }
-            _ => "No texture selected".to_string(),
+        // Only a texture with resolved settings is named; the body below has nothing to show for any other.
+        let heading = match selected_job(model) {
+            Some((key, _)) => format!(
+                "How {}'s settings resolve",
+                key.rsplit('/').next().unwrap_or(&key)
+            ),
+            None => "No texture selected".to_string(),
         };
         ui.label(egui::RichText::new(heading).strong());
         ui.weak(format!("Batch preset: {}", model.batch_preset));
@@ -212,8 +216,8 @@ fn inspector(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState)
             return;
         }
         // Three columns share the drawer's width (the drawer's minimum keeps each above 60 px, so no side scroll).
-        let col =
-            ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x - 24.0) / 3.0).max(60.0);
+        let col = ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x - GRID_MARGIN) / 3.0)
+            .max(MIN_COL);
         egui::Grid::new("inspector")
             .num_columns(3)
             .striped(true)
@@ -228,10 +232,15 @@ fn inspector(ui: &mut egui::Ui, model: &mut AppModel, state: &mut AdvancedState)
                         }
                     };
                     let shown = field_text(&r.field);
-                    let key_label = ui
-                        .add(egui::Label::new(text(shown.clone())).truncate())
-                        .on_hover_text(&r.field);
+                    // One tooltip: the name and its key (the automatic elided-text one is off for this label).
                     let name = format!("{shown} ({})", r.field);
+                    let key_label = ui
+                        .add(
+                            egui::Label::new(text(shown))
+                                .truncate()
+                                .show_tooltip_when_elided(false),
+                        )
+                        .on_hover_text(&name);
                     key_label.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name)
                     });

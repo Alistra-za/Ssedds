@@ -270,6 +270,27 @@ fn drawer_harness(width: f32, model: AppModel) -> Harness<'static, AppModel> {
     h
 }
 
+/// `leaf_model` with a user preset whose id and rule glob are long, chosen as the project's preset, so the
+/// provenance column carries long text ("from preset …", "from rule …").
+fn long_text_model(dir: &std::path::Path) -> AppModel {
+    let presets = dir.join("user-presets");
+    std::fs::create_dir_all(&presets).unwrap();
+    std::fs::write(
+        presets.join("long.toml"),
+        "schema_version = 1\nid = \"a-preset-with-a-very-long-identifier-indeed\"\nversion = \"1.0.0\"\nbase = \"cs-quality\"\n\n[[rules]]\nmatch = { glob = \"**/landscape/leaf.png\" }\noverrides = { resize = \"half\" }\n",
+    )
+    .unwrap();
+    let mut model = opened(dir);
+    model.user_presets = Some(presets);
+    model.replan();
+    assert!(model.wait_idle(Duration::from_secs(60)));
+    model.set_preset(Some("a-preset-with-a-very-long-identifier-indeed".into()));
+    assert!(model.wait_idle(Duration::from_secs(60)));
+    model.settings.advanced_open = true;
+    model.select_item("landscape/leaf.png");
+    model
+}
+
 fn leaf_model(dir: &std::path::Path) -> AppModel {
     let mut model = opened(dir);
     model.settings.advanced_open = true;
@@ -306,51 +327,85 @@ fn the_inspector_shows_labels_with_the_key_on_hover() {
             r.field
         );
     }
-    // A dotted key with no label shows the readable form.
-    for r in rows
+    // A dotted key with no label shows the readable form, never the key.
+    let unlabelled: Vec<_> = rows
         .iter()
         .filter(|r| r.field.contains('.') && sdc_gui::model::bulk::field_label(&r.field) == r.field)
-    {
+        .collect();
+    assert!(
+        !unlabelled.is_empty(),
+        "the inspector lists an unlabelled dotted key"
+    );
+    for r in &unlabelled {
+        let words = sdc_gui::model::labels::readable(&r.field.replace('.', "_"));
+        h.get_by_label(&format!("{words} ({})", r.field));
         assert!(
             h.query_by_label(&r.field).is_none(),
             "{} shown raw",
             r.field
         );
     }
+    // The hover carries the key, once: a tooltip node with the name appears beside the row's own.
+    let r = labelled[0];
+    let name = format!(
+        "{} ({})",
+        sdc_gui::model::bulk::field_label(&r.field),
+        r.field
+    );
+    assert_eq!(h.query_all_by_label(&name).count(), 1);
+    h.get_by_label(&name).hover();
+    h.run();
+    assert_eq!(
+        h.query_all_by_label(&name).count(),
+        2,
+        "one tooltip with the key"
+    );
 }
 
-/// D10, rule 10.3: no inspector label ends past the drawer's edge.
+/// D10, rule 10.3: no inspector label ends past the drawer's edge. The drawer body is drawn alone in a viewport as
+/// wide as a narrow drawer (the panel itself is held wider by other sections, which would hide an overflow), with a
+/// user preset whose long id puts long text in the provenance column. Uses the unclipped label rect: the clipped
+/// `interact_rect` is cut to the viewport, so it could never exceed the edge.
 #[test]
 fn no_inspector_value_passes_the_drawer_edge() {
-    use eframe::egui::containers::panel::PanelState;
-    for width in [1100.0, 1280.0, 1600.0] {
+    for width in [260.0f32, 380.0, 520.0] {
         let d = tempfile::tempdir().unwrap();
-        let model = leaf_model(d.path());
-        let mut h = drawer_harness(width, model);
+        let mut h = Harness::builder()
+            .with_size(eframe::egui::vec2(width, 1400.0))
+            .build_ui_state(
+                |ui, model: &mut AppModel| {
+                    let mut state = sdc_gui::ui::advanced::AdvancedState::default();
+                    ui.allocate_ui(eframe::egui::vec2(width, 1400.0), |ui| {
+                        sdc_gui::ui::advanced::body(ui, model, &mut state);
+                    });
+                },
+                long_text_model(d.path()),
+            );
+        sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
         h.run();
-        let drawer = PanelState::load(&h.ctx, eframe::egui::Id::new("advanced"))
-            .unwrap()
-            .outer_rect;
         let inspector_top = h.get_by_label("Preset inspector").rect().min.y;
         let batch_top = h.get_by_label("Batch").rect().min.y;
         let mut checked = 0;
         for n in h.query_all_by_role(Role::Label) {
             let r = n.rect();
-            if r.min.x >= drawer.min.x && r.min.y > inspector_top && r.min.y < batch_top {
+            if r.min.y > inspector_top && r.min.y < batch_top {
                 checked += 1;
+                eprintln!(
+                    "{width}: {:?} {:?} {r:?}",
+                    n.accesskit_node().value(),
+                    n.accesskit_node().label()
+                );
                 assert!(
-                    r.max.x <= drawer.max.x + 0.5,
-                    "{width}: {:?} ends at {} past the drawer edge {}",
+                    r.max.x <= width + 1.0,
+                    "{width}: {:?} ends at {} past the drawer edge",
                     n.accesskit_node().label(),
-                    r.max.x,
-                    drawer.max.x
+                    r.max.x
                 );
             }
         }
         assert!(checked > 10, "{width}: only {checked} labels checked");
     }
 }
-
 #[test]
 fn the_inspector_names_the_texture() {
     let d = tempfile::tempdir().unwrap();
