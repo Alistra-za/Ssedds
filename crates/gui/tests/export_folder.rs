@@ -541,6 +541,24 @@ fn no_folder_open_counts_pending_nif_edits() {
     assert_eq!(m.header_export_text(), "Review 2 NIF edits");
 }
 
+/// UI-D final review Minor 5: with no folder open, the disabled header `Review 1 NIF edit` says on hover where Review
+/// opens from.
+#[test]
+fn the_disabled_no_project_review_button_says_where_review_opens() {
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.set_nif_review_rows(vec![nif_row(None)]);
+    let mut h = harness(m);
+    h.ctx.global_style_mut(|s| {
+        s.interaction.tooltip_delay = 0.0;
+        s.interaction.show_tooltips_only_when_still = false;
+    });
+    h.run();
+    h.get_by_role_and_label(Role::Button, "Review 1 NIF edit")
+        .hover();
+    h.run();
+    h.get_by_label("Open Review from the NIF edit panel (Review…)");
+}
+
 /// Note GH8: a fresh start (no project, no folder, no edit) still says "Open a folder first", not the folder reason.
 #[test]
 fn fresh_start_with_no_folder_says_open_a_folder_first() {

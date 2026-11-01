@@ -256,6 +256,11 @@ fn export_button(ui: &mut egui::Ui, model: &mut AppModel, size: egui::Vec2) {
         // A12: the hover counts the files and the problems. FB1: and, while it reads Review, what is still open.
         // Built lazily, only while hovered (ui-rules 9.3).
         let hover = |ui: &mut egui::Ui| {
+            // UI-D final review Minor 5: with no folder the button is off; Review opens from the NIF edit panel.
+            if model.root.is_none() && !model.nif_review_rows().is_empty() {
+                ui.label("Open Review from the NIF edit panel (Review…)");
+                return;
+            }
             // Note FC5 (supersedes CZ6's hover): NIF edits are Review rows, so the Meshes view's line is gone.
             ui.label(export_hover(model));
             if !clean {
