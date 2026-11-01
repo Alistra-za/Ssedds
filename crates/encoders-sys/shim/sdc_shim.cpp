@@ -133,6 +133,11 @@ void sdc_bc4_encode(uint8_t* dst, const uint8_t* px, uint32_t stride, uint32_t r
     rgbcx::encode_bc4_hq(dst, px, stride, rad, rgbcx::BC4_USE_ALL_MODES);
 }
 
+// `flags` goes to encode_bc4_hq verbatim (research probes and tests reach the upstream path with explicit modes).
+void sdc_bc4_encode_flags(uint8_t* dst, const uint8_t* px, uint32_t stride, uint32_t rad, uint32_t flags) {
+    rgbcx::encode_bc4_hq(dst, px, stride, rad, flags);
+}
+
 void sdc_bc5_encode(uint8_t* dst, const uint8_t* px, uint32_t rad) {
     rgbcx::encode_bc5_hq(dst, px, 0, 1, 4, rad, rgbcx::BC4_USE_ALL_MODES);
 }

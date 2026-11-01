@@ -116,3 +116,35 @@ Reading: the weighting does what it says. It moves error out of luma into chroma
 - BC5 classes and attribution use channel 0's class for both channels.
 - The time table measures the BC4 search in Rust. A C++ port inside rgbcx will differ by a constant factor (the Rust v0 port is already 0.6 to 0.96× the FFI). Rounds 1 and 2 hold 2 to 7 images per set.
 - BC1 is scored under the bench decoder (`bcdecode.exe`), and the base run uses the Ideal model the engine encodes for. The weighted-vs-unweighted comparison shares that decoder, so the Δs stand. Absolute values are 0.01 dB from the bench's own `bc1_rgbcx_L18` row (39.413 vs 39.424 dB), since bc7enc's CLI flags differ slightly.
+
+## Search radius (Task 1 of the plan, rounds 1-2)
+
+The probe measured radius 5 only. `crates/bench/src/bc4ref.rs` now holds the reference (`shipped`, `search`); the example takes `--radius`. Mean over rounds 1-2 images, v4 against the shipped search at the same radius (images at 99 dB excluded, as in the summary; radius 5 reproduces the summary's v4/v5 means). No block is worse than shipped at any radius.
+
+| radius | set | shipped dB | v4 dB | v4 Δ | v5 Δ |
+|---|---|---|---|---|---|
+| 4 | alpha_real (BC3 alpha) | 47.808 | 48.862 | +1.054 | +0.967 |
+| 4 | cutout_real | 45.027 | 49.087 | +4.060 | +3.889 |
+| 4 | packed_real | 57.746 | 57.767 | +0.022 | +0.021 |
+| 4 | mask_real (BC4) | 50.231 | 50.662 | +0.431 | +0.409 |
+| 4 | normal_real (BC5 R/G) | 54.160 | 54.215 | +0.055 | +0.053 |
+| 5 | alpha_real | 47.893 | 48.874 | +0.981 | +0.901 |
+| 5 | cutout_real | 45.138 | 49.100 | +3.962 | +3.789 |
+| 5 | packed_real | 57.770 | 57.782 | +0.013 | +0.013 |
+| 5 | mask_real | 50.300 | 50.680 | +0.380 | +0.360 |
+| 5 | normal_real | 54.203 | 54.232 | +0.029 | +0.028 |
+| 10 | alpha_real | 48.137 | 48.903 | +0.766 | +0.706 |
+| 10 | cutout_real | 45.602 | 49.129 | +3.526 | +3.399 |
+| 10 | packed_real | 57.812 | 57.815 | +0.002 | +0.002 |
+| 10 | mask_real | 50.444 | 50.731 | +0.287 | +0.271 |
+| 10 | normal_real | 54.273 | 54.280 | +0.008 | +0.008 |
+
+Time per image (Rust v4 against the FFI shipped encoder, 29 images, single thread, release build, ms; median / worst):
+
+| radius | shipped (FFI) | v4 (Rust) |
+|---|---|---|
+| 4 | 157 / 2113 | 345 / 3354 |
+| 5 | 284 / 2689 | 457 / 4573 |
+| 10 | 1026 / 7887 | 1318 / 10685 |
+
+The fast presets (radius 4) gain as much as the default (+1.05 dB BC3 alpha, +0.43 dB BC4) at about 2.2× the shipped time (v4 at radius 4 costs about what shipped costs at radius 5 plus 20 percent). Radius 10 gains less, since the shipped search already covers more. The v4 times are the Rust reference, not the C++ port.

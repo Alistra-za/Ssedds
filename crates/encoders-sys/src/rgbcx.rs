@@ -73,6 +73,33 @@ pub fn bc4_encode_block(px: &[[u8; 4]; 16], channel: usize, search_radius: u32) 
     out
 }
 
+/// `rgbcx::BC4_USE_ALL_MODES` (8-value and 6-value modes).
+pub const BC4_USE_ALL_MODES: u32 = 3;
+
+/// Like [`bc4_encode_block`] but `flags` reaches `encode_bc4_hq` verbatim (the shim adds no bit of its own).
+pub fn bc4_encode_block_flags(
+    px: &[[u8; 4]; 16],
+    channel: usize,
+    search_radius: u32,
+    flags: u32,
+) -> [u8; 8] {
+    assert!(channel < 4, "channel {channel} out of range");
+    ensure_init();
+    let src = bytes(px);
+    let mut out = [0u8; 8];
+    // SAFETY: as in `bc4_encode_block`: stride 4 reads at most index 63 of `src`; `out` holds the 8 bytes written.
+    unsafe {
+        ffi::sdc_bc4_encode_flags(
+            out.as_mut_ptr(),
+            src.as_ptr().add(channel),
+            4,
+            search_radius,
+            flags,
+        )
+    };
+    out
+}
+
 /// Encode one BC5 block from the red (channel 0) and green (channel 1) texels.
 pub fn bc5_encode_block(px: &[[u8; 4]; 16], search_radius: u32) -> [u8; 16] {
     ensure_init();
