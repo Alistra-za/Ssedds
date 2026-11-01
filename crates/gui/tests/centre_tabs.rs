@@ -266,45 +266,67 @@ fn the_reset_button_stays_on_the_panel() {
         let d = tempfile::tempdir().unwrap();
         let h = sized(width, edited_leaf(d.path()));
         let c = sdc_gui::ui::centre_rect(&h.ctx).expect("the centre is drawn");
-        let resets: Vec<_> = h
-            .query_all_by_label("↺")
-            .map(|n| n.rect())
-            .filter(|r| r.min.x < c.max.x)
-            .collect();
-        assert!(!resets.is_empty(), "{width}: no ↺ in the centre");
-        for r in resets {
+        let drawer = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
+            .expect("the drawer is drawn")
+            .outer_rect;
+        assert!(
+            drawer.max.x <= width + 0.5,
+            "{width}: the drawer {drawer:?} leaves the window"
+        );
+        // On-screen ↺ buttons (rows scrolled out below the panel are not drawn), split by which panel they sit in.
+        let (mut centre, mut in_drawer) = (vec![], vec![]);
+        for n in h.query_all_by_label("↺") {
+            let r = n.rect();
+            if r.max.y > c.max.y {
+                continue;
+            }
+            if r.min.x < drawer.min.x {
+                centre.push(r)
+            } else {
+                in_drawer.push(r)
+            }
+        }
+        assert_eq!(
+            centre.len(),
+            1,
+            "{width}: the edited Alpha row's ↺ is in the centre"
+        );
+        for r in &centre {
             assert!(
-                c.expand(0.5).contains_rect(r),
+                c.expand(0.5).contains_rect(*r),
                 "{width}: ↺ {r:?} leaves the centre {c:?}"
             );
         }
-        for n in h.query_all_by_label("↺") {
+        for r in &in_drawer {
             assert!(
-                n.rect().max.x <= width,
-                "{width}: ↺ {:?} is off the window",
-                n.rect()
+                drawer.expand(0.5).contains_rect(*r),
+                "{width}: ↺ {r:?} leaves the drawer {drawer:?}"
             );
         }
     }
 }
-
 /// A clipped hint keeps its whole text in the AccessKit name and on one tooltip, never two.
 #[test]
 fn a_clipped_hint_keeps_its_text_on_hover() {
-    let d = tempfile::tempdir().unwrap();
-    let mut h = sized(1100.0, edited_leaf(d.path()));
-    // The hint column is the drawer's (the centre's rows are compact and leave it blank).
-    let drawer = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
-        .expect("the drawer is drawn")
-        .outer_rect;
     let text = "from this texture's settings";
-    let hints = |h: &H| {
-        h.query_all_by_label(text)
-            .filter(|n| n.rect().min.x >= drawer.min.x && n.rect().max.y <= drawer.max.y)
+    // The hint column is the drawer's (the centre's rows are compact and leave it blank).
+    let visible = |h: &H| {
+        let drawer = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
+            .expect("the drawer is drawn")
+            .outer_rect;
+        let hints = h
+            .query_all_by_label(text)
             .map(|n| n.rect())
-            .collect::<Vec<_>>()
+            .filter(|r| r.min.x >= drawer.min.x && r.max.y <= drawer.max.y)
+            .collect::<Vec<_>>();
+        (drawer, hints)
     };
-    let before = hints(&h);
+    let d = tempfile::tempdir().unwrap();
+    let wide = sized(1600.0, edited_leaf(d.path()));
+    let natural = visible(&wide).1[0].width();
+    let d = tempfile::tempdir().unwrap();
+    let mut h = sized(900.0, edited_leaf(d.path()));
+    let (drawer, before) = visible(&h);
     assert!(!before.is_empty(), "the edited rows show their hint");
     for r in &before {
         assert!(
@@ -312,10 +334,20 @@ fn a_clipped_hint_keeps_its_text_on_hover() {
             "hint {r:?} leaves the drawer {drawer:?}"
         );
     }
+    assert!(
+        before.iter().any(|r| r.width() < natural - 5.0),
+        "no hint is clipped: {before:?} vs {natural}"
+    );
+    let all = h.query_all_by_label(text).count();
     h.get_all_by_label(text)
-        .find(|n| n.rect().min.x >= drawer.min.x && n.rect().max.y <= drawer.max.y)
+        .find(|n| n.rect() == before[0])
         .unwrap()
         .hover();
     h.run();
-    assert_eq!(hints(&h).len(), before.len() + 1, "one tooltip, not two");
+    // The tooltip may be shifted left of the drawer to fit the window, so count every node with the text.
+    assert_eq!(
+        h.query_all_by_label(text).count(),
+        all + 1,
+        "one tooltip, not two"
+    );
 }
