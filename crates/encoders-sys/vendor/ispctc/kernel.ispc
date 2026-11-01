@@ -12,6 +12,10 @@
 // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE 
 // SOFTWARE.
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Modified for Tessalith (sdc patch 0001, 2026-10-31, patches/0001-bc6h-peak-mode.patch): BC6H peak-preserving mode,
+// on when a bc6h_enc_settings has both slow_mode and fast_mode set (no upstream profile does). Every upstream
+// profile encodes as before. Changes are marked "sdc patch 0001".
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #ifndef ISPC_UINT_IS_DEFINED
 //these are defined in ISPC version 1.13.0 and later
@@ -2163,6 +2167,12 @@ struct bc6h_enc_state
     uniform int refineIterations_1p;
     uniform int refineIterations_2p;
     uniform int fastSkipTreshold;
+
+    // sdc patch 0001: peak-preserving mode (slow_mode and fast_mode both set, a combination no upstream profile uses)
+    uniform bool peak_mode;
+    int peak_k;         // texel with the largest source luminance, -1 when the block is not guarded
+    float peak_lum;     // its source luminance
+    float orig[48];     // the UF16 block before bc6h_peak_retry lifts it
 };
 
 void bc6h_code_2p(uint32 data[5], int pqep[], uint32 qblock[2], int part_id, int mode);
@@ -2262,6 +2272,41 @@ void ep_quant_dequant_bc6h(bc6h_enc_state state[], int qep[], float ep[], unifor
 
 }
 
+// sdc patch 0001: luminance of a half given as a UF16 code (the decoder's (code * 31) >> 6).
+inline float bc6h_uf16_lum(float r, float g, float b)
+{
+    return 0.2126f * half_to_float((unsigned int16)(((int)r * 31) >> 6))
+         + 0.7152f * half_to_float((unsigned int16)(((int)g * 31) >> 6))
+         + 0.0722f * half_to_float((unsigned int16)(((int)b * 31) >> 6));
+}
+
+// sdc patch 0001: in a guarded block (peak mode, peak_k >= 0) a candidate is ranked by its squared error against the
+// unlifted block (state->orig), and one that decodes the brightest texel below 0.9 of its source luminance ranks
+// after every candidate that keeps it (the error stays monotonic within each group). Otherwise err is unchanged.
+float bc6h_peak_guard(bc6h_enc_state state[], float err, float ep[], uint32 qblock[2], uint32 pattern, uniform int bits)
+{
+    if (!state->peak_mode) return err;
+    if (state->peak_k < 0) return err;
+    uniform const int* uniform unquant_table = get_unquant_table(bits);
+    float terr = 0;
+    float peak_dec[3];
+    for (uniform int k = 0; k < 16; k++)
+    {
+        int j = (pattern >> (2 * k)) & 3;
+        int w = gather_int(unquant_table, (qblock[k / 8] >> (4 * (k % 8))) & 15);
+        for (uniform int p = 0; p < 3; p++)
+        {
+            float ep_a = gather_float(ep, 8*j+0+p);
+            float ep_b = gather_float(ep, 8*j+4+p);
+            float dec = (int)(((64-w)*ep_a + w*ep_b + 32)/64); // as block_quant
+            terr += sq(dec - state->orig[p * 16 + k]);
+            if (k == state->peak_k) peak_dec[p] = dec;
+        }
+    }
+    if (bc6h_uf16_lum(peak_dec[0], peak_dec[1], peak_dec[2]) >= 0.9f * state->peak_lum) return terr;
+    return (terr + 1) * 1e13f;
+}
+
 //////////////////////////
 // parameter estimation
 
@@ -2282,7 +2327,7 @@ float bc6h_enc_2p_part_fast(bc6h_enc_state state[], int qep[16], uint32 qblock[2
     ep_quant_dequant_bc6h(state, qep, ep, 2);
 
     float total_err = block_quant(qblock, state->block, bits, ep, pattern, channels);
-    return total_err;
+    return bc6h_peak_guard(state, total_err, ep, qblock, pattern, bits);
 
 }
 
@@ -2332,6 +2377,7 @@ void bc6h_enc_2p_list(bc6h_enc_state state[], int part_list[], uniform int part_
 
         uint32 pattern = get_pattern(best_part_id);
         float err = block_quant(qblock, state->block, bits, ep, pattern, channels);
+        err = bc6h_peak_guard(state, err, ep, qblock, pattern, bits);
 
         if (err<best_err)
         {
@@ -2376,6 +2422,7 @@ void bc6h_enc_1p(bc6h_enc_state state[])
 
     uint32 qblock[2];
     float err = block_quant(qblock, state->block, 4, ep, 0, 3);
+    err = bc6h_peak_guard(state, err, ep, qblock, 0, 4);
 
     // refine
     uniform int refineIterations = state->refineIterations_1p;
@@ -2384,6 +2431,7 @@ void bc6h_enc_1p(bc6h_enc_state state[])
         opt_endpoints(ep, state->block, 4, qblock, -1, 3);
         ep_quant_dequant_bc6h(state, qep, ep, 1);
         err = block_quant(qblock, state->block, 4, ep, 0, 3);
+        err = bc6h_peak_guard(state, err, ep, qblock, 0, 4);
     }
 
     if (err < state->best_err)
@@ -3127,7 +3175,8 @@ void bc6h_code_1p(uint32 data[5], int qep[8], uint32 qblock[2], int mode)
 //////////////////////////
 //       BC6H core
 
-void bc6h_setup(bc6h_enc_state state[])
+// sdc patch 0001: min/max and span of the UF16 block (upstream's bc6h_setup tail, split out for the second pass).
+void bc6h_bounds(bc6h_enc_state state[])
 {
     for (uniform int p = 0; p < 3; p++)
     {
@@ -3135,12 +3184,9 @@ void bc6h_setup(bc6h_enc_state state[])
         state->rgb_bounds[3+p] = 0;
     }
 
-    // uf16 conversion, min/max
     for (uniform int p = 0; p < 3; p++)
     for (uniform int k = 0; k < 16; k++)
     {
-        state->block[p * 16 + k] = (state->block[p * 16 + k] / 31) * 64;
-
         state->rgb_bounds[p  ] = min(state->rgb_bounds[p  ], state->block[p * 16 + k]);
         state->rgb_bounds[3+p] = max(state->rgb_bounds[3+p], state->block[p * 16 + k]);
     }
@@ -3160,22 +3206,96 @@ void bc6h_setup(bc6h_enc_state state[])
     }
 }
 
+void bc6h_setup(bc6h_enc_state state[])
+{
+    if (state->peak_mode)
+    {
+        // sdc patch 0001: the brightest texel, from the source half bits. Only a highlight is guarded: a peak at
+        // least 32 times the block's geometric-mean luminance; otherwise peak_k = -1 and the block encodes as veryslow.
+        state->peak_k = 0;
+        state->peak_lum = -1;
+        float log_sum = 0;
+        for (uniform int k = 0; k < 16; k++)
+        {
+            float lum = 0.2126f * half_to_float((unsigned int16)(int)state->block[k])
+                      + 0.7152f * half_to_float((unsigned int16)(int)state->block[16 + k])
+                      + 0.0722f * half_to_float((unsigned int16)(int)state->block[32 + k]);
+            log_sum += log(max(lum, 1e-6f));
+            if (lum > state->peak_lum)
+            {
+                state->peak_k = k;
+                state->peak_lum = lum;
+            }
+        }
+        if (log(max(state->peak_lum, 1e-6f)) - log_sum / 16 < log(32.0f)) state->peak_k = -1;
+    }
+
+    // uf16 conversion
+    for (uniform int p = 0; p < 3; p++)
+    for (uniform int k = 0; k < 16; k++)
+    {
+        state->block[p * 16 + k] = (state->block[p * 16 + k] / 31) * 64;
+    }
+
+    if (state->peak_mode)
+    {
+        for (uniform int i = 0; i < 48; i++) state->orig[i] = state->block[i]; // sdc patch 0001
+    }
+
+    bc6h_bounds(state);
+}
+
+void bc6h_search_slow(bc6h_enc_state state[])
+{
+    bc6h_test_mode(state, 0, true, 0);
+    bc6h_test_mode(state, 1, true, 0);
+    bc6h_test_mode(state, 2, true, 0);
+    bc6h_test_mode(state, 5, true, 0);
+    bc6h_test_mode(state, 6, true, 0);
+    bc6h_test_mode(state, 9, true, 0);
+    bc6h_test_mode(state, 10, true, 0);
+    bc6h_test_mode(state, 11, true, 0);
+    bc6h_test_mode(state, 12, true, 0);
+    bc6h_test_mode(state, 13, true, 0);
+}
+
+// sdc patch 0001: a guarded block searches again with every channel lifted to at least 2^-12 of its texel's largest
+// channel (12 stops = 12 * 1024 half codes), so exact-zero channels (RGBE sources) no longer dominate the fit.
+// bc6h_peak_guard ranks both passes against the unlifted block, so the better of the two is kept.
+void bc6h_peak_retry(bc6h_enc_state state[])
+{
+    if (state->peak_k >= 0)
+    {
+        float err0 = state->best_err;
+        uint32 data0[5];
+        for (uniform int i = 0; i < 5; i++) data0[i] = state->best_data[i];
+
+        for (uniform int k = 0; k < 16; k++)
+        {
+            float m = max(state->block[k], max(state->block[16 + k], state->block[32 + k]));
+            float lo = m - 12 * 1024 * 64 / 31.0f;
+            for (uniform int p = 0; p < 3; p++) state->block[p * 16 + k] = max(state->block[p * 16 + k], lo);
+        }
+        bc6h_bounds(state);
+        state->best_err = 1e99;
+        bc6h_search_slow(state);
+
+        if (state->best_err > err0)
+        {
+            state->best_err = err0;
+            for (uniform int i = 0; i < 5; i++) state->best_data[i] = data0[i];
+        }
+    }
+}
+
 inline void CompressBlockBC6H_core(bc6h_enc_state state[])
 {
     bc6h_setup(state);
 
     if (state->slow_mode)
     {
-        bc6h_test_mode(state, 0, true, 0);
-        bc6h_test_mode(state, 1, true, 0);
-        bc6h_test_mode(state, 2, true, 0);
-        bc6h_test_mode(state, 5, true, 0);
-        bc6h_test_mode(state, 6, true, 0);
-        bc6h_test_mode(state, 9, true, 0);
-        bc6h_test_mode(state, 10, true, 0);
-        bc6h_test_mode(state, 11, true, 0);
-        bc6h_test_mode(state, 12, true, 0);
-        bc6h_test_mode(state, 13, true, 0);
+        bc6h_search_slow(state);
+        if (state->peak_mode) bc6h_peak_retry(state);
     }
     else
     {        
@@ -3207,6 +3327,7 @@ void bc6h_enc_copy_settings(bc6h_enc_state state[], uniform bc6h_enc_settings se
     state->fastSkipTreshold = settings->fastSkipTreshold;
     state->refineIterations_1p = settings->refineIterations_1p;
     state->refineIterations_2p = settings->refineIterations_2p;
+    state->peak_mode = settings->slow_mode && settings->fast_mode; // sdc patch 0001
 }
 
 inline void CompressBlockBC6H(uniform rgba_surface src[], int xx, uniform int yy, uniform uint8 dst[], uniform bc6h_enc_settings settings[])

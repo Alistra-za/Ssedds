@@ -8,6 +8,11 @@ pub enum Bc6hLevel {
     Basic = 2,
     Slow = 3,
     Veryslow = 4,
+    // Veryslow plus the peak-preserving mode (kernel.ispc sdc patch 0001): in a block whose brightest texel is at
+    // least 32x the block's geometric-mean luminance, candidates that decode that texel below 0.9 of its source
+    // luminance rank last, and a second search on a lifted block competes. Other blocks encode as Veryslow.
+    // Not mapped to any effort.
+    VeryslowPeak = 5,
 }
 
 /// BC6H UF16 compression of a strip of `rows` rows (a multiple of 4) of a `width`-wide RGBA16F image.
@@ -44,7 +49,7 @@ pub fn bc6h_compress_rows(
     // SAFETY: `rgba_f16` holds `width * rows` RGBA16F texels (8 bytes each) and `stride` is the
     // row pitch in bytes, so the shim reads only within the slice; `out` holds `(width/4)*(rows/4)`
     // 16-byte blocks, the number ISPC TC writes; `level` comes from the closed `Bc6hLevel` enum
-    // (0..=4), which the shim indexes without a range check.
+    // (0..=5), which the shim indexes without a range check.
     unsafe {
         ffi::sdc_bc6h_compress(
             rgba_f16.as_ptr() as *const u16,

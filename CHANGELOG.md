@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- BC6H (HDR) at encoder effort `slowest` and `max` now uses a peak-preserving mode: small, very bright highlights such as a sun keep their brightness (venice_sunset's peak goes from 0.22 to 0.92 of the source). Other blocks encode as `veryslow`. Effort `veryslow` (the default) and below are unchanged. `--on-existing if-changed` re-encodes `pbr_emissive` and `hdr_sky`, the two types that are BC6H by default, once after upgrading. A texture of another type set to BC6H by hand is not re-encoded; to get the new mode for it, re-export it with `--on-existing overwrite`.
+
 ## 1.1.0
 
 - `--on-existing if-changed` now re-encodes only the texture types whose output changed in a new version. Upgrading from 1.0.0 re-encodes nothing.

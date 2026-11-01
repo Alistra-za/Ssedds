@@ -54,14 +54,14 @@ pub fn encode_rgbcx_image(img: &Rgba8, kind: RgbcxKind) -> Vec<u8> {
     out
 }
 
-pub fn encode_bc6h_image(img: &HalfImage) -> Vec<u8> {
+pub fn encode_bc6h_image(img: &HalfImage, level: Bc6hLevel) -> Vec<u8> {
     let w = img.width;
     let strip = (w * 4) as usize;
     let mut out = vec![0u8; (w / 4 * (img.height / 4) * 16) as usize];
     out.par_chunks_mut((w / 4 * 16) as usize)
         .zip(img.px.par_chunks(strip))
         .for_each(|(o, rows)| {
-            bc6h_compress_rows(rows, w, 4, o, Bc6hLevel::Veryslow);
+            bc6h_compress_rows(rows, w, 4, o, level);
         });
     out
 }

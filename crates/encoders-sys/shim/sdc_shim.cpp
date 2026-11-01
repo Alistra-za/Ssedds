@@ -16,7 +16,7 @@
 
 namespace {
 ispc::bc7e_compress_block_params g_bc7[8][2][2];  // [level u0..u6, 7 = sdc_max][perceptual][exact_opaque]
-bc6h_enc_settings g_bc6[5];                       // veryfast, fast, basic, slow, veryslow
+bc6h_enc_settings g_bc6[6];                       // veryfast, fast, basic, slow, veryslow, veryslow_peak
 
 void init_bc7_level(ispc::bc7e_compress_block_params* p, int level, bool perceptual) {
     switch (level) {
@@ -68,6 +68,9 @@ void sdc_init(int bc1_mode) {
     GetProfile_bc6h_basic(&g_bc6[2]);
     GetProfile_bc6h_slow(&g_bc6[3]);
     GetProfile_bc6h_veryslow(&g_bc6[4]);
+    // Peak-preserving mode (kernel.ispc sdc patch 0001): veryslow with fast_mode also set, which turns it on.
+    GetProfile_bc6h_veryslow(&g_bc6[5]);
+    g_bc6[5].fast_mode = true;
 }
 
 // `target` < 0 lets ISPC dispatch on the CPU; 0..=3 forces the sse2, sse4, avx or avx2 code path (tests only).

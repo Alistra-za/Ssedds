@@ -26,6 +26,22 @@ enum Cmd {
     },
     /// Throughput of ISPC bc7e u5 over rgb_real + alpha_real (for spike S4).
     SpeedBc7e,
+    /// BC6H peak-preserving mode: veryslow vs veryslow_peak over the 18 real + 4 hdr_grad images. Writes --out
+    /// (one CSV row per image and variant) and prints a Markdown summary.
+    Bc6Peak {
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Encode one image to a single-level DDS for the Python runners: `--format bc7 --level max` (8-bit PNG in) or
+    /// `--format bc6h --level veryslow_peak` (bench `.f16` in).
+    EncodeOne {
+        #[arg(long)]
+        format: String,
+        #[arg(long)]
+        level: String,
+        input: std::path::PathBuf,
+        output: std::path::PathBuf,
+    },
     /// Spike S7: NVTT fed one mip at a time.
     S7Nvtt,
     /// Spike S7b: NVTT on the engine's DDS levels; BC6H per level down to 1x1.
@@ -129,6 +145,28 @@ fn main() -> ExitCode {
     };
     match cmd {
         Cmd::Gate { name } => print_reports(gates::run(&name, &root)),
+        Cmd::Bc6Peak { out } => match sdc_bench::bc6peak::run(&root, &out) {
+            Ok(rows) => {
+                println!("{}", sdc_bench::bc6peak::summary(&rows));
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("bc6-peak: {e:#}");
+                ExitCode::from(3)
+            }
+        },
+        Cmd::EncodeOne {
+            format,
+            level,
+            input,
+            output,
+        } => match sdc_bench::encodeone::encode_one(&format, &level, &input, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("encode-one: {e:#}");
+                ExitCode::from(3)
+            }
+        },
         Cmd::SpeedBc7e => {
             encoders_sys::init(encoders_sys::Bc1Model::Ideal).unwrap();
             let mut imgs = vec![];

@@ -130,7 +130,8 @@ fn nvcompress(nv: &Path, flags: &[&str], input: &Path, output: &Path) -> Result<
     Ok((std::fs::read(output)?, secs))
 }
 
-fn peak(px: &[[f32; 3]]) -> f32 {
+/// Largest Rec. 709 luminance (the bench's peak_ratio numerator and denominator).
+pub fn peak(px: &[[f32; 3]]) -> f32 {
     px.iter()
         .map(|c| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
         .fold(0.0f32, f32::max)

@@ -47,6 +47,28 @@ fn f16_loader_reads_the_bench_format() {
 }
 
 #[test]
+fn encode_one_writes_a_decodable_bc7_max_dds() {
+    if !encoders_sys::BC7E_MAX_NATIVE {
+        eprintln!("skipped: no patch-0002 bc7e objects");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (src, dst) = (dir.path().join("x.png"), dir.path().join("x.dds"));
+    image::ImageBuffer::from_fn(8, 8, |x, y| {
+        image::Rgba([(x * 30) as u8, (y * 30) as u8, 90u8, 255])
+    })
+    .save(&src)
+    .unwrap();
+    sdc_bench::encodeone::encode_one("bc7", "max", &src, &dst).unwrap();
+    let bytes = std::fs::read(&dst).unwrap();
+    let payload = ddsraw::payload(&bytes).unwrap();
+    assert_eq!(payload.len(), 4 * 16);
+    let dec = sdc_bench::codec::decode_bc7_image(payload, 8, 8);
+    assert!(metrics::rgb_psnr(&corpus::load_png_rgba8(&src).unwrap().px, &dec) > 35.0);
+    assert!(sdc_bench::encodeone::encode_one("bc7", "slowest", &src, &dst).is_err());
+}
+
+#[test]
 fn reads_bench_results_csv() {
     let Some(root) = corpus::corpus_root() else {
         eprintln!("skipped: no bench corpus (set SDC_BENCH_ROOT)");
