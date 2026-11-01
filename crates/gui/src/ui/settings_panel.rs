@@ -1197,12 +1197,13 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, key: &str, compact: bool) {
     let confirming = model.dds_patch.confirming.as_deref() == Some(key);
     let last = model.dds_patch.last_for(key).map(str::to_string);
     let export_folder_chosen = model.export_folder_chosen().is_some();
-    // Note FI3: why the re-encode button is off (read-only first), and whether it would write over its source.
+    // Note FI3: why the re-encode button is off (read-only first), and whether it would write over its source. Only a
+    // skipped DDS draws that button, so nothing else pays for the scan or the file-system check each frame.
+    let skipped_dds = kind == ItemKind::Dds && job.is_none();
     let reencode_off = toml_read_only
         .clone()
-        .or_else(|| model.reencode_blocker(key));
-    let into_source = kind == ItemKind::Dds
-        && job.is_none()
+        .or_else(|| skipped_dds.then(|| model.reencode_blocker(key)).flatten());
+    let into_source = skipped_dds
         && engine::dds::same_file(
             &model.item(key).map(|i| i.input.clone()).unwrap_or_default(),
             &model.output_root().join(&job_key),

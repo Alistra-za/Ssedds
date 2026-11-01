@@ -53,7 +53,17 @@ impl AppModel {
     /// IN-DUPLICATE (Blocking). Kept inputs are the ones with a job: GEN-REPLACED and IN-DUPLICATE inputs have none.
     /// `job_key` is the case-folded output path, as the engine's duplicate check compares outputs.
     pub fn reencode_blocker(&self, key: &str) -> Option<String> {
-        blocker(&self.writers(), self.item(key)?)
+        // One item per frame: a linear scan, not the writers map `reencode_split` builds for many.
+        let me = self.item(key)?;
+        self.items
+            .iter()
+            .find(|i| {
+                i.job.is_some()
+                    && !i.job_key.is_empty()
+                    && i.job_key == me.job_key
+                    && i.key != me.key
+            })
+            .map(|i| format!("{} already writes this file", i.name))
     }
 
     /// The bulk panel's split of `keys`: the skipped DDS files it can re-encode, and the names of the blocked ones.
