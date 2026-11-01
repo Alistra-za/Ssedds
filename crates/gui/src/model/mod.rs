@@ -413,6 +413,8 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
+    /// Note F?15: the opened folder's output game paths and their revision (see `output_game_paths`).
+    game_paths: (u64, Vec<String>),
     /// Note F?1: skipped DDS inputs' tile images by path, with the stamp they were decoded at; cleared on open and
     /// reload.
     dds_thumbs: std::collections::HashMap<PathBuf, (SourceStamp, Arc<Thumbnail>)>,
@@ -731,6 +733,7 @@ impl AppModel {
             target: Target::Cs,
             items: vec![],
             items_rev: 0,
+            game_paths: (0, vec![]),
             dds_thumbs: Default::default(),
             dds_thumbs_asked: Default::default(),
             dds_thumb_requests: 0,
@@ -2424,6 +2427,7 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        self.refresh_game_paths();
         self.request_dds_thumbs();
         // K1: the checks run on this plan's analyses at the end of the poll that lands it.
         self.check_state.plans_applied += 1;
@@ -2621,6 +2625,37 @@ impl AppModel {
 
     pub fn items_rev(&self) -> u64 {
         self.items_rev
+    }
+
+    /// Note F?15: every item's output game path (a skipped DDS included), from its `textures/` component on,
+    /// ASCII-lowercase with `/`, sorted and deduplicated; paths with no `textures/` component are left out. The
+    /// `u64` changes only when the list does, so the Meshes view can key a cache on it.
+    pub fn output_game_paths(&self) -> (u64, &[String]) {
+        (self.game_paths.0, &self.game_paths.1)
+    }
+
+    /// Rebuilt once per landed plan. `job_key` is the engine's output key: root-relative, `/`, lowercased.
+    // shortcut: the engine key folds Unicode, not ASCII only; switch to the raw output paths if a non-ASCII
+    // texture folder ever matters.
+    fn refresh_game_paths(&mut self) {
+        let mut paths: Vec<String> = self
+            .items
+            .iter()
+            .filter_map(|i| {
+                let k = i.job_key.to_ascii_lowercase();
+                let at = if k.starts_with("textures/") {
+                    0
+                } else {
+                    k.find("/textures/")? + 1
+                };
+                Some(k[at..].to_string())
+            })
+            .collect();
+        paths.sort();
+        paths.dedup();
+        if paths != self.game_paths.1 {
+            self.game_paths = (self.game_paths.0 + 1, paths);
+        }
     }
 
     /// Call after writing `items` or `sets` in place (tests); a plan does it itself.
