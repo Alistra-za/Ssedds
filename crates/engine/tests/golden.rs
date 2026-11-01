@@ -4071,14 +4071,11 @@ fn cube_vstrip_bc7() {
 /// on any 2D change; only the cube arm (DECISIONS DS6, DS10) and the BC6H-capable arms (Note FF) moved.
 #[test]
 fn two_d_outputs_unchanged() {
-    use engine::config::{Format, Subtype};
+    use engine::config::Subtype;
     use engine::manifest::{encode_version, LEGACY_ENCODE_VERSION};
-    let bc6h = |st: Subtype| {
-        engine::policy::allowed_encodings(st, Target::Cs)
-            .iter()
-            .any(|(f, _)| *f == Format::Bc6hUf16)
-    };
-    for st in Subtype::ALL.into_iter().filter(|&st| bc6h(st)) {
+    // Note FF4: only the two sub-types whose default format is BC6H moved.
+    let bc6h = |st: Subtype| matches!(st, Subtype::PbrEmissive | Subtype::HdrSky);
+    for st in [Subtype::PbrEmissive, Subtype::HdrSky] {
         assert_eq!(encode_version(st), "1.2.0", "{st:?}: a BC6H arm (Note FF)");
     }
     let pins: BTreeMap<String, serde_json::Value> = serde_json::from_str(
