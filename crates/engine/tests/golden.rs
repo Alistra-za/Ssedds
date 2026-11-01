@@ -4068,10 +4068,19 @@ fn cube_vstrip_bc7() {
 
 /// The encode-versions guard (`encode_versions.rs`) re-pins every sub-type's encode input and fails a changed hash
 /// unless that sub-type's `encode_version` arm was bumped. Every 2D arm staying at the released version is what makes
-/// it fail on any 2D change; only the cube arm moved (DECISIONS DS6, DS10).
+/// it fail on any 2D change; only the cube arm (DECISIONS DS6, DS10) and the BC6H-capable arms (Note FF) moved.
 #[test]
 fn two_d_outputs_unchanged() {
+    use engine::config::{Format, Subtype};
     use engine::manifest::{encode_version, RELEASED_ENGINE_VERSION};
+    let bc6h = |st: Subtype| {
+        engine::policy::allowed_encodings(st, Target::Cs)
+            .iter()
+            .any(|(f, _)| *f == Format::Bc6hUf16)
+    };
+    for st in Subtype::ALL.into_iter().filter(|&st| bc6h(st)) {
+        assert_eq!(encode_version(st), "1.2.0", "{st:?}: a BC6H arm (Note FF)");
+    }
     let pins: BTreeMap<String, serde_json::Value> = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/encode_versions/encode_inputs.json"),
@@ -4081,7 +4090,7 @@ fn two_d_outputs_unchanged() {
     .unwrap();
     for (key, pin) in &pins {
         let st: engine::config::Subtype = serde_json::from_value(pin["subtype"].clone()).unwrap();
-        if st != engine::config::Subtype::Cubemap {
+        if st != Subtype::Cubemap && !bc6h(st) {
             assert_eq!(
                 encode_version(st),
                 RELEASED_ENGINE_VERSION,

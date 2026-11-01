@@ -473,9 +473,13 @@ fn effort_and_radius_mappings() {
         encoders_sys::Bc7Level::Veryslow
     );
     assert_eq!(
-        bc6h_level(Effort::Slowest),
+        bc6h_level(Effort::Veryslow),
         encoders_sys::Bc6hLevel::Veryslow
     );
+    // Note FF: slowest and max use the peak-preserving mode.
+    for e in [Effort::Slowest, Effort::Max] {
+        assert_eq!(bc6h_level(e), encoders_sys::Bc6hLevel::VeryslowPeak);
+    }
     assert_eq!(radius(SearchRadius::Default), 5);
     assert_eq!(radius(SearchRadius::Max), 10);
     assert_eq!(radius(SearchRadius::Fast), 4);

@@ -27,16 +27,9 @@ pub const RELEASED_ENGINE_VERSION: &str = "1.0.0";
 /// changes no arm. No `_` arm: a new `Subtype` fails to compile until it gets one.
 pub const fn encode_version(st: Subtype) -> &'static str {
     match st {
-        Subtype::Diffuse
-        | Subtype::LandscapeDiffuse
-        | Subtype::PbrAlbedo
-        | Subtype::PbrEmissive
-        | Subtype::Glow
+        Subtype::PbrAlbedo
         | Subtype::PbrSubsurface
         | Subtype::PbrFuzz
-        | Subtype::SubsurfaceTint
-        | Subtype::BacklightTint
-        | Subtype::UiSky
         | Subtype::Normal
         | Subtype::LandscapeNormal
         | Subtype::PbrNormal
@@ -51,12 +44,20 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         | Subtype::MsnSpecular
         | Subtype::GenericTwoChannel
         | Subtype::GenericData
-        | Subtype::HdrSky
-        | Subtype::SkinAlbedo
         | Subtype::SkinSk
         | Subtype::SkinWet
         | Subtype::ComplexGrass => "1.0.0",
         Subtype::Cubemap => "1.1.0",
+        // Note FF: the sub-types that can be BC6H under cs (`policy::takes_hdr`); Slowest/Max use the peak mode.
+        Subtype::Diffuse
+        | Subtype::LandscapeDiffuse
+        | Subtype::PbrEmissive
+        | Subtype::Glow
+        | Subtype::SubsurfaceTint
+        | Subtype::BacklightTint
+        | Subtype::UiSky
+        | Subtype::HdrSky
+        | Subtype::SkinAlbedo => "1.2.0",
     }
 }
 

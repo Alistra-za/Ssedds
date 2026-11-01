@@ -254,7 +254,8 @@ fn a_1_0_0_twin_without_encode_version_is_copied_and_the_copy_records_the_curren
     let sp = spec(&loc, &[AlsoTarget::Vanilla]);
     also(request(&m, &loc), &sp).0.unwrap();
     let (pbr, van) = (loc.join("Mod PBR"), loc.join("Mod Vanilla"));
-    let f = "textures/clutter/cup.dds";
+    // The normal, whose arm is still 1.0.0: the diffuse arm moved to 1.2.0 (Note FF4), so a 1.0.0 diffuse re-encodes.
+    let f = "textures/clutter/cup_n.dds";
     // Make the PBR record look like a 1.0.0 one: engine 1.0.0 and no encode_version.
     let mut raw = record(&pbr, f).raw;
     raw.as_object_mut().unwrap().remove("encode_version");

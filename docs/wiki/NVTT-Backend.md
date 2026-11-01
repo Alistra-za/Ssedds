@@ -97,4 +97,4 @@ The 2D preview of an NVTT texture uses the built-in encoder and says "Preview us
 
 ## When to use it
 
-If `VAL-BC6H-PEAK` fires (a BC6H texture keeps less of the source peak than `validation.bc6h_min_peak_ratio`; the warning reads "BC6H keeps N% of the source peak"), NVTT Production is worth trying for that texture; the warning itself does not mention NVTT. Otherwise, use it on textures where you have compared both results and prefer NVTT's, keeping in mind that it is much slower.
+If `VAL-BC6H-PEAK` fires (a BC6H texture keeps less of the source peak than `validation.bc6h_min_peak_ratio`; the warning reads "BC6H keeps N% of the source peak"), first try `encoder.effort = "slowest"`, whose BC6H mode keeps small bright highlights at a fraction of NVTT's time; NVTT Production is worth trying after that. The warning itself does not mention NVTT. Otherwise, use it on textures where you have compared both results and prefer NVTT's, keeping in mind that it is much slower.
