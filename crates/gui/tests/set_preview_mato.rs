@@ -165,11 +165,17 @@ fn no_record_line() {
     assert!(s.mato_lines().is_empty(), "no lines while off");
     s.set_mato_layer(true);
     run(&mut s, &m);
-    assert_eq!(s.mato_lines(), vec![MATO_NO_RECORD.to_string()]);
+    assert_eq!(
+        s.mato_lines(),
+        vec!["No MATO record in the load order; showing default coverage".to_string()]
+    );
     assert_eq!(s.v3.projected(), Some(&default_layer([1.0; 3], 1.0, 1.0)));
     m.set_cs_edids(ROCK, Kind::Mato, &["NoSuchMaterial".to_string()]);
     run(&mut s, &m);
-    assert_eq!(s.mato_lines(), vec![MATO_NO_RECORD.to_string()]);
+    assert_eq!(
+        s.mato_lines(),
+        vec!["No MATO record in the load order; showing default coverage".to_string()]
+    );
     // An unsaved block value reaches the layer.
     m.set_cs_value(ROCK, Kind::Mato, "roughness", Some(json!(0.25)));
     run(&mut s, &m);
@@ -228,7 +234,10 @@ fn pbr_only_line() {
     assert!(s.v3.projected().is_some());
     assert_eq!(
         s.mato_lines(),
-        vec![MATO_NO_RECORD.to_string(), MATO_PBR_ONLY.to_string()]
+        vec![
+            "No MATO record in the load order; showing default coverage".to_string(),
+            "The JSON values apply to PBR shapes only.".to_string()
+        ]
     );
 }
 
@@ -337,7 +346,7 @@ fn missing_texture_lines() {
     assert_eq!(
         s.mato_lines(),
         vec![
-            MATO_NO_RECORD.to_string(),
+            "No MATO record in the load order; showing default coverage".to_string(),
             "textures/effects/projectednoise.dds is not in the load order; showing a plain fallback"
                 .to_string(),
         ]
