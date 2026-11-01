@@ -27,7 +27,7 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 - Cutout alpha: coverage-preserving mips, on by default. Normal mips are renormalised, and their variance is baked into TruePBR roughness.
 - Loose maps are picked up and packed into `_rmaos` / `_rfaos` / complex `_m`. Suffix-based channel remapping; ORM to RMAOS is instant. The complex-material `_m` gate is checked.
 - RNM normal-layer blending (`_bump`, `_detailnorm`, `_bent`, with optional masks `_bumpmask`, `_detailnormmask`, `_bentmask`). See [RNM normal layers](docs/wiki/Texture-Packing.md#rnm-normal-layers).
-- [Generate from normal map](docs/wiki/GUI-Guide.md#generate-from-normal-map): makes height, AO and curvature maps from a set's normal.
+- [Generate from normal map](docs/wiki/GUI-Generate-From-Normal.md#generate-from-normal-map): makes height, AO and curvature maps from a set's normal.
 - Complex grass (1:2 image, halves mipped apart).
 
 **Skyrim and mod aware**
@@ -39,7 +39,7 @@ Tessalith converts a folder of source images for Skyrim SE/AE. It works out what
 
 **GUI**
 - Encoded-mip preview, pixel readout, pin and compare.
-- [3D preview](docs/wiki/GUI-Guide.md#set-preview-3d) that matches Community Shaders' deferred rendering (**Accurate (deferred)**).
+- [3D preview](docs/wiki/GUI-Set-Preview-3D.md#set-preview-3d) that matches Community Shaders' deferred rendering (**Accurate (deferred)**).
 - Context-menu options for slots and lock commands.
 - Colour picker with hex and RGB (0–255) inputs; outputs are converted to decimal.
 

@@ -24,6 +24,12 @@ GUI
 - [Texture settings](GUI-Texture-Panel.md)
 - [Advanced drawer](GUI-Advanced-Drawer.md)
 - [Helpers, RNM, cubemaps](GUI-Helpers-RNM-and-Cubemaps.md)
+- [2D preview](GUI-Preview.md)
+- [Generate from normal](GUI-Generate-From-Normal.md)
+- [Set editor](GUI-Set-Editor.md)
+- [3D preview](GUI-Set-Preview-3D.md)
+- [PGPatcher JSON](GUI-PGPatcher-JSON.md)
+- [Set materials](GUI-Set-Materials.md)
 - [Keyboard](GUI-Keyboard.md)
 
 Concepts

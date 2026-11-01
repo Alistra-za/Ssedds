@@ -6,7 +6,7 @@ A map of the GUI (`tessalith.exe`): the main window with its areas numbered, eac
 
 ![Tessalith's main window with a folder open: the header on top, the Textures and Sets columns, the settings of the selected texture, the Advanced strip at the right and the bottom panel with its Problems tab. Numbered red markers point at the areas listed below.](../img/gui/GUI-Guide/main-window.png)
 
-The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](#the-2d-preview)).
+The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](GUI-Preview.md)).
 
 1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](GUI-Main-Window.md#header).
 2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project. See [Header](GUI-Main-Window.md#header).
@@ -35,6 +35,12 @@ The line under the header is the [status line](GUI-Main-Window.md#status-line-an
 - [Texture settings panel](GUI-Texture-Panel.md): the settings of one texture, deciding, BC7 weighting, how edits are written.
 - [Advanced drawer](GUI-Advanced-Drawer.md): batch, NVTT, preview and interface settings.
 - [Helpers, RNM layers and cubemaps](GUI-Helpers-RNM-and-Cubemaps.md): the Helpers group and panel, RNM layers, the cube controls.
+- [The 2D preview](GUI-Preview.md): source beside encode, readouts, lens, heatmap, pin and compare.
+- [Generate from normal map](GUI-Generate-From-Normal.md): height, AO and curvature from a normal.
+- [The set editor](GUI-Set-Editor.md): slot rows, packed channel sources, the shader.
+- [The 3D preview](GUI-Set-Preview-3D.md): a set on a mesh with Community Shaders.
+- [PGPatcher settings and the JSON](GUI-PGPatcher-JSON.md): TruePBR settings, the JSON file and the JSON editor.
+- [Set materials](GUI-Set-Materials.md): Advanced skin, PBR Landscape, CS PBR records, PBR grass.
 
 The sections below have no page of their own yet.
 
@@ -64,19 +70,7 @@ Moved to [Bulk editing and renaming](GUI-Bulk-and-Rename.md#renaming).
 
 ## The 2D preview
 
-Double-click a tile (or a set member) to expand it into a preview with a Source side and an Encoded side. **Esc** or a double-click in a viewport closes it.
-
-- **Live encode** is off by default. Press **Encode now** to encode. With Live encode on, the preview re-encodes a moment after each edit. A result that no longer matches the settings is marked stale.
-- Each previewed mip is byte-identical to the same mip of the DDS that Export writes. The exception is a texture on NVTT: its preview uses the built-in encoder and says so.
-- Only mips whose larger side is at most the preview size limit are encoded. The limit is 4096 by default, settable to 1024, 2048, 4096 or 8192, and 16384 after you tick *Allow 16384 previews* in Advanced. A GPU that cannot hold a texture that large lowers the limit and says so.
-- Toolbar: three labelled clusters that wrap onto more rows when the preview is narrow. **Channels** (RGBA, R, G, B, A and α-mask); **View** (*Side by side* or *Split*, *Pin this result*, a *Heatmap* of the difference to the source, *Lens*, *Tile 3×3*, the *Range* and *UV coverage* overlays when they apply, *Fit* and *1:1*); **Encode** (*Live encode* and **Encode now**, filled while it can encode). The sRGB / UNORM display and the mip slider follow, and **✕ Close** stays at the right. Scroll zooms, drag pans. HDR formats are tone-mapped for display.
-- Readouts under the viewports show PSNR, alpha and normal-length checks for the mip on show.
-- **Pixel readout:** point at the picture to see the source and encoded value of the texel under the cursor (0 to 255 and floats), the difference per channel, and for a normal map both normals and the angle between them.
-- **Lens** (L) magnifies 8x under the cursor. **Tile 3x3** (T) repeats the picture to check seams. HDR formats get an **Exposure** slider. The heatmap has a colour legend and a full-scale slider.
-- **Pin and compare** (P): *Pin this result* keeps the finished encode with its settings. Change a setting or the encoder, encode again, and *Compare: Source | Pinned* shows the pin beside the new result, with PSNR for both, the readout difference and a pinned-vs-current heatmap. There is one pin; closing the preview, changing texture or opening a folder drops it.
-- In a window 1280 points wide or wider the texture's settings start open beside the picture and stay open when Advanced opens. In a narrower window the picture is never narrower than 480 points: when the settings do not fit beside it, they start as a narrow **Settings** strip; click it to open them. They then stay open until the preview closes.
-- A DDS file previews as stored (no source side). BC2 and signed BC6H cannot be previewed.
-- Without a usable GPU the preview is off, and everything else still works.
+Moved to [The 2D preview](GUI-Preview.md).
 
 ## Export
 
@@ -115,113 +109,15 @@ In the cs mode one export can also write a vanilla and a complex-material (CM) v
 
 ## Sets and the set editor
 
-### Editing sets
-
-Moved to [Sets column](GUI-Sets-Column.md#editing-sets).
-
-### The set editor
-
-Select a set to edit it. The heading has the input name box and a **2D | 3D** switch (remembered in `gui.toml`, default 2D) that swaps the centre pane in place; in 3D the settings fold in sections above the view.
-
-A set whose diffuse is an **Advanced skin** gets an **Advanced skin (Community Shaders)** card instead of the TruePBR groups in the Material tab: 20 per-material skin settings, each "not set" or an explicit value saved in `sdc-project.toml`. Such a set has no PGPatcher JSON entry, and its files go to their normal paths. Export does not write the skin settings to Community Shaders yet.
-
-In 2D the editor is one column that scrolls as a whole: the input name box, the slot rows at full width, then a **Material** tab (**Set** on a vanilla set) with the set's material settings and a last **Advanced** tab with the same sections as the Advanced drawer. Nothing sits beside the slot rows, so nothing covers them at any window width. While the tabs are shown the drawer is not; in 3D, with a texture selected, or with several sets selected, the drawer is back.
-
-Each PGPatcher slot is one row (at most 8), in slot order: Diffuse, Normal, Emissive _g (or Skin _sk), Height, RMAOS, Coat normal / Fuzz (slot 7: a `_cnr` or an `_f`), Subsurface. A set with both a `_cnr` and an `_f` (or both a `_g` and an `_sk`) shows the conflict in red on that row, with both files listed and a ✕ beside each to take one out of the set, and export warns about it. The cubemap slot has no row; set it with a slot command. Only the slots the set's shader uses are shown. A filled slot the shader cannot use keeps an amber outline, with the reason on hover.
-
-A row has these columns: Slot (title; weak when empty; a lock when pinned), the thumbnail (click selects, double-click expands), File (the name cut to fit; full name and size on hover; the dimensions and file size under it), Format (the dropdown; an empty slot shows **Assign...**, which opens the slot menu, headed by the slot's name), Flags (Match on this and Opaque, each with a hover) and Status (a dot: green ready, amber a warning or decision, red blocks; the reason is on hover). The File column takes the width the other columns leave, so the rows fill the centre.
-
-| Row control | What it does |
-|---|---|
-| **Slot commands…** | *From this set*, *Path*, *Clear*, and *Pin slot N* (the sdc pin). Each is one undo step. |
-| Right-click | The slot commands plus *From another set*, which links the slot to another set's map, *Pin slot (sdc)* / *Unpin slot (sdc)*, and *Keep original texture (PGPatcher lock)*. |
-| **Opaque** (Diffuse) | Strips alpha: the diffuse is fully opaque. |
-| **Match on this** (Diffuse, Normal) | PGPatcher applies the entry to meshes with this exact texture in this slot. |
-| RMAOS / RFAOS (skin) | On a packed output's card: the recipe and per-channel fills. **Reset** removes a fill. |
-
-A pinned slot keeps its fill. It refuses drags in or out and the slot commands, and bulk edits skip it. The pin is saved in `sdc-project.toml` and never written to the JSON.
-
-*Keep original texture (PGPatcher lock)* turns on the slot's PGPatcher lock key (`lock_normal` and so on, the same key as in Texture locks): PGPatcher keeps the mesh's own texture in that slot. The card shows a grey padlock over the dimmed thumbnail, captioned *kept by PGPatcher*; its hover says "Kept by PGPatcher (lock_<slot>): the mesh's original texture is used here" and, with a scan, lists the meshes' textures in that slot, and the member thumbnail a small grey padlock. The file is still exported. A slot command on the same slot overrides the lock in PGPatcher, and a warning says so. The cubemap is not offered: `lock_cubemap` clears it.
-
-A `_coat` map fills the Subsurface card, which then reads "Coat colour + strength". When RNM normal layers are active, the normal card has an outline in the accent colour (teal); see [RNM layers](#rnm-normal-layers).
-
-**Shader** lists the shaders the current Mode offers. The pick reads "(auto)" when Tessalith chose it and "(fallback)" when the shader you asked for does not exist under this Mode. **Auto** clears your choice. Shader warnings show on the set card's **⚠ n** button. See [Texture types](Set-Shaders.md#set-shaders).
-
-**Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**.
+Moved to [Sets column](GUI-Sets-Column.md) and [The set editor](GUI-Set-Editor.md).
 
 ## TruePBR settings
 
-A PBR set under `cs` has the settings PGPatcher reads in the set editor's Material tab, as framed groups in the order below. Each header shows the title and, on the right, its value (for example Subsurface "Standard", Coat "off", Matching "2 matches", CS PBR records "1 record"). Click a title to open or close the group. The feature groups are always listed; they read "off" and stay closed while the feature is off, and open when it turns on. A feature's state shows only there: the Features group, which holds the ticks, has no value. A small **TruePBR JSON editor…** button beside the Material tab opens the editor as a centre tab. Skin and complex-material keys show readable names ("SSS width"); hover one for its exact key.
-
-| Group | Settings |
-|---|---|
-| Material | Specular level, Roughness scale. |
-| Features | Emissive, Parallax, Hair, Multilayer (coat), Glint, Fuzz. |
-| Emissive settings | Emissive scale, Emissive colour. |
-| Parallax settings | Displacement scale. |
-| Subsurface | The Off / Standard / Foliage selector, then colour and opacity for Standard and Foliage. |
-| Coat | Under the Multilayer checkbox: coat colour, specular level, roughness, strength, diffuse, normal, parallax and inner UV scale. With Multilayer off the group reads "off" and stays closed; the values are kept but not written. |
-| Glint settings, Fuzz settings | The glint parameters; Fuzz colour and weight. |
-| Matching | The exact texture paths the entry matches (PGPatcher's `match1` to `match8`). |
-| CS PBR records | Community Shaders' PBR texture set and material object blocks (collapsed; "N records"). |
-| Advanced TruePBR settings | Path contains, Mesh path contains, Rename; UV and cubemap (Smooth angle, Auto UV, UV scale, Cubemap path); Vertex colours and depth; Texture locks. |
-| NiAlphaProperty (starts closed) | The schema's `alphaprop_*` keys: override flags (blending, blend modes, testing, test function, no sorter, or a raw number), alpha test threshold, create if missing, delete. A key that is off is not written. |
-
-Rules:
-
-- Features that cannot go together are greyed, with the reason on hover. Hair excludes multilayer, glint, fuzz, emissive, parallax and subsurface; multilayer excludes subsurface; multilayer, glint and fuzz exclude each other; fuzz and coat normal share a slot. A switch already on stays enabled so you can turn it off.
-- Switches turn on by themselves from the set's textures and read "(auto)": a `_cnr` turns on Multilayer and Coat normal, an `_f` Fuzz, a `_p` Parallax, a `_g` Emissive, an `_s` Subsurface. Untick one to store an explicit off. A hair diffuse defaults to cutout + blend alpha.
-- Every colour has a swatch with a colour square and a `#RRGGBB` box.
-- A feature that is on without its texture blocks export.
-- Each field's **reset** button returns it to its default. There is no reset for a whole set.
-- Numbers cannot go below 0; strengths, weights and opacities stay within 0 to 1. A typed value outside the range is clamped and the box says so. The glint log density has no limit.
-- PGPatcher's own `default` block is fixed and not editable.
-- **Matching**: the diffuse path is on by default. **+** adds a row for slot 3 to 8; **×** removes one. A row with no path matches nothing and is not written. A set that matches nothing is left out of the JSON, and Export asks first.
-- **Rename** takes a new file name only. Outputs keep the matched texture's folder under `textures\pbr\` and take the new name, and the matched diffuse is written as `match_diffuse`, the key PGPatcher renames from. A renamed entry is written as `match_diffuse` + `rename` only, with no `match1`-`match8` ("renamed: matches by diffuse (PGPatcher rename needs match_diffuse)"). A renamed set takes no extra match; extra rows from before the rename, and any path contains, are not written, and Export asks about them.
-
-### The JSON file
-
-After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.json`, with `<name>` from the editor's **JSON name:** field (by default the folder name). Only sets that exported fully are written. If the file exists and is not the one Tessalith wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. The JSON is written in `cs` mode only.
-
-### The TruePBR JSON editor
-
-Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** until a folder is chosen) or from the **TruePBR JSON editor…** button in a set's Material tab. It opens as a tab of the centre column; **Pop out** moves it to a window of its own, titled "TruePBR JSON — Tessalith", and **Dock** brings it back (see [Presets](#presets)). Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
-
-- Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set and brings its editor to the front), then its keys as small pills with the same controls as the Material tab's groups.
-- **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
-- A texture match pill picks how it matches: *Match: exact, slot N (diffuse)* (`matchN`) or *path contains*. A set's own diffuse path reads *derived from the set*. A lock key reads *Keep the original texture (PGPatcher won't replace it): diffuse* (`lock_diffuse`, shown on hover). In Slot commands the box that locks slot N is named *Pin slot N (always use this file)*. The **▾** picker lists the scan's textures for that slot, or every known texture path. The *mesh path contains* pill (`nif_filter`) has a picker of folders that hold scanned meshes. Without a scan, the pickers list only the project's own paths.
-- **+ Delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
-- A delete section that hits one of your sets (by exact match on the set's texture, or `path_contains` in its diffuse path) strikes that set's pill through, outlines it amber and warns. The set editor shows the same warning with a button to the editor.
-- The header reads "N errors, M warnings". Errors block Export and show as a red line under their entry; warnings are what Export asks about. **Next error** / **Prev** (F8 / Shift+F8) jump between entries with errors, and a search box filters entries by set name or path.
-- **JSON text** shows the file as it would be written now, with **Copy**.
-
-Edits in the editor and in the Material tab are the same edits; each shows the other's at once, and undo is shared.
+Moved to [PGPatcher settings and the JSON](GUI-PGPatcher-JSON.md).
 
 ## Set preview (3D)
 
-Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D 11 and your own Community Shaders shader files. The preview does no work while it is hidden.
-
-| Control | What it does |
-|---|---|
-| Encoded (exact export) / Source (faster, no compression) | Show the bytes Export would write, or the prepared source without compression. |
-| **Mesh:** | *Auto* (the first scanned game mesh that uses the diffuse) or a built-in shape: Sphere, Plane, Cube, Material ball. The scanned meshes are listed loose before BSA, with ground models (`gnd`, `_go`) and `1stperson` meshes last. |
-| **Shader folder…** | Point at your Community Shaders mod folder or its `Shaders` folder when it is not found automatically ("Community Shaders not found", **Choose folder…**). |
-| Community Shaders features | On by default. Off compiles the shaders without CS feature defines. |
-| **Accurate (deferred)** (in **View**) | On by default. Opaque shapes draw through Community Shaders' own deferred pass and composite, as in game; blended shapes still draw on top the forward way. Off uses the older forward path. If your Community Shaders build cannot run it, the view stays forward and a notice says why. The setting is remembered. |
-| Background | Solid or Studio HDRI (Poly Haven, CC0). For Solid, a colour swatch with a hex field and a *Grey* slider (0 to 100 %) set the grey level; a non-grey colour is turned into its grey. |
-| Sun brightness, Point light brightness and radius | Lighting. |
-| **Reset view** | Reset the camera. |
-
-Moving around: drag to orbit, scroll to zoom, middle-drag or Shift+drag to pan, Shift+right-drag to turn the sun, double-click or Home to recentre. **View** has a debug view (Lit or UV checker; V steps through them), **Accurate (deferred)** and **Reset view**. Missing textures show in magenta, listed under the frame with **Open in Textures** when the file is in the folder. **Copy image** (Ctrl+Shift+C) copies the frame to the clipboard.
-
-Notes:
-
-- The PGPatcher simulation needs the `cs` target and a PBR set. Other sets show their plain textures.
-- To preview on a real mesh, scan your mods first. "No scanned mesh uses this diffuse" means the scan found none. Meshes from Skyrim LE are not drawn; a built-in shape is shown instead. A built-in shape cannot match an entry's match keys, so it shows the plain textures.
-- The preview assumes your JSON wins over other mods' PGPatcher configs.
-- Large textures are previewed at a capped size ("Preview at N px, export writes full size").
-- These Community Shaders features are off in the preview: Light Limit Fix, Skylighting, Screen-Space Shadows, Subsurface Scattering, Image-Based Lighting, Physical Sky, Wetness, Cloud Shadows, terrain effects, water, fog, Volumetric Shadows.
-- A timing log is written while the preview runs. Set the environment variable `SDC_PREVIEW_LOG=0` to turn it off.
+Moved to [The 3D preview](GUI-Set-Preview-3D.md).
 
 ## Cubemaps
 
@@ -233,15 +129,7 @@ Moved to [Helpers, RNM layers and cubemaps](GUI-Helpers-RNM-and-Cubemaps.md#rnm-
 
 ## Generate from normal map
 
-Right-click the Height row (or open the set card's menu) and pick **Generate from normal map…** to make a height map from the set's normal. The dialog has Size, Tiling, Relief balance and Strength, with a preview; **Generate** writes `<base>_p_generated.png` (or `<base>_height_generated.png` for a complex material's `_m` alpha) as a 16-bit grey PNG next to the normal. See [Texture types](Set-Shaders.md#generated-height-maps) for names and ranges. The same entry is a small **Generate…** button directly under **Assign…** on an empty Height or RMAOS row, and under the format combo on a filled one (**Regenerate…** once a generated file fills the slot); it is hidden for a packed texture, and in the preview the wheel zooms, a drag pans and a double-click fits.
-
-- The Height row's File hover says "Generated from {normal}", and the Flags cell shows a weak **generated** marker.
-- When the file is stale (the normal changed, the set wants the other neutral, or the shader reads no height), that row's status dot turns amber and its hover gives the reason. Problems gets a warning row on the generated map with **Regenerate…** (its set's dot is no longer ready), which opens the dialog with that map ticked; nothing is written until you press Generate.
-- **Regenerate…** reuses the stored settings, with the set's current neutral and a size the normal still offers. A file you edited is never overwritten.
-- **Delete generated file…** (row menu, or the set card's submenu) asks first; Cancel is the default. The box says when the file was edited or has no record; your confirm deletes it. It cannot be undone.
-- A new `_p` makes a default set Parallax (PGPatcher then patches its meshes), and turns on `parallax` on a TruePBR set.
-
-**AO.** On a PBR set under Community Shaders, right-click the `_rmaos` row (or tick **AO** in the dialog) to generate `<base>_ao_generated.png`. A baked AO is better; this is for sets with none. The AO group has Radius, Quality, Depth and Intensity (0.7–1.0 is a good range: CS applies AO to indirect light itself). When the set has a roughness or other `_rmaos` source, the AO takes its size. The file becomes the `_rmaos` blue channel (`GEN-AO`); the `_rmaos` row's File hover says "AO generated from {normal}", its dot turns amber when the AO is stale, and it offers **Delete generated file…**. A set with an RNM bent layer (where AO can be generated) gets a note at the top of the dialog: the AO also changes its normal map.
+Moved to [Generate from normal map](GUI-Generate-From-Normal.md).
 
 ## Advanced drawer
 

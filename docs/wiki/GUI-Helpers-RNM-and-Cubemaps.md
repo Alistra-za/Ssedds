@@ -48,7 +48,7 @@ Under the name in every image tile's settings is a **Helper role** combo reading
 
 A texture you made **Not a helper** shows "Not a helper (set by you)" in its settings, with **Reset**, which removes `helper.role` so the name's guess applies again. A `subtype` already on that file stays: a file with a sub-type set and no `helper.role` is an ordinary texture, so Reset does not bring its row back.
 
-The set card's channel rows edit the same `helper.fills` lists (Packed channel sources in [The set editor](GUI-Guide.md#the-set-editor)).
+The set card's channel rows edit the same `helper.fills` lists ([Packed channel sources](GUI-Set-Editor.md#packed-channel-sources)).
 
 ## RNM normal layers
 

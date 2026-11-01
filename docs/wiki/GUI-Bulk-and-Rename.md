@@ -68,11 +68,11 @@ The table shows each old name, the kind its new name reads as, and the output it
 On the set editor heading, the **input name** box shows the path the set's textures are read as, and you can type a new one.
 
 - While you type, the best known texture path shows in grey after the text. The known paths are every path the last mod scan saw in a mesh's diffuse slot, plus this project's own diffuse paths. **Tab** takes the grey text up to the next `/`, Tab again keeps going, and **Right arrow** at the end takes all of it.
-- A list of up to 12 matching paths opens under the box as you type. **Up/Down** highlight a row, **Enter** uses the highlighted row (or what you typed when none is), and clicking a row uses it. The first **Esc** closes the list.
-- **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step. **Esc** puts the old name back. The set's TruePBR settings, pins and borrows follow it.
+- A list of up to 12 matching paths opens under the box as you type; its bold top row is the grey completion. **Up/Down** highlight a row, **Enter** uses the highlighted row (or what you typed when none is), and clicking a row uses it. The first **Esc** closes the list; Esc again puts the old name back.
+- **Enter**, or clicking away, gives every member of the set an `[inputs]` alias with its own suffix and extension, as one undo step. Clicking away from an invalid or unchanged name also puts the old one back. The set's TruePBR settings, pins and borrows follow it.
 - A name that cannot be used (outside the project's folder, a name another file already has, a pinned slot) gets a red outline, with the reason on hover, and is never applied.
 
-The folder part of the name is locked: it is dimmed, and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`. Drag it (or press **Ctrl+Left / Ctrl+Right** in the box) to lock more or less of the path. The **▾** at the right lists the known paths under the locked part (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear). Click one to use it.
+The folder part of the name is locked: it is dimmed, and you edit only the file name. The thin rail along the bottom of the box has a stop at each `/`. Drag it or its teal lock icon (the "Path lock" handle), or press **Ctrl+Left / Ctrl+Right** in the box, to lock more or less of the path. The lock lasts for the session and is not saved. The **▾** at the right lists the known paths under the locked part (never those under `textures\pbr\`, which are PGPatcher's outputs), with a filter box (all words must appear). Click one to use it.
 
 On a TruePBR set in the 2D view, the **Match** box beside the name box picks the slot the ▾ list works on:
 
@@ -80,4 +80,6 @@ On a TruePBR set in the 2D view, the **Match** box beside the name box picks the
 - **Match 2 · normal** to **Match 8 · backlight** list the textures the mod scan saw in that slot. A pick sets that slot's match in the PGPatcher JSON and renames nothing.
 - Tick **All slots** in the list to see every known texture; a pick still goes to the selected match.
 
-The box starts at the set's lowest unused match, or at the one you last chose for that set (remembered per project), and never moves by itself.
+The box starts at the set's lowest unused match (Match 2 for a set whose only match is its own diffuse), or at the one you last chose for that set (`gui.toml` keeps it per project and set), and never moves by itself.
+
+In a project with no `textures` folder in its path, the set names and the offered paths both leave out `textures/`.
