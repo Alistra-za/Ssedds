@@ -226,15 +226,16 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         ui.end_row();
     }
     // Note FI17 (rule 14): the known paths, folded, for the amber "no known texture" check (built once per list).
-    // Keyed by the list itself (held, so its address is never reused while cached).
+    // Keyed by the list itself (held, so its address is never reused while cached). It keeps the `textures/pbr/`
+    // paths the offered list drops (Note AO8): they are still known textures, the project's own ones included.
     let known: Arc<HashSet<String>> = {
         let kid = egui::Id::new(("input-name-known", salt));
         type Known = (Arc<Vec<String>>, Arc<HashSet<String>>);
         match ui.data(|d| d.get_temp::<Known>(kid)) {
             Some((pk, s)) if Arc::ptr_eq(&pk, &paths) => s,
             _ => {
-                let s: Arc<HashSet<String>> =
-                    Arc::new(paths.iter().map(|p| fold_path(p)).collect());
+                let all = in_form_of(model.known_textures(Some(0)), &current);
+                let s: Arc<HashSet<String>> = Arc::new(all.iter().map(|p| fold_path(p)).collect());
                 ui.data_mut(|d| d.insert_temp::<Known>(kid, (paths.clone(), s.clone())));
                 s
             }

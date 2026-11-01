@@ -86,9 +86,14 @@ fn harness_with(dt: f32, known: &[&str]) -> (tempfile::TempDir, H) {
         textures: known.iter().map(|p| (format!("{p}.dds"), 1u16)).collect(),
         mesh_dirs: vec![],
     });
+    (d, harness_on(m, ROCK_SET, dt))
+}
+
+/// The app on `m` with set `set` selected.
+fn harness_on(mut m: AppModel, set: &str, dt: f32) -> H {
     let key = json_entries(&m)
         .into_iter()
-        .find(|(v, _)| v.id == ROCK_SET)
+        .find(|(v, _)| v.id == set)
         .unwrap()
         .0
         .key;
@@ -105,7 +110,7 @@ fn harness_with(dt: f32, known: &[&str]) -> (tempfile::TempDir, H) {
         );
     sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
     h.run();
-    (d, h)
+    h
 }
 
 /// The box's text.
@@ -1350,6 +1355,68 @@ fn a_missing_tail_keeps_its_text_and_lists_close_names_first() {
     assert_eq!(free(&h), "textures/armor/steel/shield");
 }
 
+/// The amber sections of the box's own galley (other panels use amber too).
+fn amber_text(h: &H) -> Vec<String> {
+    fn walk(s: &egui::Shape, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Text(t) if t.galley.job.text.starts_with("textures/") => {
+                for sec in &t.galley.job.sections {
+                    if sec.format.color == sdc_gui::ui::status::AMBER {
+                        let r = sec.byte_range.start.0..sec.byte_range.end.0;
+                        out.push(t.galley.job.text[r].to_string());
+                    }
+                }
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    h.output()
+        .shapes
+        .iter()
+        .for_each(|c| walk(&c.shape, &mut out));
+    out
+}
+
+/// UI-D final review Important 2: the offered names leave out `textures/pbr/` (Note AO8), but a set whose own
+/// diffuse sits there is a known texture: its name is never amber, while a name the folder lacks still is.
+#[test]
+fn a_set_under_textures_pbr_is_not_amber() {
+    use engine::config::{GreenConvention, Subtype};
+    use sdc_gui::model::Answer;
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    let tex = d.path().join("textures");
+    std::fs::create_dir_all(tex.join("pbr")).unwrap();
+    std::fs::rename(tex.join("landscape"), tex.join("pbr/landscape")).unwrap();
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.decide(
+        "pbr/landscape/rock01.png",
+        Answer::Subtype(Subtype::PbrAlbedo),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        Answer::Subtype(Subtype::PbrNormal),
+    );
+    m.decide(
+        "pbr/landscape/rock01_normal.png",
+        Answer::Green(GreenConvention::Directx),
+    );
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    m.set_known(KnownPaths {
+        textures: [("textures/landscape/rock02.dds".to_string(), 1u16)].into(),
+        mesh_dirs: vec![],
+    });
+    let mut h = harness_on(m, "pbr/landscape/rock01", 0.25);
+    assert_eq!(free(&h), "textures/pbr/landscape/rock01");
+    assert!(amber_text(&h).is_empty(), "{:?}", amber_text(&h));
+    focus(&mut h);
+    clear_and_type(&mut h, "nothere");
+    assert_eq!(amber_text(&h), vec!["nothere".to_string()]);
+}
+
 /// Note FI17: a name that is no known texture draws its last segment amber, with a hover; it stays editable.
 #[test]
 fn an_unknown_tail_is_amber_with_a_hover() {
@@ -1358,29 +1425,6 @@ fn an_unknown_tail_is_amber_with_a_hover() {
         s.interaction.tooltip_delay = 0.0;
         s.interaction.show_tooltips_only_when_still = false;
     });
-    // The amber sections of the box's own galley (other panels use amber too).
-    let amber_text = |h: &H| -> Vec<String> {
-        fn walk(s: &egui::Shape, out: &mut Vec<String>) {
-            match s {
-                egui::Shape::Text(t) if t.galley.job.text.starts_with("textures/") => {
-                    for sec in &t.galley.job.sections {
-                        if sec.format.color == sdc_gui::ui::status::AMBER {
-                            let r = sec.byte_range.start.0..sec.byte_range.end.0;
-                            out.push(t.galley.job.text[r].to_string());
-                        }
-                    }
-                }
-                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
-                _ => {}
-            }
-        }
-        let mut out = vec![];
-        h.output()
-            .shapes
-            .iter()
-            .for_each(|c| walk(&c.shape, &mut out));
-        out
-    };
     assert!(amber_text(&h).is_empty(), "rock01 is known");
     focus(&mut h);
     clear_and_type(&mut h, "nothere");
