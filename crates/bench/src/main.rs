@@ -33,7 +33,7 @@ enum Cmd {
         out: std::path::PathBuf,
     },
     /// Encode one image to a single-level DDS for the Python runners, with the engine's bytes: `--format bc7 --level
-    /// max` or `--format bc3|bc4|bc5 --level default` (8-bit PNG in), or `--format bc6h --level veryslow_peak`
+    /// max` or `--format bc3|bc4|bc5 --level default|max` (8-bit PNG in; `max` = BC4/BC5 search radius `max`), or `--format bc6h --level veryslow_peak`
     /// (bench `.f16` in).
     EncodeOne {
         #[arg(long)]

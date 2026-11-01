@@ -30,6 +30,18 @@ fn ddsraw_skips_legacy_and_dx10_headers() {
 }
 
 #[test]
+fn encode_one_bc345_max_sets_only_the_search_radius() {
+    use engine::config::SearchRadius;
+    for fmt in ["bc3", "bc4", "bc5"] {
+        let d = sdc_bench::encodeone::engine_profile(fmt, "default").unwrap();
+        let mut m = sdc_bench::encodeone::engine_profile(fmt, "max").unwrap();
+        assert_eq!(m.encoder.bc45_search_radius, SearchRadius::Max, "{fmt}");
+        m.encoder.bc45_search_radius = d.encoder.bc45_search_radius;
+        assert_eq!(m, d, "{fmt}");
+    }
+}
+
+#[test]
 fn f16_loader_reads_the_bench_format() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("x.f16");
