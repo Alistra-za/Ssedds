@@ -32,7 +32,7 @@ The dialog that turns a set's normal map into a height map, an AO map or a curva
 
 The same dialog makes an ambient-occlusion map from the normal (a horizon march over the solved height). A baked AO is better: use this only when the set has none.
 
-- **Where:** the `_rmaos` row's right-click menu (an empty row's **Assign…** too), the set card's menu (the dialog's **AO** checkbox), and Regenerate.
+- **Where:** on the `_rmaos` row, the same menus as the height; from the set card it is the dialog's **AO** checkbox; and Regenerate.
   - It is offered only for PBR, PBR landscape and PBR grass sets on the `cs` target, whose `_rmaos` reads it. Elsewhere the entry and the checkbox say "AO is generated only for PBR sets under Community Shaders".
   - It is greyed out when slot 6 is pinned, when the set already has an AO source (a real `_ao`, or a pre-packed `_rmaos`/`_rfaos` image whose blue channel already holds AO, named with "(B)" in the reason, or one beside a loose roughness, metallic, specular or `_orm`), or when its `_rmaos` is a DDS (never re-encoded).
   - A pre-packed image whose blue is flat white gets the generated AO in B, with R, G and A kept from the image.
@@ -46,7 +46,7 @@ The same dialog makes an ambient-occlusion map from the normal (a horizon march 
 The dialog's **Curvature** checkbox writes `<base>_curves_generated.png`: the Laplacian of the same height solve, smoothed over about 2 texels at the solve size (up to 1024 px; a 2048 curvature is upsampled, so about 4 of its texels), 0.5-centred, with peaks bright and hollows dark. Its hover says "used by Also export as: Vanilla / Complex material": only Also export's soft-light step reads it, so a plain export reports it as `PACK-UNUSED-INPUT`, which is expected.
 
 - **Where:** the set card's menu (the dialog's **Curvature** checkbox) and Regenerate. It has no slot row.
-  - It is offered only where Also export reads it: PBR, PBR landscape and PBR grass sets on the `cs` target with no DDS member (Also skips such a set). Elsewhere it says "curvature is read only by Also export, which reads PBR sets under Community Shaders", or names the DDS.
+  - It is offered only where Also export reads it: PBR, PBR landscape and PBR grass sets on the `cs` target with no DDS member (Also skips such a set). On other sets the greyed entry reads "curvature is read only by Also export, which reads PBR sets under Community Shaders", or names the DDS.
   - It is greyed out when the set has no normal, the normal is not a power of two, the set already has a real `_curves` or `_curvature` map, or a `_curves_generated` file Tessalith did not write is there.
 - **Size:** the set's albedo size, shown read-only, because Also's diffuse reads the albedo and the curvature together. A normal smaller than the albedo, or an albedo whose sides are not powers of two, disables Curvature with the reason. A set with no albedo of its own (a borrowed diffuse does not count) gets no Vanilla diffuse from Also, so Curvature is greyed out there too.
 - **Provenance:** with no row, its stale reason, Regenerate and **Delete generated file…** are on the set card's menu.

@@ -76,7 +76,7 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 ## Where things are
 - `docs/DECISIONS.md`: every live ruling. Search it before changing behaviour. `docs/DECISIONS-ARCHIVE.md`: superseded rulings, for history only.
 - `docs/DOCUMENTATION.md`: the documentation policy (what goes where, repetition limits, screenshots).
-- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes, following `docs/DOCUMENTATION.md`. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
+- `docs/wiki/`: user-facing behaviour; the GUI pages are `docs/wiki/GUI-*.md` (`docs/gui.md` is a link to them). Update them when the UI changes, following `docs/DOCUMENTATION.md`. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
 - `docs/research/`: the measurements behind encoder, mip-filter and coverage choices.
 - `.claude/workflows/trace-debug.js`: a whole-repo bug hunt with skeptical review.
 - `.claude/workflows/quality-audit.js`: a whole-repo quality pass (dead code, efficiency, duplication, architecture, test gaps, shortcut debt) with skeptical checks, a delete list and refactor briefs. It uses the same section table as trace-debug.

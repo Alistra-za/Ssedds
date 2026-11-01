@@ -65,7 +65,7 @@ A set's `_bump`, `_bump2`, `_detailnorm`, `_detailnorm2` and `_bent` files (and 
 
 A texture whose sub-type is **Cubemap** (under *Other* in the sub-type dropdown) gets a **Cubemap** section in its settings panel and a cross in the preview. Everything the panel writes goes to `sdc.toml` as the matching `cubemap.*` key, so the GUI and the CLI make the same bytes. What each setting does is in [Cubemaps](Cubemaps.md#settings).
 
-**In the Textures column.** A set of six face files is one item named `<output name> (6 faces)`. The size estimate counts all six faces and their mips. A six-file set's settings are written to all six face entries in `sdc.toml`, so the faces keep matching.
+**In the Textures column.** The six faces are one item ([Textures column](GUI-Textures-Column.md)). The size estimate counts all six faces and their mips. A six-file set's settings are written to all six face entries in `sdc.toml`, so the faces keep matching.
 
 **Settings panel.** The section is drawn only when every selected texture is a cube. It has five groups:
 

@@ -27,7 +27,7 @@ The **shader** combo under the first row takes the card's whole width. Under it 
 | Amber outline | Borrowed from another set (hover says which). It cannot be dragged out. |
 | Red **?** | A file the set expects that no file matches. |
 
-Right-click a **?** chip for **Remove from set**: it takes that line (an `add`/`remove` path or a borrow) out of `sdc-project.toml` as one undo step. When none of the set's files is left it offers **Delete set** instead. Each such line is also a row in Problems with the same button. A member's own chip has **Remove from set** in its menu too; a borrowed chip uses the slot's **Clear**. These are greyed out, with the reason, while `sdc-project.toml` is read-only.
+Right-click a **?** chip for **Remove from set**: it takes that line (an `add`/`remove` path or a borrow) out of `sdc-project.toml` as one undo step. When none of the set's files is left it offers **Delete set** instead. Each such line is also a row in Problems with the same button. A member's own chip has **Remove from set** in its menu too; a borrowed chip uses the slot's **Clear**. While `sdc-project.toml` is read-only they are off, and their hover says why.
 
 Members in no slot follow as plain thumbnails. The open set's card is highlighted. A set you just moved keeps a bright outline for about a third of a second, then it fades out.
 

@@ -10,7 +10,7 @@ Using it
 - [GUI guide](GUI-Guide.md)
 - [Project config](Project-Config.md)
 - [Presets and targets](Presets-and-Targets.md)
-- [NIF editing](NIF-Editing.md)
+- [NIF editing](GUI-NIF-Edit.md)
 - [Host plugins](Host-Plugins.md)
 - [Plugins compared](Plugins-Compared.md)
 
@@ -36,6 +36,9 @@ GUI
 - [Review and Export](GUI-Review-and-Export.md)
 - [Also export](GUI-Also-Export.md)
 - [Presets](GUI-Presets.md)
+- [Meshes view](GUI-Meshes.md)
+- [Editing a NIF](GUI-NIF-Edit.md)
+- [NIF animation](GUI-NIF-Animation.md)
 - [Keyboard](GUI-Keyboard.md)
 
 Concepts

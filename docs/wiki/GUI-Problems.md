@@ -22,7 +22,7 @@ A row is one line and does not wrap. The fix buttons sit at the panel's right ed
 
 Info rows never count against "ready", but the tab's number counts every row shown, these included. Each is something Tessalith changed for you that you may want back: a packing fill dropped because a helper now fills the channel, a format or tag reset when a texture's type changed, the types it set automatically. A `_curves`, `_curvature` or `_cavity` map no recipe reads is an info row too, with no button: "Read only by Also export; not written on its own".
 
-Each entry of the **Decide…** menu (Remove, Cutout, Blend, Cutout + Blend, Data) has a hover that says what it does; the same lines are on the alpha buttons in Review and in a texture's settings.
+Each entry of the **Decide…** menu has a hover that says what it does; the same lines are on the alpha buttons in Review and in a texture's settings.
 
 ## Deciding in Problems
 
@@ -40,7 +40,7 @@ A row you must act on never just reports; its fix is its button:
 
 | Row | Button |
 |---|---|
-| *No file matches …* (a set line that names no file, the card's red **?** chip) | **Remove from set**, or **Delete set** when none of the set's files is left. Greyed out with the reason while `sdc-project.toml` is read-only. |
+| *No file matches …* (a set line that names no file, the card's red **?** chip) | **Remove from set** or **Delete set** ([Set cards](GUI-Sets-Column.md#set-cards)). |
 | A stale generated map (`GEN-STALE`) | **Regenerate…**, which opens the generate dialog with that map ticked and writes nothing until you press Generate there. |
 | A short normal (`CHAN-NORMAL-LENGTH`) | **Rebuild Z**, which sets the file's `channels.reconstruct_z`; greyed with "Rebuild Z is on for this file: export again to rewrite it" once it is set. |
 | A folder that could not be read | A Project row with **Open folder**. |

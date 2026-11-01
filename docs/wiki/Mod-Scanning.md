@@ -42,7 +42,7 @@ If you start `tessalith.exe` from inside MO2, it detects that and asks: "Opened 
 
 ### Running a scan
 
-Press **Scan**. Progress shows on the scan row; **Cancel** stops it. Cancelling during the plugin pass keeps the mesh results and notes that plugin results are incomplete until the next scan.
+Press **Scan**. Progress shows on the scan row (in both views) as the phase and its count, for example `reading 120/4000 · ETA 0:42`; **Cancel** stops it. The ETA appears once the phase has finished 3 items or run for 2 seconds; it is the average over the last 10 seconds, as in the Files tab, and starts over with each phase. Cancelling during the plugin pass keeps the mesh results and notes that plugin results are incomplete until the next scan.
 
 The scan skips FaceGen meshes and LOD meshes. Meshes that are neither Skyrim SE nor Skyrim LE NIFs are counted and skipped. Meshes from Skyrim LE are read but not drawn in the 3D preview.
 
@@ -69,36 +69,7 @@ Banners about PGPatcher:
 
 ## The Meshes view
 
-Switch to it with the **Meshes** tab in the header.
-
-### Scan details
-
-The scan row's **Scan details** lists what the last scan found and any notes (missing mod folders, archive notes, meshes that failed to read).
-
-### Meshes
-
-The left column is one flat list of meshes: one row per mesh path, showing the copy that wins in game. Each row has the path (without `meshes/`; hover for the full path), the mod it comes from, and its chips.
-
-- **Search paths and mods** narrows the list to rows whose path or mod name holds the text (case does not matter, `\` and `/` are the same).
-- **Any mod** picks a mod instead: the list then shows every copy that mod has, winning or not. Only mods with meshes are offered; PGPatcher's output mod is not, and its copies show under **Any mod**.
-- Mesh filters: *All*, *Wins* (only with a mod picked), *Overridden* (under **Any mod**: every copy that loses, with its own mod), *Conflicted* (more than one copy), *Problems* (a problem or a Skyrim LE mesh).
-- Chips on each mesh, warnings first: **Problem**, **Stale patch** (PGPatcher patch out of date), **LE** (a Skyrim LE mesh), a status chip (**Wins**, **In game** for a mesh PGPatcher patched in game, or **Overridden**), **PGPatcher** (a patched copy), and the mod's **Generated** (by PGPatcher), **BSA** or **game Data** chip. Hover the chips to see them all in full.
-- **Show in Meshes** under a texture's **Used by meshes** opens this view with a **Uses <texture> ✕** chip: only the meshes that use that texture are listed. **✕** shows them all again. While a scan runs, or after one that did not complete, the chip waits for a completed scan before it cuts the list.
-- The filters only hide rows: the selected mesh stays selected, and the count line says when the filters hide it.
-
-### Mesh detail
-
-Select a mesh to see:
-
-- **In game** / **Source**: the copy that wins in game, or the source mod's copy of a PGPatcher-patched mesh.
-- **Shapes**: the **Shapes** button next to the list title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots, with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
-- **Plugin overrides**: plugin records that use this mesh. **Show inert** includes records that have no effect.
-- Override and conflict information ("Overridden by …").
-- **Edit**: opens the mesh for editing. See [NIF editing](NIF-Editing.md).
-
-### Plugin file references
-
-**Plugin file references…** opens a window listing files that plugins reference: *Missing* (referenced but not found, with **Show inert**) and *Unused*, with **Copy**. The button is there whenever a scan database is open. After a folder scan, which reads no plugins, the window says "Plugins were not read in the last scan".
+The mesh list, mesh detail, shapes and plugin file references are on [The Meshes view](GUI-Meshes.md).
 
 ## Error messages
 

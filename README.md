@@ -119,7 +119,7 @@ See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 | [Getting started](docs/wiki/Getting-Started.md) | [Mod scanning](docs/wiki/Mod-Scanning.md) | [Presets and targets](docs/wiki/Presets-and-Targets.md) |
 | [FAQ](docs/wiki/FAQ.md) | [NVTT backend](docs/wiki/NVTT-Backend.md) | [Validation and output](docs/wiki/Validation-and-Output.md) |
 | [Troubleshooting](docs/wiki/Troubleshooting.md) | [Research behind the defaults](docs/wiki/Research.md) | [Host plugins](docs/wiki/Host-Plugins.md) |
-| | [NIF editing](docs/wiki/NIF-Editing.md) | |
+| | [NIF editing](docs/wiki/GUI-NIF-Edit.md) | |
 
 Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Host-Plugins.md); their source is on branch `host-plugins`, which gets bug fixes but is not kept in step with the engine):
 - Photoshop: a [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS.

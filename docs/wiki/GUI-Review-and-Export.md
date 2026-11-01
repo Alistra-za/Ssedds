@@ -7,10 +7,10 @@ What **Export** does, the Review panel that opens when something needs a look fi
 **Export** converts the folder into the export folder (**Export to ▾** in the header; see [Export to](GUI-Main-Window.md#export-to) for how the folder is chosen and where it is saved). It cannot write into the folder it reads, and Review blocks the export until a folder is chosen ("No export folder chosen"). With an `sdc-project.toml` that does not parse, the chosen folder goes to `gui.toml` instead.
 
 1. Export saves `sdc.toml` and `sdc-project.toml` first.
-2. If something is blocked, undecided or worth a second look, [Review](#review) opens in the bottom panel instead of exporting.
+2. When something needs an answer, [Review](#review) opens in the bottom panel instead of exporting.
 3. If a source file changed on disk since it was planned, the textures concerned show "changed on disk" and the Textures column offers **Reload**, which plans again, re-reading only the changed files. Export checks first and plans again by itself, so the export uses current files. The GUI also checks whenever its window regains focus.
 4. The bottom panel opens on its [Files tab](#the-files-tab).
-5. After a complete export, the PGPatcher JSON is written ([The JSON file](GUI-PGPatcher-JSON.md#the-json-file)). NIF edits are written once the texture export has ended ([NIF edits](#review)).
+5. After a complete export, the PGPatcher JSON is written ([The JSON file](GUI-PGPatcher-JSON.md#the-json-file)). NIF edits are written after the textures ([NIF edits](#review)).
 
 **The header button.** **Export** reads "Review n files" in the plain button colour until the project is clean (a folder chosen, files to write, planning finished, nothing undecided), then "Export n files" in the accent colour. With no folder open it reads plain "Export". Hover it for "N files, M problems" and what Review still has open.
 
@@ -35,7 +35,7 @@ Press **Export**: a clean project exports at once, but when something is blocked
 Each column's heading carries its count: **Blockers (n)**, **Undecided (n)**, **Warnings (n)**.
 
 - **Blockers** (red), with **Go to set**. A missing export folder is a blocker, so it counts. Export stays greyed out, with the reason beside it ("Fix 2 blockers first"), until they are fixed.
-- **Undecided**: one row per texture with its question: a sub-type box and **✓**, the alpha choices, or **Acknowledge for this texture**. Click the name to select the texture. **Accept all suggestions** decides every texture that has a suggestion, as one undo step; the others stay listed. A texture decided here leaves the list. Below them come the [half-size rows](GUI-Artist-Checks.md#half-size).
+- **Undecided**: one row per texture with its question: a sub-type box and **✓**, the alpha choices, or **Acknowledge for this texture**. Click the name to select the texture. **Accept all suggestions** works as in [Problems](GUI-Problems.md#deciding-in-problems); the others stay listed. A texture decided here leaves the list. Below them come the [half-size rows](GUI-Artist-Checks.md#half-size).
 - **Warnings**: what re-encodes after an upgrade, then pitfalls grouped by set.
   - After a Tessalith upgrade, one row per reason files re-encode (`2 files re-encode: the normal encoder changed in 1.1.0`, `their settings changed`, `new output type`), compared with what the older version recorded. An export folder with no manifest shows a plain line, `First export with 1.1.0: 20 files`, that asks nothing. The rows go when the export starts.
   - Tick each one to say you have seen it, or press **Acknowledge all**. Export stays greyed out ("Acknowledge 2 warnings first") until every current pitfall is ticked. Ticks count for this export only: they are not saved, they go when the export starts or Review closes, and a changed or new pitfall needs a new tick.

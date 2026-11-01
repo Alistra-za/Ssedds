@@ -12,7 +12,7 @@ In 2D the editor is one column that scrolls as a whole, like a texture's setting
 2. the slot rows at full width;
 3. two tabs: **Material** (**Set** on a vanilla set), which holds the material settings, and **Advanced**, the last tab, with the same sections as the [Advanced drawer](GUI-Advanced-Drawer.md#advanced-drawer).
 
-Nothing sits beside the slot rows, so nothing covers them at any window width. A row wider than the centre is cut at the window edge (it does not scroll sideways). The window-edge drawer is not drawn while the tabs are shown; in 3D, with a texture selected, or with several sets selected, the tabs are not shown and the drawer is.
+Nothing sits beside the slot rows, so nothing covers them at any window width. A row wider than the centre is cut at the window edge (it does not scroll sideways). The window-edge drawer is not drawn while the tabs are shown ([Advanced drawer](GUI-Advanced-Drawer.md#advanced-drawer) says when each is).
 
 What the Material tab holds depends on the set: the [PGPatcher settings](GUI-PGPatcher-JSON.md#pgpatcher-settings) on a TruePBR set, or one of the cards on [Set materials](GUI-Set-Materials.md) (Advanced skin, PBR Landscape, CS PBR records, PBR grass).
 
