@@ -32,6 +32,16 @@ enum Cmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// Encode one image to a single-level DDS for the Python runners: `--format bc7 --level max` (8-bit PNG in) or
+    /// `--format bc6h --level veryslow_peak` (bench `.f16` in).
+    EncodeOne {
+        #[arg(long)]
+        format: String,
+        #[arg(long)]
+        level: String,
+        input: std::path::PathBuf,
+        output: std::path::PathBuf,
+    },
     /// Spike S7: NVTT fed one mip at a time.
     S7Nvtt,
     /// Spike S7b: NVTT on the engine's DDS levels; BC6H per level down to 1x1.
@@ -142,6 +152,18 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("bc6-peak: {e:#}");
+                ExitCode::from(3)
+            }
+        },
+        Cmd::EncodeOne {
+            format,
+            level,
+            input,
+            output,
+        } => match sdc_bench::encodeone::encode_one(&format, &level, &input, &output) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("encode-one: {e:#}");
                 ExitCode::from(3)
             }
         },
