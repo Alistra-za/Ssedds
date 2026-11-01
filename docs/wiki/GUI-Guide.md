@@ -301,7 +301,7 @@ A `_coat` map fills the Subsurface card, which then reads "Coat colour + strengt
 
 **Shader** lists the shaders the current Mode offers. The pick reads "(auto)" when Tessalith chose it and "(fallback)" when the shader you asked for does not exist under this Mode. **Auto** clears your choice. Shader warnings show on the set card's **⚠ n** button. See [Texture types](Texture-Types.md#set-shaders).
 
-**Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**.
+**Used by plugins** lists the plugin texture sets (TXST) and alternate textures that use this set, from the last scan, with **Refresh**. Slots count from 1, as in the NIF edit panel.
 
 ## TruePBR settings
 
