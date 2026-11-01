@@ -2062,3 +2062,20 @@ fn a_generated_p_fills_the_height_slot_until_a_real_p_replaces_it() {
         .iter()
         .any(|p| format!("{p:?}").contains("GEN-REPLACED")));
 }
+
+/// Note F?2: a set of DDS files is a set: listed, and "Not in a set" is about names only.
+#[test]
+fn an_all_dds_folder_shows_its_set() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("textures");
+    bc1_dds(&root.join("rock/rock.dds"));
+    bc1_dds(&root.join("rock/rock_n.dds"));
+    let m = opened_as_the_app(root, d.path().join("export"));
+    assert_eq!(m.sets.len(), 1, "{:?}", m.sets);
+    assert_eq!(m.sets[0].members.len(), 2);
+    assert_eq!(m.not_in_set_count(), 0);
+    // The settings panel's `← set` link shows when the item's set key is a listed set (settings_panel.rs).
+    let it = m.item("rock/rock.dds").expect("the DDS item");
+    let sk = it.set_key.clone().expect("a set key");
+    assert!(m.sets.iter().any(|s| s.key == sk));
+}
