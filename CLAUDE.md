@@ -50,7 +50,8 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 ## How work is recorded
 - **Every judgement call becomes a ruling in `docs/DECISIONS.md`.** Append a new `## Note XX — <topic> (<who>, <date>)` at the end with the next free letters. Number the items XX1, XX2, and so on.
 - **Note letters are split by team (owner, 2026-10-28).** The main team uses the F block (FA, FB, ... FZ), then H, J and so on; the NIF team uses G, then I, K and so on. Each team takes the next free letter in its own block, so the two never collide. Parallel branches of one team can still collide: pick the next free letter in your block as it stands on `main` at merge time, and rename the note if it's taken. A merge must leave no duplicate headings. Check with `grep -oE '^## Note [A-Z]+' docs/DECISIONS.md | sort | uniq -d`, which must print nothing.
-- **Older notes are history:** don't rewrite them. Add a pointer when a new note supersedes one.
+- **DECISIONS.md holds live rulings only.** A fully reverted or superseded ruling moves verbatim to `docs/DECISIONS-ARCHIVE.md` under its original ID; a partly superseded item is edited to the current rule and its old wording archived. IDs are never reused. Archived rulings are not in force: don't cite them. Details: `docs/DOCUMENTATION.md` §7.
+- **Documentation follows `docs/DOCUMENTATION.md`:** current state only (history goes in CHANGELOG.md), one home per fact (at most two mentions, three if essential, full explanation once), page size budget, generated screenshots refreshed with a difference overlay before a push. Read it before editing README.md, docs/wiki, docs/gui.md, the plugin pages or DECISIONS.md.
 - **Behaviour recorded as a ruling is intended.** Don't "fix" it without a new ruling.
 - **A comment starting `shortcut:`** marks a known limit, and says when to upgrade it.
 
@@ -73,8 +74,9 @@ Build folders fill the drive fast: one worktree's `target/` reaches 50–170 GB.
 - **egui kittest:** a viewport that never goes idle (a spinner, the 3D view) needs `run_steps(n)`, not `run()`.
 
 ## Where things are
-- `docs/DECISIONS.md`: every ruling. Search it before changing behaviour.
-- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
+- `docs/DECISIONS.md`: every live ruling. Search it before changing behaviour. `docs/DECISIONS-ARCHIVE.md`: superseded rulings, for history only.
+- `docs/DOCUMENTATION.md`: the documentation policy (what goes where, repetition limits, screenshots).
+- `docs/gui.md`, `docs/wiki/`: user-facing behaviour. Update them when the UI changes, following `docs/DOCUMENTATION.md`. `docs/wiki` is the source of the GitHub wiki: after editing it, run `tools\publish-wiki.ps1` (`-Out <dir>` previews the converted pages).
 - `docs/research/`: the measurements behind encoder, mip-filter and coverage choices.
 - `.claude/workflows/trace-debug.js`: a whole-repo bug hunt with skeptical review.
 - `.claude/workflows/quality-audit.js`: a whole-repo quality pass (dead code, efficiency, duplication, architecture, test gaps, shortcut debt) with skeptical checks, a delete list and refactor briefs. It uses the same section table as trace-debug.
