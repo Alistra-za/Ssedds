@@ -1,5 +1,7 @@
 # BCn encoders: what the published evidence says
 
+Written 2026-10-16 (commit 1bae037b).
+
 This page summarises a literature review of DDS/BCn encoders, done before any Tessalith code was written. It asked which encoder gives the best quality for each BC format, and how sure we can be. The review found that the published data had large gaps, so a local benchmark was run next. Its results are on [Local encoder benchmark](encoder-benchmark.md), and where the two disagree, the benchmark wins.
 
 ## The question

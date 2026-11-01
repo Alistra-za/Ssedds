@@ -1,5 +1,7 @@
 # bc7e tuning: is there quality left in Tessalith's BC7 encoder?
 
+Written 2026-10-18 (commit 65c6db00).
+
 Tessalith encodes BC7 with bc7e (bc7enc_rdo b943862, patch 0001) at its `veryslow` level, which the
 [encoder benchmark](encoder-benchmark.md) found ties or beats NVTT Production on real textures. This study asks
 whether bc7e, as vendored, can be made measurably better for Skyrim textures, and if so what it costs.

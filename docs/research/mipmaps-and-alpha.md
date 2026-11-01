@@ -1,5 +1,7 @@
 # Mipmap filters, normal maps and alpha coverage
 
+Written 2026-10-16 (commit 1bae037b).
+
 This page summarises the research into how mip levels should be built for each kind of texture, and how alpha-tested textures keep their shape at a distance. It was a review of published papers, engine documentation and tool source code, plus a few local tests made while building Tessalith.
 
 ## The questions

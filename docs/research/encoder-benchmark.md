@@ -1,5 +1,7 @@
 # Local encoder benchmark
 
+Written 2026-10-16 (commit 1bae037b).
+
 The [encoder survey](encoder-survey.md) found that nobody had published a fair comparison of the main BC7 encoders at their top settings, or any good data on alpha, BC4, BC5 or BC6H. So the project ran its own benchmark in three rounds (8 to 9 October 2026), plus a later test of the BC4/BC5 search radius (12 October 2026). This page merges them. Where round 3 re-measured a claim on 100 images, its number is the one shown.
 
 ## The questions

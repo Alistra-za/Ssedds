@@ -66,7 +66,7 @@ Raw maps (`_roughness`, `_metallic`, `_ao` and so on) are packed differently per
 
 Under vanilla, pick **Complex Material** as the set's shader (GUI) or pass `--set set:<id>.shader=complex_material` (CLI) to get the complex `_m` from raw maps. A set that already has a complex-material `_m` file picks the shader by itself, and that file is kept unless `packing.prefer = "raw"`.
 
-See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
+See [Texture types](Texture-Packing.md#packing-raw-maps) for the details.
 
 ### Set shaders per target
 
@@ -75,7 +75,7 @@ See [Texture types](Texture-Types.md#packing-raw-maps) for the details.
 | `pbr`, `pbr_grass`, `pbr_landscape`, `advanced_skin` | yes | no |
 | `default`, `envmap`, `complex_material`, `glow`, `parallax`, `skin`, `hair`, `eye`, `multilayer`, `landscape`, `complex_grass` | yes | yes |
 
-A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Texture-Types.md#set-shaders).
+A shader the target does not have falls back to `default`, with `SHADER-UNAVAILABLE`. See [Texture types](Set-Shaders.md#set-shaders).
 
 ## Built-in presets
 

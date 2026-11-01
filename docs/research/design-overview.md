@@ -1,5 +1,7 @@
 # How Tessalith came about: design overview
 
+Written 2026-10-16 (commit 1bae037b).
+
 Tessalith started in October 2026 as a written plan for an open-source DDS converter for Skyrim SE/AE modding, with a GUI and a CLI on one engine. The plan drew on the [encoder survey](encoder-survey.md), the [local benchmark](encoder-benchmark.md), the [mipmap research](mipmaps-and-alpha.md) and a review of Skyrim's texture conventions. It listed open questions, and each was settled by a short test ("spike") or by the project owner. This page describes the design that resulted and how it differs from the first plan. The decision record is [DECISIONS.md](../DECISIONS.md).
 
 ## The main idea: correct Skyrim policy matters more than the encoder

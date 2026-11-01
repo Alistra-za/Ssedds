@@ -23,7 +23,10 @@ GUI
 Concepts
 
 - [Texture types](Texture-Types.md)
+- [Texture packing](Texture-Packing.md)
+- [Shaders and height maps](Set-Shaders.md)
 - [Cubemaps](Cubemaps.md)
+- [Cubemap sources](Cubemap-Sources.md)
 - [Mod scanning](Mod-Scanning.md)
 - [NVTT backend](NVTT-Backend.md)
 - [Validation and output](Validation-and-Output.md)
@@ -32,5 +35,6 @@ Concepts
 Help
 
 - [Troubleshooting](Troubleshooting.md)
+- [Diagnostic codes](Diagnostic-Codes.md)
 - [Known issues](Known-Issues.md)
 - [FAQ](FAQ.md)

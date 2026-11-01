@@ -365,7 +365,7 @@ Exit codes: 0; 1 if a file is unreadable or refused; 2 if `--out-dir` would writ
 sdc cubemap-marker [--color <R,G,B>] [--roughness <0..1>] -o <file.dds>
 ```
 
-Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "reflect the live scene". The file is 152 bytes: a six-face RGBA8 cube with the colour on +X and every other face black. See [Cubemaps](Cubemaps.md#dynamic-marker).
+Writes the 1×1 dynamic-cubemap marker that Community Shaders and ENB read as "reflect the live scene". The file is 152 bytes: a six-face RGBA8 cube with the colour on +X and every other face black. See [Cubemaps](Cubemap-Sources.md#dynamic-marker).
 
 | Flag | Default | Meaning |
 |---|---|---|
