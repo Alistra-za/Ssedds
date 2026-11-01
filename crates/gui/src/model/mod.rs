@@ -57,14 +57,14 @@ pub mod viewport3d;
 use crate::project::{ProjectDoc, SaveError};
 use crate::settings::GuiSettings;
 use crate::worker::{
-    spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
+    spawn_dds_thumbs, spawn_export, spawn_guarded, spawn_plan, MeshEvidence, PlanFailure, WorkerMsg,
 };
 use engine::api::{BatchRequest, CancelToken};
 use engine::codes::Code;
 use engine::config::{AlphaPolicy, GreenConvention, Subtype, Target};
 use engine::policy::{AcceptSuggestions, SourceStamp};
 use engine::presets::ConfigFile;
-use engine::session::Session;
+use engine::session::{Session, Thumbnail};
 use items::*;
 use serde_json::json;
 use std::path::PathBuf;
@@ -412,6 +412,14 @@ pub struct AppModel {
     sets_root: Option<PathBuf>,
     /// Bumped whenever `items` is replaced (or announced with `invalidate_views`): the set-view cache key.
     items_rev: u64,
+    /// Note F?1: skipped DDS inputs' tile images by path, with the stamp they were decoded at; cleared on open and
+    /// reload.
+    dds_thumbs: std::collections::HashMap<PathBuf, (SourceStamp, Arc<Thumbnail>)>,
+    /// The DDS tile images asked for and not landed yet (no second request while one is out; the repaint gate).
+    dds_thumbs_asked: std::collections::HashMap<PathBuf, SourceStamp>,
+    /// Paths sent to `spawn_dds_thumbs` so far (tests: a re-plan reuses the cache).
+    #[doc(hidden)]
+    pub dds_thumb_requests: usize,
     /// The artist check results and what they were computed from (DECISIONS Note CL).
     pub(crate) check_state: checks::CheckState,
     /// Bumped whenever `last_inputs` is written: `engine_inputs` (so the export blocks) reads it.
@@ -720,6 +728,9 @@ impl AppModel {
             target: Target::Cs,
             items: vec![],
             items_rev: 0,
+            dds_thumbs: Default::default(),
+            dds_thumbs_asked: Default::default(),
+            dds_thumb_requests: 0,
             check_state: Default::default(),
             inputs_rev: 0,
             item_index: Default::default(),
@@ -938,6 +949,9 @@ impl AppModel {
         self.sizes.clear_folder();
         // Audit item 22: the previous folder's file checks would stay for the session.
         self.stats.borrow_mut().clear();
+        // Note F?1: the previous folder's DDS tile images.
+        self.dds_thumbs.clear();
+        self.dds_thumbs_asked.clear();
         self.drawer_epoch += 1;
         self.folder_epoch += 1;
         self.dropped_fills.clear();
@@ -1398,9 +1412,19 @@ impl AppModel {
             changed = true;
             self.picked(d);
         }
+        let mut thumbs_landed = false;
         while let Ok(msg) = self.rx.try_recv() {
             changed = true;
-            self.handle(msg);
+            match msg {
+                WorkerMsg::DdsThumb { path, stamp, thumb } => {
+                    thumbs_landed |= self.dds_thumb_landed(path, stamp, thumb)
+                }
+                msg => self.handle(msg),
+            }
+        }
+        // Note F?1: one invalidation for every DDS tile image of this poll (the tile cache keys on the revision).
+        if thumbs_landed {
+            self.invalidate_views();
         }
         // Last, so a plan that landed above is checked in this poll (K1).
         changed |= self.refresh_checks();
@@ -1458,6 +1482,7 @@ impl AppModel {
                     "used-by" => self.used_by_panicked(&message),
                     "original-textures" => self.original_panicked(&message),
                     "save-report" => self.report_saving = false,
+                    "dds thumbnails" => self.dds_thumbs_asked.clear(),
                     _ => {}
                 }
                 self.raise_error(format!("internal error in {what}: {message}"));
@@ -2045,6 +2070,9 @@ impl AppModel {
 
     /// Plan again after sources changed on disk; the session cache reloads only the changed files.
     pub fn reload_changed(&mut self) {
+        // Note F?1: the DDS tile images are read again with the reload.
+        self.dds_thumbs.clear();
+        self.dds_thumbs_asked.clear();
         self.replan();
     }
 
@@ -2391,6 +2419,7 @@ impl AppModel {
             && self.selection == Selection::Item(self.expanded.clone().unwrap_or_default());
         self.target = view.target;
         self.items = view.items;
+        self.request_dds_thumbs();
         // K1: the checks run on this plan's analyses at the end of the poll that lands it.
         self.check_state.plans_applied += 1;
         self.invalidate_views();
@@ -2451,6 +2480,65 @@ impl AppModel {
         // Output paths depend on this plan's sub-types (DECISIONS P1): plan once more when they changed. Bounded.
         // `export_after_plan` survives the return: export starts when the final plan lands.
         self.refresh_mesh_votes(true);
+    }
+
+    /// Note F?1: a DDS tile with no image takes the cached one when its stamp matches; the rest are decoded on one
+    /// worker (none asked twice while out).
+    fn request_dds_thumbs(&mut self) {
+        let mut ask = vec![];
+        for item in self.items.iter_mut() {
+            let Some(stamp) = item
+                .stamp
+                .filter(|_| item.kind == ItemKind::Dds && item.thumb.is_none())
+            else {
+                continue;
+            };
+            match self.dds_thumbs.get(&item.input) {
+                Some((s, t)) if *s == stamp => item.thumb = Some(t.clone()),
+                _ if self.dds_thumbs_asked.get(&item.input) == Some(&stamp) => {}
+                _ => ask.push((item.input.clone(), stamp)),
+            }
+        }
+        let Some(session) = self.session.as_ref().filter(|_| !ask.is_empty()) else {
+            return;
+        };
+        self.dds_thumb_requests += ask.len();
+        self.dds_thumbs_asked.extend(ask.iter().cloned());
+        spawn_dds_thumbs(self.tx.clone(), ask, session.bc1_model());
+    }
+
+    /// Note F?1: a DDS tile image landed. True when an item took it (the caller invalidates the views once). An
+    /// error stores nothing: the tile stays grey and the preview gives the reason.
+    fn dds_thumb_landed(
+        &mut self,
+        path: PathBuf,
+        stamp: SourceStamp,
+        thumb: Result<Arc<Thumbnail>, String>,
+    ) -> bool {
+        if self.dds_thumbs_asked.get(&path) == Some(&stamp) {
+            self.dds_thumbs_asked.remove(&path);
+        }
+        let Ok(thumb) = thumb else {
+            return false;
+        };
+        let mut took = false;
+        for item in self
+            .items
+            .iter_mut()
+            .filter(|i| i.kind == ItemKind::Dds && i.input == path && i.stamp == Some(stamp))
+        {
+            item.thumb = Some(thumb.clone());
+            took = true;
+        }
+        if took {
+            self.dds_thumbs.insert(path, (stamp, thumb));
+        }
+        took
+    }
+
+    /// Note F?1: DDS tile images are still being decoded (the window keeps polling).
+    pub fn dds_thumbs_pending(&self) -> bool {
+        !self.dds_thumbs_asked.is_empty()
     }
 
     /// The tail of `apply_plan`, once the scan-database evidence of this plan is in.

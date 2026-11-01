@@ -354,6 +354,46 @@ pub fn dds_preview(path: &std::path::Path, max: u32, bc1: Bc1Model) -> Result<Pr
     Ok(PreviewOut { decoded, result })
 }
 
+/// A skipped DDS input's tile image (Note F?1): its largest mip of at most `THUMB_MAX`, else its smallest mip
+/// box-downsampled, as stored (RGBA8).
+/// shortcut: a mipless 4K DDS decodes its full level once on the worker; read a cached thumb from the DZ disk cache
+/// if open time shows it.
+/// shortcut: an HDR (BC6H, float) DDS is clamped, not tone-mapped; upgrade if HDR tiles look blown out.
+pub fn dds_thumbnail(
+    path: &std::path::Path,
+    bc1: Bc1Model,
+) -> Result<engine::session::Thumbnail, String> {
+    use engine::session::THUMB_MAX;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let f = engine::dds::read_dds(&bytes).map_err(|e| e.to_string())?;
+    // The same refusals as `dds_preview`: BC2 and signed BC6H cannot be decoded.
+    if f.format.as_format().is_none() && f.format.block_bytes().is_some() {
+        return Err(format!(
+            "{:?} cannot be previewed (BC2 and signed BC6H are not supported)",
+            f.format
+        ));
+    }
+    let dims: Vec<(u32, u32)> = f.levels.iter().map(|(w, h, _)| (*w, *h)).collect();
+    let first = first_level_within(&dims, THUMB_MAX);
+    let (w, h, range) = f.levels.get(first).ok_or("no mip levels")?.clone();
+    let mut px =
+        decode_level_rgba(f.format, w, h, &f.data[range], Some(bc1)).map_err(|e| e.to_string())?;
+    px.resize(w as usize * h as usize, [0.0, 0.0, 0.0, 1.0]);
+    let img = engine::image::Rgba32F {
+        width: w,
+        height: h,
+        px,
+    };
+    // `make_thumbnail` box-downsamples a mip still over the limit and clamps as stored (`is_float: false`).
+    let info = engine::image::SourceInfo {
+        bit_depth: 8,
+        channels: 4,
+        has_alpha: true,
+        is_float: false,
+    };
+    Ok(engine::session::make_thumbnail(&img, &info))
+}
+
 impl AppModel {
     /// The size limit the settings give: the setting, at most 8192 unless 16384 is allowed (M3a spec §6.5).
     fn settings_limit(&self) -> u32 {

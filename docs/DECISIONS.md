@@ -3696,3 +3696,9 @@ Owner: "there is no point in maintaining them throughout all engine versions whe
 - FG4. Engine API removed: `engine::memory` (`Channel`, `pack_rmaos`, `encode_image`, `encode_image_with`, `RmaosSet`, `encode_rmaos_set`), which only psdds called, with its tests `crates/engine/tests/memory.rs` and `memory_rmaos.rs`. Nothing else in the workspace used it. The comment on `SET-MISSING-COMPANION`'s roughness text in `bake/plan.rs` no longer names it. Goldens unchanged.
 - FG5. Kept on `main`: the plugin docs (`docs/photoshop-plugin.md`, `docs/gimp-plugin.md`, `docs/paintdotnet-plugin.md`) and the wiki pages Host-Plugins and Plugins-Compared with their links. Host-Plugins says once where the plugins live and that they are built against the branch's engine; the other docs cite it. Plugin build-output and Adobe SDK entries stay in `.gitignore`, since those files stay on disk when a checkout leaves the branch. The `psdds` row is dropped from the R4 section of `.claude/workflows/quality-audit.js` and `trace-debug.js`.
 - FG6. This supersedes, for `main`, the notes that added the plugins: DC (Photoshop), DD (shared psdds.dll), DE (chaiNNer), DF (Photoshop 16/32-bit and HDR), DH (alpha is transparency), DI (Paint.NET) and DG (GIMP). Those notes are unchanged and still describe the plugins on `host-plugins`.
+
+## Note F? — GUI review D fixes (main team, 2026-10-31)
+
+The fixes from the GUI usability review D of main 34c0f532 (the review is `.superpowers/ui-review-d/REVIEW.md`, not in git).
+
+- F?1. A skipped DDS input's tile shows its stored image: the GUI decodes its largest mip of at most 128 px (or downsamples its smallest mip when none is that small) off the UI thread, cached by path and stamp; the engine still never loads it (S6). AG94 stands: the tiles exist when the plan lands; only their stored images arrive later.

@@ -471,8 +471,10 @@ impl eframe::App for SdcApp {
             // GE16: the set preview's crash lines appear when the JSON read lands, even on an idle Textures view.
             || self.meshes.pg_reading()
             || self.model.v2_jobs_pending();
-        let background =
-            self.model.dims_pending() || self.model.used_by_pending() || self.model.report_saving;
+        let background = self.model.dims_pending()
+            || self.model.used_by_pending()
+            || self.model.report_saving
+            || self.model.dds_thumbs_pending();
         if let Some(d) = worker_poll(visible, background) {
             ctx.request_repaint_after(d);
         }
