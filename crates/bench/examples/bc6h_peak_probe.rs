@@ -46,17 +46,17 @@ fn main() {
     let mut strip = img.px[by * 4 * w..(by * 4 + 4) * w].to_vec();
     if a.get(3).is_some_and(|s| s == "floor") {
         // Experiment: exact-zero channels in the peak block become that channel's smallest positive value there.
-        for c in 0..3 {
-            let texels = (0..16).map(|t| (t / 4) * w + bx * 4 + t % 4);
-            let lo = texels
-                .clone()
-                .map(|i| strip[i][c])
-                .filter(|&v| v > 0)
-                .min()
-                .unwrap_or(0);
-            for i in texels {
-                if strip[i][c] == 0 {
-                    strip[i][c] = lo;
+        let texels: Vec<usize> = (0..16).map(|t| (t / 4) * w + bx * 4 + t % 4).collect();
+        let lo: Vec<u16> = (0..3)
+            .map(|c| {
+                let pos = texels.iter().map(|&i| strip[i][c]).filter(|&v| v > 0);
+                pos.min().unwrap_or(0)
+            })
+            .collect();
+        for &i in &texels {
+            for (v, &l) in strip[i][..3].iter_mut().zip(&lo) {
+                if *v == 0 {
+                    *v = l;
                 }
             }
         }
