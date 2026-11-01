@@ -10,6 +10,7 @@ use super::sets::{set_views, views, SlotFill, SlotKind};
 use super::AppModel;
 use engine::group::base_of;
 use engine::sets::{fold_id, same_id};
+use std::ops::Range;
 
 /// What picking a name does: the rows that change, and the set entry's (old, new) automatic id when it moves.
 #[derive(Debug, Clone, PartialEq)]
@@ -301,7 +302,7 @@ pub fn tab_part(paths: &[String], typed: &str) -> Option<String> {
 }
 
 /// Note AO4: the live list under the box: the first `limit` paths that start with `text` (the top one is the ghost);
-/// with none, the paths under the locked part (`text[..cut]`) that contain every word of the free part.
+/// with none, the paths under the folder `text[..cut]` (`segment_start`, Note F?17) that contain every word after it.
 pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<String> {
     let rows: Vec<String> = starting_with(paths, text)
         .take(limit)
@@ -322,19 +323,248 @@ pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<
         .collect()
 }
 
-/// Note AO: the path lock's stops: the byte index of each `/` or `\` in `s`.
-pub fn separator_stops(s: &str) -> Vec<usize> {
-    s.match_indices(['/', '\\']).map(|(i, _)| i).collect()
+/// Note F?17: a path separator (`\` is read as `/` everywhere in the box).
+fn is_sep(c: char) -> bool {
+    c == '/' || c == '\\'
 }
 
-/// Note AO: where lock `n` cuts `s`: just past its `n`-th separator (0 keeps nothing; past the last keeps the folder).
-pub fn lock_cut(s: &str, n: usize) -> usize {
-    n.checked_sub(1)
-        .and_then(|i| {
-            separator_stops(s)
-                .get(i)
-                .or(separator_stops(s).last())
-                .copied()
-        })
-        .map_or(0, |i| i + 1)
+/// Note F?17: the path segment at char index `i` of `s` (char indices, separators excluded): the run between the
+/// separator before `i` and the one at or after it, so a `/` at `i` belongs to the segment before it.
+pub fn segment_at(s: &str, i: usize) -> Range<usize> {
+    let chars: Vec<char> = s.chars().collect();
+    let i = i.min(chars.len());
+    let start = chars[..i]
+        .iter()
+        .rposition(|c| is_sep(*c))
+        .map_or(0, |p| p + 1);
+    let end = chars[i..]
+        .iter()
+        .position(|c| is_sep(*c))
+        .map_or(chars.len(), |p| i + p);
+    start..end
+}
+
+/// Note F?17: a drag from `anchor` to `head` (char indices) that crosses a separator covers whole segments: from the
+/// anchor's segment start to the head's segment end, or reversed when dragging left. Returns (anchor, head); unchanged
+/// inside one segment.
+pub fn snap_to_segments(s: &str, anchor: usize, head: usize) -> (usize, usize) {
+    let (a, h) = (segment_at(s, anchor), segment_at(s, head));
+    if a == h {
+        (anchor, head)
+    } else if head >= anchor {
+        (a.start, h.end)
+    } else {
+        (a.end, h.start)
+    }
+}
+
+/// Note F?17: the byte index after the last separator of `s` (0 with none): `s[..segment_start(s)]` is the folder
+/// before the segment being edited, which the live list, the ▾ list and Tab completion filter by.
+pub fn segment_start(s: &str) -> usize {
+    s.rfind(['/', '\\']).map_or(0, |i| i + 1)
+}
+
+/// Note F?17: the 0-based index of the segment at char index `i` (the separators before it).
+pub fn segment_index(s: &str, i: usize) -> usize {
+    s.chars()
+        .take(segment_at(s, i).start)
+        .filter(|c| is_sep(*c))
+        .count()
+}
+
+/// Note F?17: `s` with segment `k` replaced by `value`, and the new segment's char range.
+pub fn replace_segment(s: &str, k: usize, value: &str) -> (String, Range<usize>) {
+    let mut parts: Vec<&str> = s.split(['/', '\\']).collect();
+    if k < parts.len() {
+        parts[k] = value;
+    }
+    let start: usize = parts[..k.min(parts.len())]
+        .iter()
+        .map(|p| p.chars().count() + 1)
+        .sum();
+    (parts.join("/"), start..start + value.chars().count())
+}
+
+/// Note F?17: one row of a segment list (Ctrl+Up/Down in the input name box).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    /// The row's text: a folder's name, or (the last segment) the whole path, as the ▾ list shows it.
+    pub label: String,
+    /// What replaces the segment.
+    pub value: String,
+    /// A folder that also holds the rest of the path after this segment (` ✓`).
+    pub keeps_tail: bool,
+}
+
+/// Note F?17: the known names for segment `seg` of `text`, given the folder before it (from the ▾ list's cached
+/// `paths`). A middle segment lists the sibling folders: those that also hold the rest of the path first (`keeps_tail`),
+/// then the rest, alphabetically. The last segment lists the paths of the textures in that folder, in list order.
+pub fn segment_choices(paths: &[String], text: &str, seg: usize) -> Vec<Choice> {
+    let norm = text.replace('\\', "/");
+    let parts: Vec<&str> = norm.split('/').collect();
+    if seg >= parts.len() {
+        return vec![];
+    }
+    let folder: String = parts[..seg].iter().map(|p| format!("{p}/")).collect();
+    let last = seg + 1 == parts.len();
+    let fold = |s: &str| super::known_paths::strip_dds(&s.to_lowercase()).to_string();
+    let tail = fold(&parts[seg + 1..].join("/"));
+    let mut folders: std::collections::BTreeMap<String, Choice> = Default::default();
+    let mut out = vec![];
+    for p in starting_with(paths, &folder) {
+        let rest = &p[folder.len()..];
+        match rest.split_once(['/', '\\']) {
+            None if last => out.push(Choice {
+                label: p.to_string(),
+                value: rest.to_string(),
+                keeps_tail: false,
+            }),
+            Some((name, after)) if !last && !name.is_empty() => {
+                let c = folders
+                    .entry(name.to_lowercase())
+                    .or_insert_with(|| Choice {
+                        label: name.to_string(),
+                        value: name.to_string(),
+                        keeps_tail: false,
+                    });
+                c.keeps_tail |= fold(&after.replace('\\', "/")) == tail;
+            }
+            _ => {}
+        }
+    }
+    if last {
+        return out;
+    }
+    let mut out: Vec<Choice> = folders.into_values().collect();
+    // Stable: the BTreeMap's alphabetical order stays within each group.
+    out.sort_by_key(|c| !c.keeps_tail);
+    out
+}
+
+/// Note F?17 (rule 13): `choices` with those closest to `old` first (the longest common prefix, case aside: `shield`
+/// puts `shield_d` first), the rest in their order.
+pub fn closest_first(mut choices: Vec<Choice>, old: &str) -> Vec<Choice> {
+    let old = old.to_lowercase();
+    let common = |v: &str| {
+        v.to_lowercase()
+            .chars()
+            .zip(old.chars())
+            .take_while(|(a, b)| a == b)
+            .count()
+    };
+    choices.sort_by_key(|c| std::cmp::Reverse(common(&c.value)));
+    choices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(p: &[&str]) -> Vec<String> {
+        p.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn segment_at_splits_only_on_slashes() {
+        let s = "textures/armor/iron_d.v2-x";
+        let i = s.find("iron").unwrap();
+        let r = segment_at(s, i);
+        assert_eq!(&s[r], "iron_d.v2-x");
+        // A `/` at the index belongs to the segment before it.
+        let r = segment_at(s, s.find("/iron").unwrap());
+        assert_eq!(&s[r], "armor");
+        assert_eq!(segment_at(s, 0), 0..8);
+        assert_eq!(segment_at("a\\bc", 3), 2..4);
+        assert_eq!(segment_at("", 0), 0..0);
+    }
+
+    #[test]
+    fn snap_to_segments_covers_whole_segments() {
+        let s = "textures/landscape/rock01";
+        // Inside one segment: per character.
+        assert_eq!(snap_to_segments(s, 11, 15), (11, 15));
+        // Right across a `/`: the anchor's segment start to the head's segment end.
+        assert_eq!(snap_to_segments(s, 12, 21), (9, 25));
+        // Left: the anchor's segment end to the head's segment start.
+        assert_eq!(snap_to_segments(s, 21, 12), (25, 9));
+        assert_eq!(snap_to_segments(s, 3, 22), (0, 25));
+    }
+
+    #[test]
+    fn segment_start_is_after_the_last_slash() {
+        assert_eq!(segment_start("textures/landscape/rock01"), 19);
+        assert_eq!(segment_start("textures\\rock01"), 9);
+        assert_eq!(segment_start("rock01"), 0);
+        assert_eq!(segment_start("textures/"), 9);
+    }
+
+    #[test]
+    fn segment_index_and_replace_segment() {
+        let s = "textures/landscape/rock01";
+        assert_eq!(segment_index(s, 0), 0);
+        assert_eq!(segment_index(s, 8), 0);
+        assert_eq!(segment_index(s, 9), 1);
+        assert_eq!(segment_index(s, 25), 2);
+        assert_eq!(
+            replace_segment(s, 1, "other"),
+            ("textures/other/rock01".to_string(), 9..14)
+        );
+        assert_eq!(
+            replace_segment(s, 2, "big"),
+            ("textures/landscape/big".to_string(), 19..22)
+        );
+    }
+
+    #[test]
+    fn segment_choices_lists_siblings_and_marks_the_tail() {
+        let list = paths(&[
+            "armor/bronze/helmet",
+            "armor/iron/shield",
+            "armor/steel/shield",
+        ]);
+        let c = segment_choices(&list, "armor/iron/shield", 1);
+        let rows: Vec<(&str, bool)> = c.iter().map(|c| (c.label.as_str(), c.keeps_tail)).collect();
+        assert_eq!(
+            rows,
+            vec![("iron", true), ("steel", true), ("bronze", false)]
+        );
+        // Case and `.dds` aside.
+        let c = segment_choices(&list, "Armor\\iron/SHIELD.dds", 1);
+        assert!(c.iter().filter(|c| c.keeps_tail).count() == 2, "{c:?}");
+        // The first segment lists the top folders.
+        let c = segment_choices(&list, "armor/iron/shield", 0);
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].value, "armor");
+    }
+
+    #[test]
+    fn segment_choices_on_the_last_segment_lists_textures() {
+        let list = paths(&[
+            "armor/iron/shield",
+            "armor/iron/sub/deep",
+            "armor/iron/boots",
+            "armor/steel/shield",
+        ]);
+        let c = segment_choices(&list, "armor/iron/x", 2);
+        let rows: Vec<(&str, &str)> = c
+            .iter()
+            .map(|c| (c.label.as_str(), c.value.as_str()))
+            .collect();
+        // The ▾ list's rows (whole paths, list order), only the folder's own textures.
+        assert_eq!(
+            rows,
+            vec![
+                ("armor/iron/shield", "shield"),
+                ("armor/iron/boots", "boots")
+            ]
+        );
+    }
+
+    #[test]
+    fn closest_first_puts_a_suffix_change_first() {
+        let list = paths(&["armor/steel/apron", "armor/steel/shield_d"]);
+        let c = closest_first(segment_choices(&list, "armor/steel/shield", 2), "shield");
+        assert_eq!(c[0].value, "shield_d");
+        assert_eq!(c[1].value, "apron");
+    }
 }
