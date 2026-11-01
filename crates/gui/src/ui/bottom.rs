@@ -101,8 +101,12 @@ pub fn draw(
             BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
         }
     });
-    if cap.is_some_and(|c| panel.response.rect.height() < c - 1.0) {
-        // Resized below the cap in the Meshes view: that is the user's height now.
+    // egui's resize handle id (`panel.rs::resize_widget_id`).
+    let resized = ui
+        .read_response(egui::Id::new(id).with("__resize"))
+        .is_some_and(|r| r.dragged() || r.drag_stopped());
+    if cap.is_some() && resized {
+        // Resized in the Meshes view, to the cap or below it: that is the user's height now.
         ui.ctx()
             .data_mut(|d| d.remove::<f32>(egui::Id::new(id).with("uncapped")));
     }
