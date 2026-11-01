@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 /// What a picker is for; the model that owns the purpose handles the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerPurpose {
-    /// Header and Ctrl+O: open a folder.
+    /// The start screen, the header's Open menu and the command palette: open a folder.
     OpenFolder,
     /// Header: the export folder setting.
     ExportFolder,
