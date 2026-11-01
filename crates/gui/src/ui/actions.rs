@@ -872,7 +872,7 @@ fn palette(ctx: &egui::Context, model: &mut AppModel) {
     }
 }
 
-/// The "Keyboard" table of docs/gui.md, from [`actions`]: one row per action with a key.
+/// The "Keyboard" table of docs/wiki/GUI-Keyboard.md, from [`actions`]: one row per action with a key.
 pub fn markdown_table() -> String {
     let mut s = String::from("| Area | Keys | Action |\n|---|---|---|\n");
     for area in Area::ALL {

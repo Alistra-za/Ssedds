@@ -14,6 +14,12 @@ Using it
 - [Host plugins](Host-Plugins.md)
 - [Plugins compared](Plugins-Compared.md)
 
+GUI
+
+- [Main window](GUI-Main-Window.md)
+- [GUI settings](GUI-Settings.md)
+- [Keyboard](GUI-Keyboard.md)
+
 Concepts
 
 - [Texture types](Texture-Types.md)

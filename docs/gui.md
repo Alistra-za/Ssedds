@@ -4,42 +4,7 @@
 
 ## Opening a folder
 
-Click **Open folder** on the start screen, or choose **Open > Open folder…** in the header. Pick a folder from the **Recent** list (on the start screen, or in the Open menu), or drag a folder onto the window; a dropped file opens the folder that holds it. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written to your textures. If the folder holds an `sdc.toml`, it is loaded; if that file cannot be parsed, or the engine rejects it (an unknown field or `allow` code in a `[files]` entry, an unknown sub-type, a value out of range), the folder is planned without it, a banner shows the error, and the GUI stays read-only (editing and **Export** are off, and the file is never written) until you fix the file and press **Reload** in the banner. When the rejected value came from an edit in the GUI, the undo history stays: that edit is the top **Undo** step, its name followed by "(sdc.toml rejected it: …)", and **Undo** takes it back and makes the file editable again (Note FC12). The banner says it in words only; a line that names a code (`CFG-INVALID: …`) is kept whole in the **Messages** tab (Note FB8).
-
-**The start screen.** With no folder open the window shows one large **Open folder** button in the middle, under the hint "Open a folder of source textures to begin." (after a cancelled open it reads "Opening cancelled"). Under the button is the **Recent** list; click a folder to open it. "Or drag a folder onto the window." is the last line. The Textures and Sets columns and the Advanced drawer are not drawn until a folder is open (the bottom strip is), and the column eyes in the header are hidden. The widths you dragged are kept and come back with the first folder. When a folder opens, the Textures and Sets columns and the centre fade in over a quarter of a second; they take clicks from the first frame.
-
-While a folder opens, the status bar shows a progress bar, "Analysing 1,234 / 5,000 files…". The total is the files Tessalith will plan (DDS inputs it does not re-encode and duplicate outputs are left out), and every one counts as it finishes, including files already analysed in an earlier open, so the bar fills on a re-open too. Packed outputs are assembled after the bar is full. Thumbnails appear when the whole plan lands, not one by one. Settings and bulk edit stay off until then; **Export** can be clicked and starts once the plan lands. **Cancel** next to the bar stops the open and goes back to the folder you had open before, with its selection and undo history (its Files tab starts fresh; Note FC12); if there was none, the window is empty and reads "Opening cancelled". A cancelled folder you had not opened before is left out of **Recent**. The bar and Cancel show only while a folder opens; a re-plan after an edit shows its count as plain text.
-
-The file and folder dialogs (Open folder, the export folder, MO2 instance, a folder to scan, nvcompress.exe, the shader folder, Save report) no longer freeze the window while they are open. Only one is open at a time: the other dialog buttons and Open folder in the palette are greyed out ("A file dialog is already open") until you answer or cancel. If you open another folder while the export folder or Save report dialog is still up, its answer is ignored; a folder picked in Open folder… always opens, as the latest choice. **Choose export folder…** in the **Export to ▾** menu (**More ▾** until a folder is chosen) is greyed out while an export runs ("An export is running: change the folder after it ends").
-
-**The header** is one row from about 1340 points of window width, and it is the same in the Textures and Meshes views. From the left: **Open** (a menu: **Open folder…**, a separator, then the recent folders, or a greyed "No recent folders"), **Undo**, **Redo**, **MO2…** and **Mode** (framed together), the **Preset** combo (its last entry, after a separator, is **Presets…**, which opens the preset creator; the preset entries are greyed out until a folder is open), the **Textures** / **Meshes** view tabs (the selected one filled), and the **Textures** / **Sets** eye toggles (an open eye shows the column, a struck-through eye hides it; hover says what a click does; Textures view with a folder open only). At the right end are **Export to ▾**, **Save** and **Export**. **Export to ▾** shows the export folder chosen for this project; a long path is cut in the middle so its tail stays visible, and hover gives the whole path. It is not drawn until a folder is chosen (a project never takes over the folder you picked for another mod): the same menu is then a plain **More ▾**, and **Review** lists "No export folder chosen" with a **Choose…** button. The folder dialog opens in the app-wide folder saved in `gui.toml`, if there is one. **Export** reads **Review n files** in the plain button colour while anything is undecided, blocked or waiting for a tick, and **Export n files**, filled with the accent colour, once Review would write without skipping anything; either way a click opens Review, or exports a clean project. Its menu holds **Choose export folder…**, **Open export folder** (greyed out, with the reason, when the folder cannot be opened), the two checkable items **Also export as Vanilla** and **Also export as Complex material** (see [Also export as Vanilla and CM](#also-export-as-vanilla-and-cm)) and, under cs with a folder open, **PGPatcher JSON editor…**. **Save** and **Export** are as tall as the row; while an export runs, the lower half of Export is a progress bar with done/total (hover it for the file being written; Cancel is in the Files tab). **Messages** is no longer a header button: it is a tab of the bottom panel whose label counts the entries you have not seen (hover: Ctrl+M). Below about 1340 points the **Export to**, **Save** and **Export** group wraps onto a second line instead of drawing controls over each other. The status line and banner under the header also show in the Meshes view.
-
-The **Mode** menu picks the target (`cs` or `vanilla`). It is saved in `sdc.toml` as `target`. Hover the menu or an entry for what each target means.
-
-**Dialog keys.** **Esc** is a dialog's Cancel (or Close), and so is a click outside it. The rename dialogs, **Copy settings** and **Fill from names** ignore a click outside, so a stray click cannot lose what you typed or chose. **Enter** takes the safe default and never saves, deletes or exports: Cancel in the close and open unsaved-changes dialogs (back to the app; **Save** and **Don't save** need a click), Cancel in the reload, changed-on-disk and Reset all dialogs, **Keep exporting** in the export-running dialog, OK in an error or a refusal, Apply in the rename dialog and Fill in Fill from names. In the "changed on disk" dialog Enter closes it without touching the file or your edits; it never overwrites. In the rename dialog Enter applies only while no widget has keyboard focus (typing in Find and pressing Enter still applies); with a row's tick or the Case list focused it does nothing. Copy settings, the Replace and set-choice questions, the discard question in the preset creator and Slot commands have no Enter default. Enter or Space on a focused red-outlined button (Don't save, Discard and reload, Overwrite with my changes, Reset, Delete, Stop the export) does nothing: those need a click.
-
-**Dialog style.** Every dialog is one frame: a title, the question, and a footer of buttons on the right. The footer reads left to right: plain buttons, then the destructive one, then the Enter default. The Enter default is drawn filled in the accent (teal) colour, so you can see what Enter will press; a destructive button (Don't save, Discard, Delete, Reset, Overwrite, Stop the export) has a red outline and is never the default. A dialog where Enter does nothing has no filled button. Each dialog is as wide as its cap (420 points, Slot commands 640, the rename dialog 860). A button row too long for that width wraps onto a second row of the same height; the dialog never grows past that. A long file name is cut in the middle in the button labels (**Replace {name}**), and the question above them gives the whole name. The buttons say what they do:
-
-| Dialog | Buttons |
-|---|---|
-| Unsaved changes (close the window, open another folder) | Save, **Don't save**, Cancel (Enter) |
-| Unsaved changes (Reload) | **Discard and reload**, Cancel (Enter) |
-| An export is running | **Stop the export and close** (or **Stop the export and open the folder**), **Keep exporting** (Enter) |
-| {file} changed on disk | **Reload from disk**, **Overwrite with my changes**, Cancel (Enter) |
-| Error, and "Can't do that" | OK (Enter) |
-| Reset all settings of {n} textures | **Reset**, Cancel (Enter) |
-| Replace? (a drop onto a filled slot) | **Replace {name}**, Cancel; no Enter default |
-| {name} is in {set} (a drop from another set) | **Move it here**, **Share (borrow its finished output)**, **Duplicate the source for this set** in the body; Cancel in the footer |
-| Discard changes? (preset creator) | Cancel, **Discard**; no Enter default |
-| Rename {id} (a set) | Cancel, OK; no Enter default (the name field's own Enter renames) |
-| Rename {n} inputs, Rename outputs of {n} sets | Cancel, **Apply** (Enter, while it is enabled) |
-| Fill from names | Cancel, **Fill** (Enter) |
-| Copy settings | Cancel, Apply; no Enter default |
-| Slot commands | Close; no Enter default |
-
-Esc with the rename dialog's Case list open closes the list first; a second Esc closes the dialog. Review's **Export** is a click only: Enter never exports (see [The bottom panel](#the-bottom-panel)).
-
-Cube files are listed like any other texture; their settings and preview are in [Cubemaps](#cubemaps).
+Moved to [Main window](wiki/GUI-Main-Window.md#opening-a-folder) in the wiki.
 
 ## The three columns
 
@@ -623,51 +588,7 @@ The **Messages** tab of the bottom panel (**Ctrl+M**; the tab's label counts the
 
 ## Keyboard
 
-Press **F1** (or **?**) for the list of shortcuts, grouped by where they work; the sheet and the palette appear at once, without the fade a mouse-opened dialog has, as does the path list when typing reopens it. Press **Ctrl+K** for the command palette: type part of an action's, a texture's or a set's name (the letters in order are enough; names that start with what you typed come first, then names that contain it). Up and Down move, Enter runs the action or selects the texture or set as a click does and scrolls its column to it, Esc closes. The palette offers the actions that make sense where you are (Open folder, Save, Export, Undo, Redo, Rename, the Textures | Meshes view, the set's 2D | 3D view, Live encode, the PGPatcher JSON editor and more) and lists at most 200 results.
-
-While a text field has the keyboard (the search box, a name, a number), the shortcuts leave it alone: only **Ctrl+K** opens the palette, **Ctrl+S** saves, and **Esc** leaves the field. **Ctrl+S**, or a click on **Save**, **Export** or Review's **Export**, first ends the edit, so a field that commits when you leave it keeps what you typed, and then saves or exports: one key or one click (Note FC8). A click on another texture or set in a column likewise commits the field before the selection changes, also for a quick tap. Esc in a text field that commits when you leave it (a name, a match path, the JSON name) cancels the edit. A key does nothing while its action is off (Ctrl+S with nothing to save outside a text field, Ctrl+Z with nothing to undo). No shortcut acts while a dialog, a menu or a box is open; a dialog has its own Enter and Esc. In the Textures grid the arrow keys follow the order on show (search and filters applied): Left and Right step one texture, Up and Down one row. Shift with an arrow selects the range from the active texture, as a Shift-click does.
-
-| Area | Keys | Action |
-|---|---|---|
-| Global | Ctrl+K | Command palette |
-| Global | F1 or ? | Keyboard shortcuts |
-| Global | Ctrl+M | Messages |
-| Global | Ctrl+S | Save |
-| Global | Ctrl+Z | Undo |
-| Global | Ctrl+Y or Ctrl+Shift+Z | Redo |
-| Textures grid | Ctrl+A | Select every visible texture (every set when a set is active) |
-| Textures grid | Left | Select the texture to the left |
-| Textures grid | Right | Select the texture to the right |
-| Textures grid | Up | Select the texture above |
-| Textures grid | Down | Select the texture below |
-| Textures grid | Shift+Left | Extend the selection to the left |
-| Textures grid | Shift+Right | Extend the selection to the right |
-| Textures grid | Shift+Up | Extend the selection up a row |
-| Textures grid | Shift+Down | Extend the selection down a row |
-| Textures grid | Enter or Space | Open the expanded preview of the active texture |
-| Preview | Esc | Close the preview |
-| Preview | [ | Previous texture |
-| Preview | ] | Next texture |
-| Preview | L | Magnifier lens on or off |
-| Preview | T | Tile the picture 3×3 on or off |
-| Preview | P | Pin this result |
-| Preview | 1 | Show RGBA |
-| Preview | 2 | Show R |
-| Preview | 3 | Show G |
-| Preview | 4 | Show B |
-| Preview | 5 | Show A |
-| Preview | 6 | Show the α-mask |
-| Preview | PageUp | Larger mip |
-| Preview | PageDown | Smaller mip |
-| Sets | F2 | Rename the outputs of the selected sets, or the inputs of the selected textures |
-| 3D preview | Home | Recentre the 3D view (as a double-click) |
-| 3D preview | V | Next 3D debug view (Lit, UV checker) |
-| 3D preview | Ctrl+Shift+C | Copy the 3D view as an image |
-| JSON editor | F8 | Next error in the PGPatcher JSON editor |
-| JSON editor | Shift+F8 | Previous error in the PGPatcher JSON editor |
-| Problems list | Enter or Space | Accept the focused Problems row's suggestion and go to the next row |
-| Dialogs | Enter | Press the dialog's safe default |
-| Dialogs | Esc | Cancel the dialog |
+Moved to [Keyboard and command palette](wiki/GUI-Keyboard.md#keyboard) in the wiki.
 
 ## Presets
 
@@ -686,35 +607,12 @@ While a text field has the keyboard (the search box, a name, a number), the shor
 
 ## Words
 
-One word for each idea, everywhere in the window (Note FC9). The code or the old name, where there is one, is on hover.
-
-- **Undecided.** A texture that waits for your answer (its sub-type, what its alpha means, its cube layout, or an acknowledgement). The Textures column counts them (*n undecided*), the pill is *Undecided*, a Problems row reads *Undecided: …*, and each row's button is *Decide…*. Export skips them.
-- **Not ready.** A set with a problem in the set or in one of its textures. It is the Sets column's *Not ready* pill, the opposite of *Ready*.
-- **Blocker.** A problem that stops the export (a red dot). Fix it or remove the texture and export again.
-- **Warning.** A problem that does not stop the export (an amber dot). Export writes the file anyway; Review asks you to tick the ones that need it.
-- **Check.** A hint from an artist check (Advanced → Checks): a map that will probably look wrong in game. It never blocks and never changes "ready" (a weak grey dot).
-- **Pin.** *Pin slot (sdc)* keeps a set slot's file as it is in Tessalith (saved in `sdc-project.toml`, never in the PGPatcher JSON). *Pinned* in the preview is the encode you compare against.
-- **PGPatcher lock.** *Keep original texture (PGPatcher lock)*: PGPatcher leaves the mesh's own texture in that slot. The card shows a grey padlock captioned *kept by PGPatcher*.
-- **Field lock.** A field that the target or the sub-type fixes, so it is greyed with the reason (for example the format of a type that allows only one). Not the PGPatcher lock and not a pin.
-- **Half size.** Review's answer for a texture whose full size adds almost nothing: the texture is written without its top mip, half the width and height (`drop_top_mip`). The check that asks is *Low detail*.
-- **Halve if larger than 512.** The Resize option that halves a texture only when its larger side is above 512. A setting for a sub-type, not an answer to a question.
-- **Set.** The textures that belong to one material: they share a name stem (and a PGPatcher JSON entry under Community Shaders).
-- **Helper.** A source file that is not a texture of its own: it fills a channel of another output, or blends into the normal. It is never written as a DDS.
-- **Sub-type labels.** A sub-type reads as its id with spaces (*pbr albedo*); *Skin RFAOS* is the one name spelled out. The id (`skin_rfaos`) is on hover.
-- **One accent.** The window has one non-status colour (teal), for selection, the RNM outline, a slot's flash and the path lock. Red, amber and green are for status only.
+Moved to [Main window](wiki/GUI-Main-Window.md#words) in the wiki.
 
 ## Where settings live
 
-GUI-only settings (recent folders, the default export folder, preview limit, Live encode, worker threads, memory budget, BC1 decoder, NVTT path) are in `%APPDATA%\sdc\gui.toml`; they are never part of `sdc.toml`. The BC1 decoder model is read once when the GUI starts: after changing it the GUI shows "restart Tessalith to apply". The user config of the command line (`%APPDATA%\sdc\config.toml`) also applies to the GUI. User presets in `%APPDATA%\sdc\presets\*.toml` are loaded by the GUI and the command line alike; a file that fails to load is skipped. The preset inspector in the Advanced drawer lists the user presets that loaded, with their files. The header's **Preset** menu picks the project's preset (written to `sdc.toml` as `preset`), and **Presets…** makes and edits user presets (see Presets).
-
-**What Tessalith remembers.** The window (its size, its position and whether it is maximised), the width of each column and panel you dragged, the Textures or Meshes view, the Textures filters, sort and tile size, the Sets filter pills and shader (not the search text), the preview channel and layout, and the 3D View controls (background, sun and its turn, point light, radius, Accurate (deferred)) come back at the next start. They are saved in `gui.toml` a couple of seconds after you change them, and when you close the window. The zoom, the selection and the open folder are not remembered. If the saved window would be off every screen (a monitor was unplugged), it opens centred on the main screen instead; if only its title bar would be off the screen, it moves down so you can still drag it. Starting and closing without changing anything does not rewrite `gui.toml`. A value in `gui.toml` that makes no sense is ignored on its own; the rest of the file still applies. If you edit `gui.toml` while Tessalith runs, your edit is kept: the next save reads the file again and keeps every value Tessalith has not changed since its last save (a value both changed takes Tessalith's). If `gui.toml` cannot be written, a warning says why, once per distinct error. Recent folders merge folder by folder: a folder you removed by hand stays removed, one you added stays, and folders Tessalith added are kept. A `gui.toml` that no longer parses is kept as `gui.toml.bad`, with a warning, before the new one is written.
-
-**Analyses are reused.** Tessalith keeps what it learned about each image (its size, alpha, statistics and thumbnail) in %LOCALAPPDATA%\sdc\analysis-cache. A folder you opened before reuses the analyses of unchanged files instead of decoding them again. The GUI prunes the folder to 200 MB when it starts, and it is safe to delete. Only the GUI uses it.
-
-Tessalith ships no fonts. It loads the Windows system fonts (Segoe UI, Segoe UI Symbol, Segoe UI Emoji, Consolas) at start-up and refuses to start, with a message, if they are missing.
+Moved to [GUI settings](wiki/GUI-Settings.md#where-settings-live) in the wiki.
 
 ## When something goes wrong
 
-- A background job that crashes shows an "internal error in ..." dialog; the window keeps running.
-- A failed plan or export shows its error in a dialog and in the status line.
-- If Tessalith itself crashes, the error goes to `%LOCALAPPDATA%\sdc\logs\crash-<time>.log`, and unsaved edits are written beside their file as `sdc.toml.recovery` / `sdc-project.toml.recovery`. The originals are not touched. When you next open the folder, a `.recovery` file that is newer than its original is loaded into the document by itself. It counts as an unsaved change, it is one Undo step called "Restore crash edits", and a toast says "Restored unsaved edits from the crash" with an Undo button. The toast's Undo takes the edits back and deletes the `.recovery` file, because you turned the edits down. Ctrl+Z takes them back too, but keeps the file, so the next open restores them again. Saving the document (Save, or Overwrite when it changed on disk) deletes the file. The saves Tessalith makes on its own, such as recording an export folder or a JSON hash, keep it. An empty file, or one with the same text as the document, is deleted without a word, and an older one than its original is ignored. There is no banner, except when `sdc.toml` or `sdc-project.toml` does not parse: that document is read-only and cannot take the edits, so its `.recovery` file stays and the banner says where the edits are; they come back when you fix the file and reload. A second crash before that keeps the first `.recovery` file as `.recovery.<time>`. If the graphics driver drops the GPU device (a driver reset, for example), the log says so on a "wgpu device lost" line, and Tessalith shows a message ("Tessalith restarts and brings your unsaved edits back", button Restart), saves the window layout, and starts itself again on the same folder, where the edits are restored as described above (Note FC4; it is not a crash). If the restarted Tessalith loses the device again within 60 s, or cannot restart, it shows a message saying the edits were kept and come back the next time you open the folder, and closes.
+Moved to [GUI settings](wiki/GUI-Settings.md#when-something-goes-wrong) in the wiki.

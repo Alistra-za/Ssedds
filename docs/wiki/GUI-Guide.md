@@ -1,8 +1,6 @@
 # GUI guide
 
-Tessalith (`tessalith.exe`) runs the same engine as `sdc convert`. A folder you decide and export in the GUI converts to the same files from the command line, because every decision is saved in the folder's `sdc.toml`.
-
-The window has two views, picked in the header: the Textures view (converter and set editor) and the Meshes view (mod scanning and NIF editing, covered in [Mod scanning](Mod-Scanning.md) and [NIF editing](NIF-Editing.md)).
+A map of the GUI (`tessalith.exe`): the main window with its areas numbered, each linked to the page that explains it. New to the GUI? Start with [Main window](GUI-Main-Window.md).
 
 ## Main window
 
@@ -10,12 +8,12 @@ The window has two views, picked in the header: the Textures view (converter and
 
 The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](#the-2d-preview)).
 
-1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](#header).
-2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project.
-3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns.
-4. **Export to ▾** (header, right; **More ▾** until a folder is chosen). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export](#export).
-5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same.
-6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](#export).
+1. **Open, Undo, Redo** (header, far left). Pick a folder or a recent one, and step back and forward through your decisions. See [Header](GUI-Main-Window.md#header).
+2. **Mode, MO2…, Preset** (header). Mode is the target (`cs` or `vanilla`), **MO2…** is the scan source, and **Preset** is the preset the folder converts with. The three are saved with the project. See [Header](GUI-Main-Window.md#header).
+3. **Textures / Meshes tabs and the column eyes** (header, middle). Switch between the converter and the [mod scanning](Mod-Scanning.md) view, and show or hide the Textures and Sets columns. See [Header](GUI-Main-Window.md#header).
+4. **Export to ▾** (header, right; **More ▾** until a folder is chosen). The folder the converted textures go to for this project. Its menu opens it, changes it and switches on the Vanilla and CM extras. See [Export to](GUI-Main-Window.md#export-to).
+5. **Save** (header, right). Writes `sdc.toml` and `sdc-project.toml`. **Ctrl+S** does the same. See [Keyboard](GUI-Keyboard.md#keyboard).
+6. **Export** (header, right edge). Converts the folder. If something is blocked or undecided, Review opens in the bottom panel first. See [Export](GUI-Main-Window.md#export) and [Export](#export).
 7. **Texture filters** (top of the Textures column). Pills with counts (*Undecided*, *Warnings*, *Failed*, *Not in a set*), the **Filter ▾** popup, the tile size buttons and the search box. See [Textures (left)](#textures-left).
 8. **Texture tiles** (Textures column). One tile per source file with its thumbnail, name and badges. An amber border means it still needs an answer; click a tile to select it, double-click for the preview. See [Deciding](#deciding).
 9. **Sets filters** (top of the Sets column). Pills for *Not ready*, *Ready* and *No JSON*, a **Filter ▾** and a search box for sets.
@@ -24,32 +22,19 @@ The picture shows the Textures view after a folder is open, with a small made-up
 12. **Advanced** (right edge). The drawer with tool paths, encoder and interface settings. Click the strip to open it. See [Advanced drawer](#advanced-drawer).
 13. **Bottom panel tabs** (full width, bottom). **Problems** lists every warning with its fix as the row's own button (for example **Remove from set**, **Regenerate…**, **Rebuild Z**, **Open folder**, **Open report**, **Set layout ▾**, **Fix path**, **Undo this change**, and for what used to be done by hand **Open in editor** and **Reload** for an unreadable `sdc-project.toml`, **Clear read-only flag**, **Reset also.json**, **Tag as grass**, **Straight alpha**, **Remove match** and **Remove aliases from {id}**; buttons act only on their own click, never on Enter), in a sentence that says what to do (hover it for the engine's message and its code, such as `LOSS-ALPHA-DATA`; the codes are explained in [Troubleshooting](Troubleshooting.md)), **Messages** holds the notes of this session, **Files** shows an export's progress, and **Review** joins them while an export is being reviewed. Review opens at 40 % of the window's height (drag its top edge to change it; Review remembers its own height), and under 1200 points of window width its sections stack in one scrolling column. Click a tab to open or collapse the panel. A texture with a suggested type shows it as one button (**Set type: diffuse ✓**), with **▾** for the type picker (search box, suggestion on top); **Accept all suggestions (n)** at the top takes every suggestion, and **Enter** or **Space** on a focused row takes that row's. **Save** writes them.
 
-The line under the header is the status line: the file and set counts, a VRAM estimate for the selection and for the folder, and the progress of anything running.
+The line under the header is the [status line](GUI-Main-Window.md#status-line-and-banner).
+
+## Pages
+
+- [Main window](GUI-Main-Window.md): opening a folder, the header, the columns, dialogs and the words the window uses.
+- [GUI settings and recovery](GUI-Settings.md): where settings live, what is remembered, crashes.
+- [Keyboard and command palette](GUI-Keyboard.md): every shortcut.
+
+The sections below have no page of their own yet.
 
 ## Header
 
-| Control | What it does |
-|---|---|
-| **Open** | A menu: **Open folder…** (pick a source folder), then your recent folders (the last ten), or a greyed "No recent folders". You can also drag a folder onto the window; a dropped file opens the folder that holds it. |
-| **Undo** / **Redo** | Greyed out with nothing to undo; hover for the step ("Undo: Format"). |
-| **Mode** | The target: `cs` or `vanilla`. Saved in `sdc.toml` as `target`. Framed together with **MO2…**. |
-| **MO2…** | The scan source: the MO2 instance (**Choose…**), its profiles, **Scan a folder…** and **Scan** / **Cancel**. Hover for the instance and profile. |
-| **Preset** | The preset the folder converts with: the Mode's default, or a built-in or user preset of this Mode. Saved in `sdc.toml` as `preset`. Its last entry, **Presets…**, opens the preset creator (see [Presets](#presets)). |
-| **Textures** / **Meshes** (tabs) | Switch views; the selected one is filled. |
-| **Textures**, **Sets** (eye toggles) | Show or hide each column: an open eye shows it, a struck-through eye hides it. Right after the view tabs, Textures view with a folder open only. |
-| **Export to ▾** | Shows where converted textures go, for this project: it is saved in the project's `sdc-project.toml`, so each project keeps its own. It is not drawn until you choose a folder for the project (the folder you picked for another mod is not inherited); the menu is then a plain **More ▾**, and Review lists "No export folder chosen" with a **Choose…** button. A long path is cut in the middle; hover for all of it. The menu holds **Choose export folder…**, **Open export folder** and, in cs mode with a folder open, **PGPatcher JSON editor…** (the TruePBR JSON editor, a centre tab; the JSON's file name is its top field). |
-| **Save** (Ctrl+S) | Write `sdc.toml` and `sdc-project.toml`. Left of Export. |
-| **Export** | Convert the folder. The big button at the right edge. It reads **Review n files** while anything is undecided or blocked, **Export n files** (accent) once Review would write without skipping, and plain **Export** with no folder open. While an export runs, its lower half shows a progress bar with done/total (hover for the current file; **Cancel** is in the Files tab). |
-
-The window title shows the folder, with a dot when there are unsaved edits. Under the header is a status line, and a banner when something needs attention (for example an `sdc.toml` that failed to load, with a **Reload** button). The **MO2…** header button opens the scan source popup: the MO2 instance with **Choose…**, its profiles, **Scan a folder…** and **Scan** / **Cancel**; the button's hover text names the instance and profile. On the Textures view, a scan row under the header shows the scan's progress, status and errors when there are any.
-
-The header is one row from about 1340 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header. **Messages** is not a header button: it is the first tab of the bottom panel (its label counts the notices you have not seen; **Ctrl+M** opens it, and again collapses the panel).
-
-**Start screen.** With no folder open the window shows one large **Open folder** button under "Open a folder of source textures to begin.", the **Recent** folders as links, and "Or drag a folder onto the window." The columns appear when a folder is open.
-
-When you open a folder, the GUI reads it recursively, analyses every image and plans the conversion. Nothing is written to your textures. If `sdc.toml` cannot be parsed or the engine rejects it (an unknown field, an unknown `allow` code, an unknown sub-type; most out-of-range values are reported per file as `CFG-INVALID` instead), the folder is planned without it, the banner shows the error (in words; a line that names a code is kept whole in the Messages tab), and the GUI stays read-only until you fix the file and press **Reload**. When the rejected value came from an edit you made in the GUI, **Undo** still works: that edit is the top step, named with the error, and undoing it makes the file editable again.
-
-While a folder opens, the status bar shows "Analysing 1,234 / 5,000 files…" with a bar and **Cancel**, which goes back to the folder you had before, with its selection and undo history. Thumbnails appear when the whole plan lands. File and folder dialogs do not freeze the window; only one is open at a time. **Ctrl+K** opens a command palette and **F1** the shortcut sheet, both at once with no fade (see [Keyboard shortcuts](#keyboard-shortcuts)). Toasts report routine results and fade in and out; anything that needs a decision stays a dialog. **Advanced > Interface > Reduce motion** stops movement and shortens the fades. The window size and position, column widths, view, Textures and Sets filters (not the search text) and 3D view settings come back at the next start.
+Moved to [Main window](GUI-Main-Window.md#header).
 
 ## The three columns
 
@@ -466,37 +451,12 @@ Six checks look at the numbers Tessalith measures while it plans and warn about 
 
 ## Where settings live
 
-| File | Contents |
-|---|---|
-| `<folder>\sdc.toml` | Target and per-file decisions. Shared with the CLI. |
-| `<folder>\sdc-project.toml` | Sets, shaders, slot pins, output names, TruePBR settings, JSON name, delete sections, the export folder, and the hashes of the JSON files and borrowed-slot copies Tessalith wrote, and the records of generated files (`[generated]`). GUI only. |
-| `%APPDATA%\sdc\gui.toml` | Window and app settings: the default export folder (a project's own is in its `sdc-project.toml`), recent folders (10), preview limit, 16384 previews, Live encode, BC1 decoder, worker threads, memory budget, column visibility and widths, window size and position, Textures filters, sort and tile size, 2D/3D choice, 3D View controls, Advanced drawer state, NVTT path, the scan source (`[meshes]`) and the 3D preview's shader folder and size (`[render3d]`). Never part of `sdc.toml`. |
-| `%APPDATA%\sdc\config.toml` | The user config, also read by the CLI. |
-| `%APPDATA%\sdc\presets\*.toml` | User presets, also read by the CLI. A file that fails to load is skipped. |
-| `%LOCALAPPDATA%\sdc\scan.db` | The mod scan database. |
+Moved to [GUI settings](GUI-Settings.md#where-settings-live).
 
 ## When something goes wrong
 
-- A background job that crashes shows an "internal error in …" dialog, and the window keeps running.
-- A failed plan or export shows its error in a dialog and in the status line.
-- Tessalith needs the Windows system font Segoe UI and refuses to start with a message if it is missing. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when not.
-
-See also [Troubleshooting](Troubleshooting.md).
+Moved to [GUI settings](GUI-Settings.md#when-something-goes-wrong).
 
 ## Keyboard shortcuts
 
-**F1** (or **?**) shows the full list, grouped by where each key works; **Ctrl+K** opens the command palette. The main keys:
-
-| Keys | Action |
-|---|---|
-| Ctrl+S | Save. |
-| Ctrl+Z / Ctrl+Y | Undo / redo (Textures and Meshes views). |
-| Ctrl+M | Messages. |
-| Arrow keys, Shift+arrows, Ctrl+A | Move through the Textures grid, extend the selection, select all. |
-| Enter / Space | Expand the preview of the active texture. |
-| F2 | Rename. |
-| In the preview: [ ], 1-6, PageUp/PageDown, L, T, P | Previous/next texture, channel, mip, lens, tiling, pin. |
-| In 3D: Home, V, Ctrl+Shift+C | Recentre, next debug view, copy image. |
-| F8 / Shift+F8 | Next / previous error in the JSON editor. |
-
-Shortcuts leave a text field alone, except Ctrl+K (the palette) and Ctrl+S, which keeps what you typed and saves; Esc leaves the field. Clicking Save or Export while typing also keeps what you typed, in one click.
+Moved to [Keyboard and command palette](GUI-Keyboard.md#keyboard).

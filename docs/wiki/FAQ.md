@@ -100,7 +100,7 @@ Delete everything it wrote together: the `<project> PBR`, `<project> Vanilla` an
 
 ### Where are my settings stored?
 
-See the table in [GUI guide](GUI-Guide.md#where-settings-live).
+See the table in [GUI settings](GUI-Settings.md#where-settings-live).
 
 ### What licence is it under?
 
