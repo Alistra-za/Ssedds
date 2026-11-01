@@ -13,37 +13,20 @@
 //!   + an exhaustive +-3 search around the best pair.
 //! - `v5`: v4, but a block falls back to v0 when it would flip more texels across the alpha-test value 128.
 //!
-//! usage: cargo run --release -p sdc-bench --example bc4_family -- --out <dir> [--oracle] [--sets a,b] [--rounds 1,2,3] [--radius 5] [--serial]
+//! usage: cargo run --release -p sdc-bench --example bc4_family -- --out <dir> [--oracle] [--sets a,b] [--rounds 1,2,3] [--radius 5] [--serial] [--time]
+//! `--radius 10` also runs `max` (`search_max`: v4 + the near-exhaustive pair search, guard last on BC3).
+//! `--time` prints per-image median/worst ms for shipped (v0, Rust), v4 and max; add `--serial` for uncontended times.
 // Research probe: index loops mirror the C++ it ports, and the per-encoder tuples stay local.
 #![allow(clippy::needless_range_loop, clippy::type_complexity)]
 use rayon::prelude::*;
 use sdc_bench::bc4ref::{
-    clampi, flips, inner6, local, minmax, pal, refit_both, trimmed6, v0, Best,
+    flips, inner6, local, minmax, oracle, pal, refit_both, search_max, trimmed6, v0, Best,
 };
 use sdc_bench::corpus::{bench_root, load_png_rgba8, set_files, stem};
 use sdc_bench::ddsraw::payload;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
-
-const ORACLE_PAD: i32 = 16;
-
-/// Exhaustive pairs over [min-16, max+16] (both modes), seeded with `b`.
-fn oracle(v: &[u8; 16], b: &mut Best) {
-    if b.err == 0 {
-        return;
-    }
-    let (mn, mx) = minmax(v);
-    let (lo, hi) = (
-        clampi(mn as i32 - ORACLE_PAD),
-        clampi(mx as i32 + ORACLE_PAD),
-    );
-    for e0 in lo..=hi {
-        for e1 in lo..=hi {
-            b.try_pair(v, e0, e1);
-        }
-    }
-}
 
 fn variant(k: usize, v: &[u8; 16], rad: i32) -> Best {
     let base = v0(v, rad);
@@ -195,6 +178,15 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
             .map(|cv| cv.iter().map(|v| variant(k, v, rad).bytes()).collect())
             .collect();
         enc.push((name.to_string(), out, t.elapsed().as_secs_f64()));
+    }
+    // `max`: v4 + the near-exhaustive pass, guard on BC3 alpha (Rust reference, timed)
+    if rad == 10 {
+        let t = Instant::now();
+        let out: Vec<Vec<[u8; 8]>> = vals
+            .iter()
+            .map(|cv| cv.iter().map(|v| search_max(v, job.fmt == "bc3")).collect())
+            .collect();
+        enc.push(("max".into(), out, t.elapsed().as_secs_f64()));
     }
     // the patched C++ with the shim's flags (guard on BC3 alpha), timed; must equal v4 (v5 for BC3)
     let flags = encoders_sys::BC4_USE_ALL_MODES
@@ -431,7 +423,7 @@ fn run(job: &Job, oracle_on: bool, rad: i32) -> anyhow::Result<ImgOut> {
         blocks: (nb * chans.len()) as u64,
         ms: enc
             .iter()
-            .filter(|e| e.0 == "ffi" || e.0 == "v4" || e.0 == "cxx")
+            .filter(|e| ["ffi", "v0", "v4", "max", "cxx"].contains(&e.0.as_str()))
             .map(|e| (e.0.clone(), e.2 * 1e3))
             .collect(),
     })
@@ -552,7 +544,11 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(out.join("per_image.csv"), r)?;
     std::fs::write(out.join("classes.csv"), c)?;
     std::fs::write(out.join("attrib.csv"), a)?;
-    for name in ["ffi", "v4", "cxx"] {
+    let time = args.iter().any(|a| a == "--time");
+    for name in ["ffi", "v0", "v4", "max", "cxx"] {
+        if !time && (name == "v0" || name == "max") {
+            continue;
+        }
         let mut t: Vec<f64> = res
             .iter()
             .flat_map(|x| x.ms.iter().filter(|m| m.0 == name).map(|m| m.1))

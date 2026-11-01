@@ -156,3 +156,36 @@ C++ time per image (Task 2: the vendored rgbcx with the search patch, `cxx` in t
 | 4 | 153 / 2008 | 380 / 3905 | 2.48× |
 | 5 | 223 / 2501 | 542 / 5455 | 2.43× |
 | 10 | 788 / 7557 | 1704 / 12207 | 2.16× |
+
+
+## max: near-exhaustive
+
+`search_max(v, guard128)` (crates/bench/src/bc4ref.rs) is the radius-10 `search` without the guard, then the exhaustive pair search of v3 over [min-16, max+16] in both modes (strict `<`, so ties keep the earlier block), then the guard last: on BC3 alpha, if the result flips more texels at 128 than `shipped(v, 10)`, it returns `search(v, 10, true)`. Never worse than plain radius 10 by construction. Run: `bc4_family --radius 10 --rounds 1,2,3 --time` (the engine maps `bc45_search_radius` in `crates/engine/src/encode.rs`: `radius()` at line 55, called at lines 119, 123 and 126; that is where an `exhaustive` flag would be set).
+
+Time per image. All times are the Rust reference; the earlier C++ port ran about 1.2-1.4x slower than the Rust reference, so expect roughly 1.2-1.4x these `max` times in C++. Single thread, release build, ms, median / worst:
+
+| set | shipped r10 | v4 r10 | max |
+|---|---|---|---|
+| rounds 1-2, 29 images, `--serial` | 918 / 6865 | 1743 / 11600 | 4233 / 41895 |
+| rounds 1-3, 600 images, 14 threads (contended, so slower per image) | 1330 / 10028 | 2603 / 16519 | 9154 / 100370 |
+
+`max` costs about 2.4x v4 and 4.6x shipped at the median on the uncontended run, and the worst image takes 42 s (Rust) on one thread. The serial machine run was about 1.3x slower than the 29-image table above (v4 r10 1743 against 1318 ms), so compare ratios, not absolute ms, across tables.
+
+Quality, rounds 1-3 at radius 10 (600 images; mean per-image dB; the BC3 columns are alpha PSNR):
+
+| set | fmt | max over v4 r10 | max over v5 (guarded) | max over shipped (FFI) |
+|---|---|---|---|---|
+| cutout_real | BC3 alpha | +0.034 | +0.211 | +2.996 |
+| alpha_real | BC3 alpha | +0.024 | +0.061 | +0.683 |
+| packed_real | BC3 alpha | +0.021 | +0.033 | +0.076 |
+| stray_real | BC3 alpha | 0.000 | 0.000 | 0.000 |
+| mask_real | BC4 | +0.033 | +0.033 | +0.110 |
+| normal_real | BC5 | +0.020 | +0.020 | +0.062 |
+
+BC3 as a whole: +0.020 dB over v4 r10, +0.076 over the guarded v5, +0.939 over shipped. "v4 r10" is the unguarded search and "v5" the guarded one; the shipped BC3 path is guarded, so v5 is the fair BC3 baseline.
+
+Alpha-test flips at 128 (BC3, percent of texels that cross 128, mean per image): cutout_real 0.0428 shipped, 0.0213 guarded v5, 0.0196 max; alpha_real 0.177, 0.166, 0.162; packed_real 0.454, 0.452, 0.449; stray_real 0 throughout. `max` flips no more than shipped on any block (guard last).
+
+Never-worse check (`search_max_never_worse_than_v4` in crates/bench/tests/bc4ref.rs, 2000 synthetic blocks at radius 10): SSE(max, no guard) <= SSE(search r10, no guard) on all 2000, 103 strictly better; SSE(max, guard) <= SSE(search r10, guard) and flips(max, guard) <= flips(shipped r10) on all 2000; on 28 the exhaustive pass raised flips and the guard fell back to guarded v4.
+
+Reading: the extra gain over the shipped v4 search is 0.02-0.03 dB on BC4/BC5/BC3 masks and 0.2 dB at most on the guarded cutout set, for 2.4x the v4 time. Steps 2-6 (C++, shim, engine flag) wait for the owner.

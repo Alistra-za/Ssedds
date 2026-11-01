@@ -300,3 +300,41 @@ pub fn search(v: &[u8; 16], radius: u32, guard128: bool) -> [u8; 8] {
     }
     b.bytes()
 }
+
+const ORACLE_PAD: i32 = 16;
+
+/// Exhaustive pairs over [min-16, max+16] (both modes), seeded with `b`; strict `<` keeps the earlier block on ties.
+pub fn oracle(v: &[u8; 16], b: &mut Best) {
+    if b.err == 0 {
+        return;
+    }
+    let (mn, mx) = minmax(v);
+    let (lo, hi) = (
+        clampi(mn as i32 - ORACLE_PAD),
+        clampi(mx as i32 + ORACLE_PAD),
+    );
+    for e0 in lo..=hi {
+        for e1 in lo..=hi {
+            b.try_pair(v, e0, e1);
+        }
+    }
+}
+
+/// `max`: [`search`] at radius 10 without the guard, then the near-exhaustive pair search, then the guard last:
+/// when the result flips more texels at 128 than the shipped block, return the guarded radius-10 search instead.
+pub fn search_max(v: &[u8; 16], guard128: bool) -> [u8; 8] {
+    let base = v0(v, 10);
+    let mut b = from_bytes(&search(v, 10, false), v);
+    oracle(v, &mut b);
+    if guard128 && flips(v, &b) > flips(v, &base) {
+        return search(v, 10, true);
+    }
+    b.bytes()
+}
+
+/// Rebuild a [`Best`] (error and selectors) from encoded bytes by scoring that pair.
+fn from_bytes(bytes: &[u8; 8], v: &[u8; 16]) -> Best {
+    let mut b = Best::new();
+    b.try_pair(v, bytes[0], bytes[1]);
+    b
+}

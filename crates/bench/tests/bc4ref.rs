@@ -3,7 +3,7 @@
 use encoders_sys::{
     bc3_encode_block, bc4_encode_block, bc5_encode_block, gather_blocks, RGBCX_MAX_LEVEL,
 };
-use sdc_bench::bc4ref::{search, shipped};
+use sdc_bench::bc4ref::{search, search_max, shipped};
 
 struct Rng(u64);
 impl Rng {
@@ -285,4 +285,21 @@ fn ffi_equals_reference_on_corpus() {
         (0, 0),
         "{bad} of {checked}, bc5 {bc5_bad} of {bc5_checked} mismatched"
     );
+}
+
+/// `max` never loses to plain radius 10, and the guard (run last) survives the exhaustive pass.
+#[test]
+fn search_max_never_worse_than_v4() {
+    let (mut n, mut better, mut guarded) = (0, 0, 0);
+    for v in blocks(2_000) {
+        n += 1;
+        let (m, p) = (search_max(&v, false), search(&v, 10, false));
+        assert!(sse(&m, &v) <= sse(&p, &v), "{v:?}");
+        better += (sse(&m, &v) < sse(&p, &v)) as u32;
+        let (g, pg) = (search_max(&v, true), search(&v, 10, true));
+        assert!(sse(&g, &v) <= sse(&pg, &v), "{v:?} guard");
+        assert!(flips(&g, &v) <= flips(&shipped(&v, 10), &v), "{v:?} guard");
+        guarded += (g == pg && g != m) as u32;
+    }
+    eprintln!("search_max: {n} blocks, {better} strictly better than v4, {guarded} fell back to the guarded v4");
 }
