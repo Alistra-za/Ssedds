@@ -1,4 +1,4 @@
-//! BC6H peak-preserving mode study (Note F?): veryslow against `Bc6hLevel::VeryslowPeak` over the 18 real HDR
+//! BC6H peak-preserving mode study (Note FE): veryslow against `Bc6hLevel::VeryslowPeak` over the 18 real HDR
 //! images (images2 + images3 `hdr_real`) and the 4 `hdr_grad` images. Reference = the `.f16` source as float.
 use crate::codec::{decode_bc6h_image, encode_bc6h_image, half_to_rgb_f32};
 use crate::corpus::{load_f16, set_files, stem};

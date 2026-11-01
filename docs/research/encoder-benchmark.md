@@ -282,7 +282,7 @@ Round 3, n = 18, against ISPC `bc6h_veryslow`:
 - ISPC (and texconv CPU) can clip a small, extremely bright highlight such as a visible sun. Round 3 showed this is specific to that kind of content, not general. Round 2's "NVTT has the best RMSLE" did not hold at n = 18.
 - NVTT keeps highlights but is clearly weaker in darks and wide-range content.
 
-### Peak-preserving ISPC mode (2026-10-31, Note F?)
+### Peak-preserving ISPC mode (2026-10-31, Note FE)
 
 **Why ISPC loses the sun.** ISPC TC measures error on the half-float bit patterns, which is a log-like scale (`kernel.ispc` `bc6h_setup`). The sun's texels come from an RGBE source, where blue is stored as exactly 0.0, and on that scale 0.0 is far from every other value. So blue dominates the PCA axis, the index choice and the least-squares endpoints. venice_sunset's 6464 peak decodes as 1464, at every effort level.
 

@@ -3647,27 +3647,28 @@ GD2 (footer) and GD18 (Diff view), held until FC5, are cherry-picked onto main e
 - **GF8 A cancel during the Also zip and report phase writes no NIF edits (fix round 1, review finding 1).** `also_zipped` dropped the re-armed cancel token unchecked, so `after_export` still made the queued NIF export due and the glue wrote it, an answered Overwrite included. It now checks the token and abandons the queued export when it was cancelled, as `export_ended` does for a cancel during the conversion. Test: `model::also::tests::a_cancel_while_zipping_makes_no_nif_export_due` (RED before). app.rs writes NIF edits only on `take_nif_export_due`, so the flag being false is what keeps the file on disk unchanged; the test is at model level because the zip phase cannot be timed from an app harness.
 - **GF9 A cancelled run drops its Review answers (fix round 1, review finding 2; GD29).** Review's Export takes Review away without `close_review`, so a cancel left the Overwrite answer in the NIF model, and the next Review could export over the foreign file with no new answer (the hash check only catches changed bytes). New `AppModel::abandon_nif_export`: when a cancel abandons a queued NIF export (`export_ended` during the conversion, `also_zipped` during the zip phase, GF8), it also sets `nif_clear_answers_request`, so app.rs calls `clear_nif_answers`. Tests: `nif_edit::a_cancelled_export_drops_the_overwrite_answer` (app level: answer Overwrite, Export, cancel, reopen Review; the row asks again, and an Export without a new answer leaves the foreign file as it was; RED before) and the clear request in GF8's test.
 
-## Note F? — BC6H peak-preserving mode (agent, 2026-10-31)
+## Note FE — BC6H peak-preserving mode (agent, 2026-10-31)
 
 Brief: keep small, very bright highlights in BC6H. ISPC TC veryslow decodes venice_sunset's peak at 0.219 of its source luminance. Branch `feat/bc6h-peak`.
-- **F?1 Cause.** ISPC TC's BC6H encoder works on half-float bit patterns as UF16 codes (`kernel.ispc:3142`, `bc6h_setup`, upstream line numbering), with equal weight per channel.
+- **FE1 Cause.** ISPC TC's BC6H encoder works on half-float bit patterns as UF16 codes (`kernel.ispc:3142`, `bc6h_setup`, upstream line numbering), with equal weight per channel.
   - The sun's texels have blue exactly 0.0, as RGBE sources store a channel below about 1/256 of the texel's largest. On the bit scale, 0.0 is about 14,700 codes from 0.12 to 0.69, while red from 12 to 6464 spans only 9,240.
   - So the PCA axis (`block_pca_axis` / `block_segment_core`) tilts towards blue, and `block_quant` sends every blue-0 texel to the top index. `opt_endpoints` then fits the top endpoint to their mean: 6464 decodes as 1464.
   - It is not search depth (veryfast through veryslow all lose it), not endpoint precision (10-bit mode 11 can reach 6464) and not the `qbounds` clamp (span 0xFFFF for the chosen modes).
   - The decoder, the metric and the input are not at fault. Evidence: `.superpowers/bc6h-peak-report.md` (local), probe `crates/bench/examples/bc6h_peak_probe.rs`.
-- **F?2 Switch: a field value, not a new field.** The mode is on when a `bc6h_enc_settings` has both `slow_mode` and `fast_mode` set. No upstream profile does that, and `fast_mode` is read only when `slow_mode` is off. So the settings struct, `ispc_texcomp.h/.cpp` and the generated `kernel_ispc.h` do not change. The shim's `g_bc6[5]` is veryslow plus `fast_mode`, as `Bc6hLevel::VeryslowPeak = 5`; the array and the enum stay in step.
-- **F?3 Rule (ISPC TC patch 0001, `vendor/ispctc/patches/0001-bc6h-peak-mode.patch`).**
+- **FE2 Switch: a field value, not a new field.** The mode is on when a `bc6h_enc_settings` has both `slow_mode` and `fast_mode` set. No upstream profile does that, and `fast_mode` is read only when `slow_mode` is off. So the settings struct, `ispc_texcomp.h/.cpp` and the generated `kernel_ispc.h` do not change. The shim's `g_bc6[5]` is veryslow plus `fast_mode`, as `Bc6hLevel::VeryslowPeak = 5`; the array and the enum stay in step.
+- **FE3 Rule (ISPC TC patch 0001, `vendor/ispctc/patches/0001-bc6h-peak-mode.patch`).**
   - Only highlight blocks change: blocks whose brightest texel is at least 32× the block's geometric-mean luminance. Every other block encodes exactly as veryslow.
   - In a highlight block, candidates are ranked by squared UF16 error against the block. A candidate that decodes the brightest texel below 0.9 of its source luminance ranks after every candidate that keeps it.
   - A second search then runs on a copy with every channel lifted to at least 2^-12 of its texel's largest channel. It is ranked against the unlifted block, and the better result is kept.
   - The 32× gate and the 0.9 bar are judgement calls, measured below. The venice sun block's contrast is 63×.
-- **F?4 Existing output unchanged.**
+- **FE4 Existing output unchanged.**
   - `encoders-sys` `tests/bc6h.rs` pins the AVX2-path output of the five shipped levels on a generated image that carries venice's sun block. The hashes were recorded from the pre-patch objects and pass on the patched ones; a CPU without AVX2 skips the test.
   - Engine goldens pass.
   - The objects were rebuilt with `regen-ispc.ps1 -Update`; the bc7e objects did not change, and a recheck matches 12/12.
-- **F?5 Measured (`sdc-bench bc6-peak`, reference = the `.f16` source, 18 real images; `docs/research/encoder-benchmark.md`, "Peak-preserving ISPC mode").**
+- **FE5 Measured (`sdc-bench bc6-peak`, reference = the `.f16` source, 18 real images; `docs/research/encoder-benchmark.md`, "Peak-preserving ISPC mode").**
   - venice_sunset peak ratio 0.219 → 0.923, and no image's peak goes down.
   - Mean mPSNR −0.061 dB [−0.147, +0.026], within the brief's −0.10.
   - Mean RMSLE +0.000028 [−0.00009, +0.00015]. This misses the brief's "not worse" bar by a non-significant 0.6 %.
   - Three shapes were tried: guard everywhere plus a retry only when the guard fails (mPSNR −0.168); the 32× gate added (−0.062, RMSLE +0.000027); the gate plus both passes ranked against the unlifted block (kept).
-- **F?6 Not wired.** No effort, profile or GUI setting maps to `VeryslowPeak`. Mapping one, or changing what an existing effort maps to, changes output bytes and needs an owner ruling and an `encode_version` bump (Note DM).
+- **FE6 Not wired.** No effort, profile or GUI setting maps to `VeryslowPeak`. Mapping one, or changing what an existing effort maps to, changes output bytes and needs an owner ruling and an `encode_version` bump (Note DM).
+- **FE7 RMSLE miss accepted (owner, 2026-10-31).** Mean RMSLE is +0.6 % (not significant), against the brief's "not worse" bar. Accepted: NVTT, the other way to keep the peak, costs about 2 dB mPSNR, so this is the smaller loss. Merged unwired.
