@@ -87,7 +87,7 @@ Across every variant, round and set (43.2 M block-channels, rounds 1 to 3), **0 
 | mask_real (BC4) | 0.568 | 0.484 | 0.486 | 0.876 | 1.022 (1.80×) | 1.278 |
 | normal_real (BC5) | 1.253 | 1.039 | 1.036 | 1.874 | 2.153 (1.72×) | 2.713 |
 
-v4 roughly doubles the BC4 search time: 1.7 to 2.1× the upstream FFI and 2.1 to 3.4× the Rust port. The measured v5 re-runs v0 for its guard. A real guard reuses the upstream candidate, so it costs about the same as v4 plus a 16-texel comparison. For BC3 the alpha search is a small part of the encode, since BC1 at level 18 dominates, so the whole BC3 encode slows by much less than 2×; the end-to-end times are in "Upstream: end to end and bench re-run". The near-ceiling v3 costs 7 to 40×.
+v4 roughly doubles the BC4 search time: 1.7 to 2.1× the upstream FFI and 2.1 to 3.4× the Rust port. The measured v5 re-runs v0 for its guard. A real guard reuses the upstream candidate, so it costs about the same as v4 plus a 16-texel comparison. For BC3 the alpha search is a small part of the encode, since BC1 at level 18 dominates, so the whole BC3 encode slows by much less than 2×; the end-to-end times are in "Shipped: end to end and bench re-run". The near-ceiling v3 costs 7 to 40×.
 
 ## BC1: luma-weighted error
 
