@@ -257,6 +257,32 @@ Round 3, n = 100, against NVTT Production:
 - Perceptual mode is wrong for data: it favours green at the cost of red and blue.
 - In round 2, separate BC4 masks (about 49.8 dB) beat three maps sharing one BC7 (about 42.8 dB), at 1.5× the memory.
 
+## BC7 at the `max` level (2026-10-31)
+
+`bc7e_max` is Tessalith's `Bc7Level::Max` (bc7e patch 0002, [bc7e tuning](bc7e-tuning.md)), run on every BC7 image of all three rounds through `sdc-bench encode-one --format bc7 --level max`. Its settings are the ones every built-in preset resolves to on these sets: perceptual off, no exact-opaque flag, no custom weights (`presets/sdc-base.toml`). The source PNG goes in unchanged, as for every other encoder, and the output goes through the same decoder and scorer. The engine's lossless rotated-block alpha fix is not applied, so alpha scores compare like with like against bc7enc's `-u6`.
+
+Round 3, mean Δ of `bc7e_max` against the other encoder [95% t-interval], wins out of n (+ = `max` better; angles in degrees, sign flipped):
+
+| Set (n) | Metric | vs bc7e u6 | vs NVTT Production | vs ISPC slow |
+|---|---|---|---|---|
+| `rgb_real` (92) | RGB PSNR | +0.19 dB [±0.03], 92/92 | +0.45 [±0.26], 85/92 | +0.62 [±0.07], 92/92 |
+| `cutout_real` (95) | visible RGB PSNR | +0.19 [±0.02], 95/95 | +0.34 [±0.05], 94/95 | +0.46 [±0.04], 94/95 |
+| `alpha_real` (96) | premultiplied PSNR | +0.12 [±0.02], 89/96 | +0.17 [±0.08], 77/96 | +0.69 [±0.08], 95/96 |
+| `packed_real` (96) | RGB / A PSNR | +0.12 / +0.16 | +0.07 / −0.11 [±0.33] | +0.56 / +0.58 |
+| `stray_real` (98) | RGB PSNR | +0.30 [±0.22], 97/98 | +0.45 [±0.14] | +0.66 [±0.53] |
+| `normal_real` (93) | mean angle | +0.028° [±0.005], 90/93 | −0.012° [±0.002], 8/93 | +0.036° [±0.007] |
+| `normalh_real` (96) | mean angle / height PSNR | +0.034° / +0.23 dB | −0.017° / −0.02 dB [±0.05] | +0.047° / +0.42 dB |
+| `data_real` (96) | RGB PSNR | +0.25 [±0.13], 96/96 | −0.13 [±0.03], 18/96 | +0.40 [±0.13] |
+| `dataa_real` (96) | lowest-channel PSNR | +0.19 [±0.04], 92/96 | −0.08 [±0.04], 25/96 | +0.24 [±0.03] |
+
+- **`max` beats bc7e u6 on every set in every round**, by 0.1 to 0.3 dB on real textures (round 1: +0.15 dB on `rgb_real`, n = 7; up to +3.2 dB on the `rgb_grad` gradients).
+- **It now beats NVTT Production on colour and alpha** (opaque, cutout, smooth alpha, stray). On linear data and normal maps NVTT Production stays ahead by about 0.1 dB, or 0.01 to 0.02°, at roughly 100× the time.
+- **On gradients (rounds 1 and 2) it roughly ties NVTT Production** (`rgb_grad` −0.13 dB [±0.73]), where u6 was 3.9 dB behind.
+- Against bc7e u6 perceptual it loses luma, as linear mode always does (`rgb_real` luma PSNR −3.5 dB).
+- **Speed.** Round 1, run on an idle machine: about 1.0 to 1.3× the time of bc7e u6 per image (process start included; 2.5 s against 2.2 s for the 7 `rgb_real` images). In round 3 `max` measured 0.64 to 0.83× the time of u6, but the round-3 r1 and r2 passes that wrote the u6 rows ran at the same time (their logs overlap on 9 October), while `max` ran alone. Those ratios favour `max` and are not a speed claim.
+
+The full per-set tables for all three rounds (including bc7e u6 perceptual, and the seconds) are in the bench folder, `results/summary_maxpeak.md`, written by `scripts/analyze_maxpeak.py`.
+
 ## BC6H (HDR)
 
 Round 2 (4 real HDR images):
@@ -307,6 +333,7 @@ Measured with `sdc-bench bc6-peak` against the `.f16` source as float (not the `
 - The four `hdr_grad` images encode identically.
 - Encode time is unchanged within noise: about 0.1 s per 0.5 Mpix image, multi-threaded.
 - The RMSLE bar ("not worse") is missed by that small, non-significant margin. The cost sits in moonless_golf and satara_night, where keeping the peak forces a two-region block to give up its dim texels.
+- **Through the Python bench (2026-10-31),** as `bc6_ispc_veryslow_peak` beside the other BC6H rows (same texconv decode, scored against `.ref.npy`), n = 18 real images against `bc6h_veryslow`: peak ratio +0.078 [±0.090] (4 up, 0 down), mPSNR −0.061 dB [±0.086], RMSLE 0.00003 worse [±0.00012] (3 images better, 6 worse). That reproduces the small, non-significant RMSLE miss of the `.f16` study above. Against NVTT Production it keeps +2.32 dB [±0.96] mPSNR (17/18) and ties on RMSLE and peak ratio. The 4 `hdr_grad` images score identically to veryslow.
 - Without the 32× contrast gate (first attempt), the guard re-encodes many ordinary blocks: mean mPSNR −0.168 dB and RMSLE +0.00023. Other effort levels do not use this mode.
 
 ## Settings that change nothing
