@@ -191,6 +191,53 @@ fn reencode_with_an_image_twin_is_offered_off() {
     );
 }
 
+/// Ledger (Task 3 deferred): a bulk selection with both kinds offers the free ones and names the left-out ones; a
+/// click re-encodes only the free ones.
+#[test]
+fn bulk_reencode_offers_the_free_files_and_names_the_left_out_ones() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = open(d.path(), |r| png(&r.join("a.png")));
+    m.click_item("a.dds", false, false);
+    m.click_item("b.dds", true, false);
+    m.click_item("a.png", true, false);
+    let mut h = harness(m);
+    h.run();
+    let left_out = "(1 left out: another file already writes them)";
+    // The hover lists the left-out file's name (the name is on its tile too: count it).
+    let names = h.query_all_by_label("a.dds").count();
+    hover_shows(&mut h, left_out, left_out);
+    assert_eq!(
+        h.query_all_by_label("a.dds").count(),
+        names + 1,
+        "the hover names a.dds"
+    );
+    h.get_by_label("Re-encode 1 DDS file").click();
+    idle(&mut h);
+    let t = toml(h.state());
+    assert!(t.contains("[files.\"b.dds\"]"), "{t}");
+    assert_eq!(t.matches("reencode = true").count(), 1, "{t}");
+}
+
+/// Ledger (Task 3 deferred): the bulk row is off while `sdc.toml` is read-only, and says why.
+#[test]
+fn bulk_reencode_is_off_when_read_only() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = open(d.path(), |r| {
+        std::fs::write(r.join("sdc.toml"), "target = [\n").unwrap()
+    });
+    m.click_item("a.dds", false, false);
+    m.click_item("b.dds", true, false);
+    let before = toml(&m);
+    let mut h = harness(m);
+    h.run();
+    let b = h.get_by_label("Re-encode 2 DDS files");
+    assert!(b.accesskit_node().is_disabled());
+    b.click();
+    h.run();
+    assert_eq!(toml(h.state()), before, "nothing is written");
+    hover_shows(&mut h, "Re-encode 2 DDS files", "sdc.toml is read-only");
+}
+
 #[test]
 fn reencode_acts_on_an_accesskit_click() {
     let d = tempfile::tempdir().unwrap();

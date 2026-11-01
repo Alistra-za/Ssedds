@@ -101,7 +101,8 @@ pub fn draw(
             BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
         }
     });
-    // egui's resize handle id (`panel.rs::resize_widget_id`).
+    // shortcut: egui 0.36's private resize handle id (`panel.rs::resize_widget_id`); recheck on an egui upgrade
+    // (`a_drag_to_the_cap_is_the_users_height` fails if it moves).
     let resized = ui
         .read_response(egui::Id::new(id).with("__resize"))
         .is_some_and(|r| r.dragged() || r.drag_stopped());
