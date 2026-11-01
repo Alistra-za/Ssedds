@@ -73,6 +73,41 @@ pub fn bc4_encode_block(px: &[[u8; 4]; 16], channel: usize, search_radius: u32) 
     out
 }
 
+/// `rgbcx::BC4_USE_ALL_MODES` (8-value and 6-value modes).
+pub const BC4_USE_ALL_MODES: u32 = 3;
+/// `rgbcx::BC4_SDC_SEARCH` (sdc patch): the extra endpoint search after the mode loop (`sdc_bench::bc4ref::search`).
+/// `bc3/4/5_encode_block` set it. It requires [`BC4_USE_ALL_MODES`]: the search assumes both modes are allowed and the
+/// C++ does not check ([`bc4_encode_block_flags`] debug-asserts it).
+pub const BC4_SDC_SEARCH: u32 = 4;
+/// `rgbcx::BC4_SDC_GUARD128` (sdc patch): with [`BC4_SDC_SEARCH`], keep the mode-loop block when the search would flip
+/// more texels across 128. `bc3_encode_block` sets it for alpha.
+pub const BC4_SDC_GUARD128: u32 = 8;
+
+/// Like [`bc4_encode_block`] but `flags` reaches `encode_bc4_hq` verbatim (the shim adds no bit of its own).
+pub fn bc4_encode_block_flags(
+    px: &[[u8; 4]; 16],
+    channel: usize,
+    search_radius: u32,
+    flags: u32,
+) -> [u8; 8] {
+    assert!(channel < 4, "channel {channel} out of range");
+    debug_assert!(flags & BC4_SDC_SEARCH == 0 || flags & BC4_USE_ALL_MODES == BC4_USE_ALL_MODES);
+    ensure_init();
+    let src = bytes(px);
+    let mut out = [0u8; 8];
+    // SAFETY: as in `bc4_encode_block`: stride 4 reads at most index 63 of `src`; `out` holds the 8 bytes written.
+    unsafe {
+        ffi::sdc_bc4_encode_flags(
+            out.as_mut_ptr(),
+            src.as_ptr().add(channel),
+            4,
+            search_radius,
+            flags,
+        )
+    };
+    out
+}
+
 /// Encode one BC5 block from the red (channel 0) and green (channel 1) texels.
 pub fn bc5_encode_block(px: &[[u8; 4]; 16], search_radius: u32) -> [u8; 16] {
     ensure_init();

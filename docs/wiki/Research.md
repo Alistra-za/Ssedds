@@ -44,6 +44,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 ## BC4/BC5 search radius
 
 - Upstream rgbcx modelled BC4 decoding with floored interpolants while the GPU and bcdec round to nearest, so a wider search could make results worse (BC5 at radius 10 scored 47.9 dB against 58.0 dB at radius 5). Patching rgbcx to round like the decoder fixed this, and after the patch a wider radius gained almost nothing. Drove: the default radius and the `fast` one. Full tables: [BC4/BC5 search radius](../research/encoder-benchmark.md#bc4bc5-search-radius).
+- rgbcx anchors its BC4 6-value mode on the block's minimum and maximum, which wastes the mode's fixed 0 and 255 entries; BC3 cutout alpha trailed NVTT `-highest` by about 2 dB. Drove: a wider block search in the vendored rgbcx for BC4, both BC5 channels and BC3 alpha, at every radius, never worse per block than the unpatched search, at about 2× the BC4 search time; BC3 alpha keeps the unpatched block where the search would flip more texels across 128. Cutout alpha gains 3.2 dB ([BC4-family encoding](../research/bc4-family.md)). <!-- D:FJ1,FJ2 -->
 
 ## NVTT 3
 

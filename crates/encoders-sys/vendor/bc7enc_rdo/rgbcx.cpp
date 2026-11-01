@@ -2727,6 +2727,200 @@ namespace rgbcx
 		pDst_bytes[7] = (uint8_t)(f >> 40U);
 	}
 
+	// sdc patch (bc4 search, see README-VENDOR.md): the extra endpoint search behind BC4_SDC_SEARCH. Each step only
+	// replaces the best on a strictly lower error (first minimum per texel), in a fixed candidate order.
+	namespace sdc_bc4
+	{
+		struct best { uint32_t err; uint8_t e0, e1; uint8_t sels[16]; };
+
+		static inline uint8_t clampi(int x) { return (uint8_t)(x < 0 ? 0 : (x > 255 ? 255 : x)); }
+
+		static void try_pair(const uint8_t* v, best& b, uint8_t e0, uint8_t e1)
+		{
+			uint8_t p[8];
+			bc4_block::get_block_values(p, e0, e1);
+			uint32_t err = 0;
+			uint8_t sels[16];
+			for (uint32_t i = 0; i < 16; i++)
+			{
+				uint32_t be = UINT32_MAX, bj = 0;
+				for (uint32_t j = 0; j < 8; j++)
+				{
+					const int d = (int)p[j] - (int)v[i];
+					const uint32_t e = (uint32_t)(d * d);
+					if (e < be)
+					{
+						be = e;
+						bj = j;
+						if (!e)
+							break;
+					}
+				}
+				err += be;
+				if (err >= b.err)
+					return;
+				sels[i] = (uint8_t)bj;
+			}
+			b.err = err;
+			b.e0 = e0;
+			b.e1 = e1;
+			memcpy(b.sels, sels, 16);
+		}
+
+		static void minmax(const uint8_t* v, uint8_t& mn, uint8_t& mx)
+		{
+			mn = 255; mx = 0;
+			for (uint32_t i = 0; i < 16; i++) { mn = std::min(mn, v[i]); mx = std::max(mx, v[i]); }
+		}
+
+		// 6-value mode anchored on the inner range (values other than 0 and 255), e0 == e1 allowed.
+		static void inner6(const uint8_t* v, best& b, int rad)
+		{
+			bool ext = false, any = false;
+			uint8_t imn = 255, imx = 0;
+			for (uint32_t i = 0; i < 16; i++)
+			{
+				if (v[i] == 0 || v[i] == 255) { ext = true; continue; }
+				any = true; imn = std::min(imn, v[i]); imx = std::max(imx, v[i]);
+			}
+			if (!ext || !any)
+				return;
+			for (int lo = -rad; lo <= rad; lo++)
+				for (int hi = -rad; hi <= rad; hi++)
+				{
+					const uint8_t e0 = clampi(imn + lo), e1 = clampi(imx + hi);
+					if (e0 <= e1)
+						try_pair(v, b, e0, e1);
+				}
+		}
+
+		// Least-squares endpoint refit for the current selectors, then the +-1 neighbourhood in the same mode, up to 3
+		// rounds. f64 with the reference's operations in the same order (no contraction: /fp:precise in build.rs).
+		static void ls_refine(const uint8_t* v, best& b)
+		{
+			for (int round = 0; round < 3; round++)
+			{
+				const bool mode8 = b.e0 > b.e1;
+				double aa = 0.0, ab = 0.0, bb = 0.0, av = 0.0, bv = 0.0;
+				for (uint32_t i = 0; i < 16; i++)
+				{
+					const uint32_t s = b.sels[i];
+					double t;
+					if (s == 0) t = 0.0;
+					else if (s == 1) t = 1.0;
+					else if (mode8) t = (double)(s - 1) / 7.0;
+					else if (s >= 6) continue;
+					else t = (double)(s - 1) / 5.0;
+					const double wa = 1.0 - t, wb = t, x = (double)v[i];
+					aa += wa * wa;
+					ab += wa * wb;
+					bb += wb * wb;
+					av += wa * x;
+					bv += wb * x;
+				}
+				const double det = aa * bb - ab * ab;
+				if (fabs(det) < 1e-9)
+					return;
+				const double a = (av * bb - bv * ab) / det;
+				const double c = (bv * aa - av * ab) / det;
+				// The clamp keeps the cast defined; clampi(x +- 1) below gives the same pair as the reference's saturating cast.
+				const int ai = (int)std::max(-1000.0, std::min(1256.0, ::round(a)));
+				const int ci = (int)std::max(-1000.0, std::min(1256.0, ::round(c)));
+				const uint32_t before = b.err;
+				for (int da = -1; da <= 1; da++)
+					for (int dc = -1; dc <= 1; dc++)
+					{
+						const uint8_t e0 = clampi(ai + da), e1 = clampi(ci + dc);
+						if ((e0 > e1) == mode8)
+							try_pair(v, b, e0, e1);
+					}
+				if (b.err >= before)
+					return;
+			}
+		}
+
+		// ls_refine on b, then a fresh search of the mode loop's candidates in the other mode, refined, kept if better.
+		static void refit_both(const uint8_t* v, best& b, int rad)
+		{
+			ls_refine(v, b);
+			uint8_t mn, mx;
+			minmax(v, mn, mx);
+			if (mn == mx)
+				return;
+			best o;
+			o.err = UINT32_MAX; o.e0 = 0; o.e1 = 0; memset(o.sels, 0, 16);
+			const bool mode8 = b.e0 > b.e1;
+			for (int lo = -rad; lo <= rad; lo++)
+				for (int hi = -rad; hi <= rad; hi++)
+				{
+					uint8_t e0 = clampi(mx + hi), e1 = clampi(mn + lo);
+					if (e0 == e1)
+						continue;
+					if ((e0 > e1) == mode8)
+						std::swap(e0, e1);
+					try_pair(v, o, e0, e1);
+				}
+			ls_refine(v, o);
+			if (o.err < b.err)
+				b = o;
+		}
+
+		// 6-value mode with texels within t of 0 or 255 left to the palette's fixed 0/255.
+		static void trimmed6(const uint8_t* v, best& b)
+		{
+			static const int ts[5] = { 2, 6, 12, 24, 48 };
+			for (int k = 0; k < 5; k++)
+			{
+				const int t = ts[k];
+				bool has_ext = false, any = false;
+				uint8_t imn = 255, imx = 0;
+				for (uint32_t i = 0; i < 16; i++)
+				{
+					if (v[i] <= t || v[i] >= 255 - t) { has_ext = true; continue; }
+					any = true; imn = std::min(imn, v[i]); imx = std::max(imx, v[i]);
+				}
+				if (!has_ext || !any)
+					continue;
+				best c = b;
+				for (int lo = -2; lo <= 2; lo++)
+					for (int hi = -2; hi <= 2; hi++)
+					{
+						const uint8_t e0 = clampi(imn + lo), e1 = clampi(imx + hi);
+						if (e0 <= e1)
+							try_pair(v, c, e0, e1);
+					}
+				if (c.e0 <= c.e1)
+					ls_refine(v, c);
+				if (c.err < b.err)
+					b = c;
+			}
+		}
+
+		// Exhaustive +-3 around the best pair, same mode, anchor fixed.
+		static void local(const uint8_t* v, best& b)
+		{
+			const int c0 = b.e0, c1 = b.e1;
+			const bool m8 = b.e0 > b.e1;
+			for (int d0 = -3; d0 <= 3; d0++)
+				for (int d1 = -3; d1 <= 3; d1++)
+				{
+					const uint8_t e0 = clampi(c0 + d0), e1 = clampi(c1 + d1);
+					if ((e0 > e1) == m8)
+						try_pair(v, b, e0, e1);
+				}
+		}
+
+		static uint32_t flips(const uint8_t* v, const best& b)
+		{
+			uint8_t p[8];
+			bc4_block::get_block_values(p, b.e0, b.e1);
+			uint32_t n = 0;
+			for (uint32_t i = 0; i < 16; i++)
+				n += (v[i] >= 128) != (p[b.sels[i]] >= 128);
+			return n;
+		}
+	} // namespace sdc_bc4
+
 	uint32_t encode_bc4_hq(void* pDst, const uint8_t* pPixels, uint32_t stride, uint32_t search_rad, uint32_t mode_flag, const uint8_t* pForce_selectors)
 	{
 		assert(mode_flag);
@@ -2879,6 +3073,38 @@ namespace rgbcx
 			} // lo_delta
 
 		} // mode
+
+		// sdc patch (bc4 search, see README-VENDOR.md): start from the mode loop's block (`base`), search further.
+		if ((mode_flag & BC4_SDC_SEARCH) && !pForce_selectors)
+		{
+			uint8_t v[16];
+			for (uint32_t i = 0; i < 16; i++)
+				v[i] = pPixels[i * stride];
+			const bc4_block* pBlock = (const bc4_block*)pDst_bytes;
+			const uint64_t sel_bits = pBlock->get_selector_bits();
+			sdc_bc4::best base;
+			base.err = best_err;
+			base.e0 = pBlock->m_endpoints[0];
+			base.e1 = pBlock->m_endpoints[1];
+			for (uint32_t i = 0; i < 16; i++)
+				base.sels[i] = (uint8_t)((sel_bits >> (i * 3)) & 7);
+			const int rad = (int)search_rad;
+			sdc_bc4::best b = base;
+			sdc_bc4::inner6(v, b, rad);
+			sdc_bc4::refit_both(v, b, rad);
+			sdc_bc4::trimmed6(v, b);
+			sdc_bc4::local(v, b);
+			if ((mode_flag & BC4_SDC_GUARD128) && sdc_bc4::flips(v, b) > sdc_bc4::flips(v, base))
+				b = base;
+			uint64_t bits = 0;
+			for (uint32_t i = 0; i < 16; i++)
+				bits |= (uint64_t)b.sels[i] << (i * 3);
+			pDst_bytes[0] = b.e0;
+			pDst_bytes[1] = b.e1;
+			for (uint32_t i = 0; i < 6; i++)
+				pDst_bytes[2 + i] = (uint8_t)(bits >> (i * 8));
+			best_err = b.err;
+		}
 
 		return best_err;
 	}

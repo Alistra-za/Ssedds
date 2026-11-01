@@ -72,6 +72,14 @@ ARCHIVED (wording before the edit; superseded in part by Note FC10, 2026-10-29)
   - `diff` help and its human output footer say "rules are not compared" (final review Minor 13).
   - `validate` reports the first problem per file, and validates a folder file in place of itself.
 
+ARCHIVED (wording before the edit; superseded in part by Note FJ, 2026-11-01)
+- **T13 rgbcx rounding patch (owner, 2026-10-12).**
+  - The vendored rgbcx's BC4/BC5/BC3-alpha decode model now rounds to nearest like bcdec. It used to floor the interpolants, so a wider search found endpoint pairs that were exact only under the floor.
+  - Gain at the default radius: BC4 +3.07 dB, BC5 +2.61 dB (mean PSNR under bcdec, bench corpus). PSNR now rises monotonically with the radius.
+  - A new manifest `rgbcx_patch` field makes old BC3/BC4/BC5 outputs re-encode. Like `bc7e_patch` it is a content tag, `bc4-round-to-nearest@sha256:<hash of the patched vendor/bc7enc_rdo/rgbcx.h>` (final review Minor 11), so an in-place change to the patched header also re-encodes them.
+  - Two bench gates moved from byte-exact to never-worse (per-block bcdec SSE for BC3 alpha, BC4, BC5); BC1 and BC3 colour stay byte-exact.
+  - Known quirk: sdc's own BC3 alpha validation decodes through `bcdec_rs::bc3`, which uses `(6a0+a1+1)/7` and matches neither model.
+
 ## Note U — M6 Track E: NIF-aware alpha and fewer confirmations (plan rulings, 2026-10-12)
 
 ARCHIVED (wording before the edit; superseded in part by Note FC1, 2026-10-29)
