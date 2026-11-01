@@ -117,6 +117,42 @@ fn bad_values_fall_back() {
     }
 }
 
+/// Final review M2: a non-finite DATA value (or a noise scale whose reciprocal overflows) takes that field's
+/// default, so no cbuffer value is NaN or infinite; non-finite JSON values already do.
+#[test]
+fn non_finite_data_falls_back() {
+    let mut d = esp::MatoData {
+        falloff_scale: f32::NAN,
+        falloff_bias: f32::NEG_INFINITY,
+        noise_uv_scale: 1e-45,
+        material_uv_scale: 1.0,
+        projection: [0.0, 0.0, 1.0],
+        normal_dampener: 1.0,
+        colour: [1.0, f32::INFINITY, 0.5],
+        flags: 1,
+    };
+    let l = layer_from_block(&Map::new(), Some(&d));
+    assert_eq!(l.falloff_scale, 0.35);
+    assert_eq!(l.falloff_bias, 0.4);
+    assert_eq!(l.noise_uv_scale, 48.0);
+    assert_eq!(l.colour, [1.0, 1.0, 0.5]);
+    assert!((1.0 / l.noise_uv_scale).is_finite());
+    // +inf and a NaN colour channel too; a good field is kept.
+    d.noise_uv_scale = f32::INFINITY;
+    d.falloff_scale = 0.5;
+    d.colour = [f32::NAN, 0.2, 0.3];
+    let l = layer_from_block(&Map::new(), Some(&d));
+    assert_eq!((l.noise_uv_scale, l.falloff_scale), (48.0, 0.5));
+    assert_eq!(l.colour, [1.0, 0.2, 0.3]);
+    // The JSON side: a non-finite number is not representable in JSON, but 1e39 overflows f32 to inf.
+    let v = obj(json!({"roughness": 1e39, "baseColorScale": [1e39, 1, 1], "specularLevel": -1e39}));
+    let l = layer_from_block(&v, None);
+    assert_eq!(
+        (l.roughness, l.specular_level, l.base_color_scale),
+        (1.0, 1.0, [1.0; 3])
+    );
+}
+
 /// Polls like the app does (panel drawn, input every frame) until nothing is in flight.
 fn run(s: &mut SetPreview, m: &AppModel) {
     let t = Instant::now();

@@ -1622,9 +1622,22 @@ pub fn layer_from_block(
                 density_randomization: n("densityRandomization"),
             }
         });
-    let (falloff_scale, falloff_bias, noise_uv_scale, colour) = data
-        .map_or((0.35, 0.4, 48.0, [1.0; 3]), |d| {
-            (d.falloff_scale, d.falloff_bias, d.noise_uv_scale, d.colour)
+    // DATA comes from plugin bytes: a non-finite value (or a noise scale whose reciprocal overflows) takes that
+    // field's default, so no cbuffer value is NaN or infinite (Note GG2).
+    let fin = |x: f32, d: f32| if x.is_finite() { x } else { d };
+    let (falloff_scale, falloff_bias, noise_uv_scale, colour) =
+        data.map_or((0.35, 0.4, 48.0, [1.0; 3]), |d| {
+            let noise = if d.noise_uv_scale <= 0.0 || (1.0 / d.noise_uv_scale).is_finite() {
+                fin(d.noise_uv_scale, 48.0)
+            } else {
+                48.0
+            };
+            (
+                fin(d.falloff_scale, 0.35),
+                fin(d.falloff_bias, 0.4),
+                noise,
+                d.colour.map(|c| fin(c, 1.0)),
+            )
         });
     ProjectedLayer {
         falloff_scale,
