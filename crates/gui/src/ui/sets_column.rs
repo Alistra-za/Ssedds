@@ -162,9 +162,9 @@ enum Act {
 /// The card's heading is one row only when the name keeps this much beside the pill and badges; otherwise the pill
 /// and badges go under the name (Note F?13).
 const NAME_MIN: f32 = 80.0;
-/// The position number and the ≡ handle before the name, and the status dot with the pill's frame margins.
-const CARD_LEAD: f32 = 32.0;
-const PILL_CHROME: f32 = 22.0;
+/// The pill frame's horizontal margin (`status_pill`) and the status dot's width (`status::dot`, 8 px).
+const PILL_PAD_X: f32 = 6.0;
+const STATUS_DOT: f32 = 8.0;
 /// The size of a member thumbnail (`columns::member`), which an empty chip matches.
 const CHIP: f32 = 32.0;
 
@@ -242,7 +242,7 @@ fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: 
     }
     let warn = ui
         .add(egui::Button::new(
-            egui::RichText::new(format!("⚠ {}", rows.len()))
+            egui::RichText::new(warn_text(rows.len()))
                 .small()
                 .color(AMBER),
         ))
@@ -272,11 +272,19 @@ fn check_badge_text(checks: &[(&str, &Warning)]) -> (usize, String) {
 
 /// The width of `text` in the small font, as a button or pill would paint it (a few short strings per card per frame).
 fn small_width(ui: &egui::Ui, text: &str) -> f32 {
-    let font = egui::TextStyle::Small.resolve(ui.style());
+    text_width(ui, text, &egui::TextStyle::Small.resolve(ui.style()))
+}
+
+fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
     ui.painter()
-        .layout_no_wrap(text.to_owned(), font, egui::Color32::PLACEHOLDER)
+        .layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::PLACEHOLDER)
         .size()
         .x
+}
+
+/// The "⚠ n" button's text, shared by the button and the heading's width measure.
+fn warn_text(n: usize) -> String {
+    format!("⚠ {n}")
 }
 
 fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts: &mut Vec<Act>) {
@@ -314,7 +322,7 @@ fn status_pill(ui: &mut egui::Ui, model: &AppModel, v: &SetView, s: Status) {
     egui::Frame::new()
         .corner_radius(8.0)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .inner_margin(egui::Margin::symmetric(6, 1))
+        .inner_margin(egui::Margin::symmetric(PILL_PAD_X as i8, 1))
         .show(ui, |ui| {
             let kind =
                 egui::Label::new(egui::RichText::new(kind_text(model, v)).small()).truncate();
@@ -1054,13 +1062,21 @@ fn pill(
                     // One row only when the name keeps NAME_MIN px beside the pill and badges (Note F?13).
                     let sp = ui.spacing().item_spacing.x;
                     let btn = 2.0 * ui.spacing().button_padding.x + sp;
-                    let mut need = CARD_LEAD
-                        + NAME_MIN
-                        + small_width(ui, kind_text(model, v))
-                        + PILL_CHROME
+                    let body = egui::TextStyle::Body.resolve(ui.style());
+                    // position slot (as wide as the last number), the ≡ handle, and the gaps around them
+                    let lead =
+                        text_width(ui, &total.to_string(), &egui::FontId::monospace(body.size))
+                            + text_width(ui, "≡", &body)
+                            + 2.0 * sp;
+                    let stroke = ui.visuals().widgets.noninteractive.bg_stroke.width;
+                    let pill = small_width(ui, kind_text(model, v))
+                        + 2.0 * PILL_PAD_X
+                        + 2.0 * stroke
+                        + STATUS_DOT
                         + sp;
+                    let mut need = lead + NAME_MIN + pill + sp;
                     if !rows.is_empty() {
-                        need += small_width(ui, &format!("⚠ {}", rows.len())) + btn;
+                        need += small_width(ui, &warn_text(rows.len())) + btn;
                     }
                     if !checks.is_empty() {
                         need += small_width(ui, &check_badge_text(&checks).1) + btn;

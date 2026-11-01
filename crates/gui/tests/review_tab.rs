@@ -449,7 +449,9 @@ fn the_columns_stay_above_the_footer() {
     );
     h.set_size(egui::vec2(1400.0, 700.0));
     h.run();
-    h.run_steps(4);
+    // set_size applies on the next pass and nothing asks for another, so run() stops after one pass at the new size
+    // (the old wide-card layout happened to request two more); the panels settle on the pass after it.
+    h.run_steps(1);
     let footer = h.get_by_label("What will be written").rect().top();
     let mut labels: Vec<String> = pbr_export::export_asks(h.state())
         .into_iter()
