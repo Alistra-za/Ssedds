@@ -131,6 +131,51 @@ fn the_review_headings_count_and_the_warnings_column_says_what_does_not_block() 
     assert!(h.query_by_label_contains("see Problems").is_none());
 }
 
+fn nif_row(blocked: Option<&str>) -> sdc_gui::model::meshes::NifReviewRow {
+    sdc_gui::model::meshes::NifReviewRow {
+        path: r"meshes\x.nif".into(),
+        mod_name: "My Mod".into(),
+        blocked: blocked.map(String::from),
+        foreign: None,
+        answer: None,
+        compaction: None,
+    }
+}
+
+/// Note F?7 (4b, O5): a NIF edit waiting only for the export folder is listed under its own footer heading, not warned.
+#[test]
+fn a_nif_edit_waiting_for_a_folder_is_listed_not_warned() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened_unchosen(d.path());
+    assert!(m.export_folder_chosen().is_none());
+    m.open_review();
+    let blockers =
+        pbr_export::export_blocks(&m).len() + usize::from(m.export_folder_chosen().is_none());
+    m.set_nif_review_rows(vec![nif_row(Some("No export folder chosen"))]);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("NIF edits skipped until an export folder is chosen (1)");
+    h.get_by_label(r"meshes\x.nif");
+    assert!(h.query_by_label_contains("NIF edits (").is_none());
+    h.get_by_label("Warnings (0)");
+    h.get_by_label(&format!("Blockers ({blockers})"));
+}
+
+/// Note F?7 (4b): any other blocked reason stays a Warning (FC5).
+#[test]
+fn another_blocked_nif_reason_is_still_a_warning() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = opened(d.path());
+    m.open_review();
+    m.set_nif_review_rows(vec![nif_row(Some("Resolve the conflicts first."))]);
+    let mut h = harness(m);
+    h.run();
+    h.get_by_label("Warnings (1)");
+    assert!(h
+        .query_by_label_contains("until an export folder")
+        .is_none());
+}
+
 #[test]
 fn review_export_is_disabled_with_the_blocker_count() {
     let d = tempfile::tempdir().unwrap();

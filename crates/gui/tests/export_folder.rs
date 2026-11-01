@@ -140,6 +140,91 @@ fn header_export_reads_review_until_clean() {
     assert!(!m.export_is_clean());
 }
 
+fn nif_row(blocked: Option<&str>) -> sdc_gui::model::meshes::NifReviewRow {
+    sdc_gui::model::meshes::NifReviewRow {
+        path: r"meshes\x.nif".into(),
+        mod_name: "My Mod".into(),
+        blocked: blocked.map(String::from),
+        foreign: None,
+        answer: None,
+        compaction: None,
+    }
+}
+
+/// A decided project with a folder chosen, so only the NIF rows decide the header's verb.
+fn decided_with_folder(dir: &std::path::Path) -> AppModel {
+    let mut m = fresh(dir);
+    m.set_export_folder(dir.join("out"));
+    idle(&mut m);
+    decide_all(&mut m);
+    m.set_checks(sdc_gui::settings::ChecksSettings {
+        plastic: false,
+        ..Default::default()
+    });
+    idle(&mut m);
+    assert_eq!(m.undecided(), 0);
+    m
+}
+
+fn files(m: &AppModel) -> String {
+    let n = m.export_files();
+    format!("{n} file{}", if n == 1 { "" } else { "s" })
+}
+
+/// Note F?7 (4a): a pending NIF edit makes the header `Review …`, which writes nothing, so it counts the edit.
+#[test]
+fn the_header_counts_pending_nif_edits() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = decided_with_folder(d.path());
+    m.set_nif_review_rows(vec![nif_row(None)]);
+    let f = files(&m);
+    assert_eq!(m.header_export_text(), format!("Review {f} + 1 NIF edit"));
+    assert_eq!(m.review_button_text(), format!("Export {f} + 1 NIF edit"));
+}
+
+/// Review Focus 6: Review's button names only the NIF edits its Export writes; a blocked one joins the skip list.
+#[test]
+fn the_export_button_does_not_count_a_blocked_nif_edit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = decided_with_folder(d.path());
+    m.set_nif_review_rows(vec![
+        nif_row(Some("Resolve the conflicts first.")),
+        nif_row(None),
+    ]);
+    let f = files(&m);
+    assert_eq!(m.header_export_text(), format!("Review {f} + 2 NIF edits"));
+    assert_eq!(
+        m.review_button_text(),
+        format!("Export {f} + 1 NIF edit (skip 1 NIF edit)")
+    );
+    assert!(m.review_gate().is_ok(), "the button stays enabled");
+    // Only blocked rows: nothing to write, only a skip.
+    m.set_nif_review_rows(vec![nif_row(Some("x"))]);
+    assert_eq!(
+        m.review_button_text(),
+        format!("Export {f} (skip 1 NIF edit)")
+    );
+}
+
+/// Note F?7 (4a, round 2): a clean header click writes the files at once, so it names no NIF edit as written.
+#[test]
+fn a_clean_header_export_names_no_blocked_nif_edit() {
+    let d = tempfile::tempdir().unwrap();
+    let mut m = decided_with_folder(d.path());
+    m.set_nif_review_rows(vec![nif_row(Some("its NIF changed on disk"))]);
+    assert!(m.export_is_clean());
+    let f = files(&m);
+    assert_eq!(
+        m.header_export_text(),
+        format!("Export {f} (skip 1 NIF edit)")
+    );
+    m.export_clicked();
+    idle(&mut m);
+    assert!(m.review.is_none(), "{}", m.status_line);
+    assert!(m.export.summary.is_some(), "{}", m.status_line);
+    assert!(!m.take_nif_export_due(), "no NIF edit was written");
+}
+
 #[test]
 fn without_a_chosen_folder_the_text_is_review_even_when_everything_is_decided() {
     let d = tempfile::tempdir().unwrap();

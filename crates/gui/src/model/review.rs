@@ -108,6 +108,10 @@ fn plural(n: usize) -> &'static str {
     }
 }
 
+fn nif_edits(n: usize) -> String {
+    format!("{n} NIF edit{}", plural(n))
+}
+
 /// FC11 (Review Focus 4): a stale file whose stamp no longer matches its record, or that has none: no button.
 pub const STALE_NOT_OURS: &str = "edited since Tessalith wrote it: left alone";
 
@@ -820,8 +824,20 @@ impl AppModel {
             return "Export".into();
         }
         let n = self.export_files();
-        let verb = if clean { "Export" } else { "Review" };
-        format!("{verb} {n} file{}", plural(n))
+        let rows = self.nif_rows.len();
+        let blocked = self.nif_rows.iter().filter(|r| r.blocked.is_some()).count();
+        let mut t = format!(
+            "{} {n} file{}",
+            if clean { "Export" } else { "Review" },
+            plural(n)
+        );
+        // Note F?7: `Review` writes nothing, so it counts every pending NIF edit; `Export` names only what it writes.
+        if !clean && rows > 0 {
+            t.push_str(&format!(" + {}", nif_edits(rows)));
+        } else if clean && blocked > 0 {
+            t.push_str(&format!(" (skip {})", nif_edits(blocked)));
+        }
+        t
     }
 
     /// "Export 20 files (skip 2 undecided)".
@@ -833,8 +849,21 @@ impl AppModel {
         if self.also_on() {
             t.push_str(&format!(" to {} folders", self.also_folder_count()));
         }
+        // Note F?7 (rule 7.1): only the NIF edits this Export writes; a blocked one is skipped.
+        let blocked = self.nif_rows.iter().filter(|r| r.blocked.is_some()).count();
+        let written = self.nif_rows.len() - blocked;
+        if written > 0 {
+            t.push_str(&format!(" + {}", nif_edits(written)));
+        }
+        let mut skip = vec![];
         if skipped > 0 {
-            t.push_str(&format!(" (skip {skipped} undecided)"));
+            skip.push(format!("{skipped} undecided"));
+        }
+        if blocked > 0 {
+            skip.push(nif_edits(blocked));
+        }
+        if !skip.is_empty() {
+            t.push_str(&format!(" (skip {})", skip.join(", ")));
         }
         t
     }

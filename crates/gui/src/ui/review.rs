@@ -352,6 +352,7 @@ fn nif_row_text(
 enum Footer<'a> {
     Heading(String),
     Nif(&'a crate::model::meshes::NifReviewRow),
+    NifWaiting(&'a crate::model::meshes::NifReviewRow),
     Stale(&'a engine::manifest::StaleOutput),
     Written(usize),
     Json(&'a JsonLine),
@@ -774,6 +775,18 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                 )));
                 list.extend(nif_written.iter().map(|r| Footer::Nif(r)));
             }
+            // Note F?7 (O5): the Blockers column already names the missing folder, so these are not Warnings.
+            let nif_waiting: Vec<_> = nif_rows
+                .iter()
+                .filter(|r| r.blocked.as_deref() == Some(NO_EXPORT_FOLDER))
+                .collect();
+            if !nif_waiting.is_empty() {
+                list.push(Footer::Heading(format!(
+                    "NIF edits skipped until an export folder is chosen ({})",
+                    nif_waiting.len()
+                )));
+                list.extend(nif_waiting.iter().map(|r| Footer::NifWaiting(r)));
+            }
             // FC11: not a gate. A row Tessalith still owns (its stamp matches) has Delete, on a click only.
             if !m.stale.is_empty() {
                 list.push(Footer::Heading(format!(
@@ -807,6 +820,13 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
                                     let t = nif_row_text(r, nif_folder.as_deref());
                                     ui.add(egui::Label::new(&t).truncate())
                                         .on_hover_text(format!("{}: {t}", r.path));
+                                }
+                                Footer::NifWaiting(r) => {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(&r.path).weak())
+                                            .truncate(),
+                                    )
+                                    .on_hover_text(&r.path);
                                 }
                                 Footer::Stale(s) => {
                                     if let Some(a) = stale_row(ui, m, s, off) {
@@ -876,7 +896,10 @@ pub fn tab(ui: &mut egui::Ui, model: &mut AppModel) {
         || nif_rows
             .iter()
             .any(|r| r.blocked.is_none() && r.foreign.is_some());
-    let nif_skipped: Vec<_> = nif_rows.iter().filter(|r| r.blocked.is_some()).collect();
+    let nif_skipped: Vec<_> = nif_rows
+        .iter()
+        .filter(|r| r.blocked.as_deref().is_some_and(|b| b != NO_EXPORT_FOLDER))
+        .collect();
     let n_cols = if also_on { 4 } else { 3 };
     let heading = |i: usize| match i {
         0 => ("Blockers", format!("Blockers ({blockers})")),
