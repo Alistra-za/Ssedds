@@ -42,7 +42,7 @@ The file and folder dialogs (Open folder, the export folder, MO2 instance, a fol
 
 ## Header
 
-The header is one row from about 1340 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header, and the status line and banner under it show there too.
+The header is one row from about 1280 points of window width; in a narrower window **Export to**, **Save** and **Export** wrap onto a second line instead of overlapping. The Meshes view draws the same header, and the status line and banner under it show there too.
 
 | Control | What it does |
 |---|---|

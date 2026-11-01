@@ -141,6 +141,23 @@ fn the_header_is_one_row_in_the_spec_order() {
     assert_one_row_in_the_spec_order(&h);
 }
 
+/// Note CD2: the header is one row from about 1280 pt (measured after Note FI16 took Mode out and FI5 fixed the Undo
+/// slot width); narrower, Save wraps onto the second line.
+#[test]
+fn the_header_is_one_row_from_1280() {
+    let d = tempfile::tempdir().unwrap();
+    for (w, one_row) in [(1280.0, true), (1260.0, false)] {
+        let h = harness(pbr_opened(&d.path().join(format!("{w}"))), w, false);
+        let open = h.get_by_label("Open").rect().center().y;
+        let save = h.get_by_label("Save").rect();
+        assert_eq!(
+            save.min.y <= open && open <= save.max.y,
+            one_row,
+            "at {w}: Save {save:?}, Open's centre at y {open}"
+        );
+    }
+}
+
 /// The assertions of `the_header_is_one_row_in_the_spec_order`, on a 1600 px harness (P20: shared, not restated).
 fn assert_one_row_in_the_spec_order(h: &H) {
     let order = [
