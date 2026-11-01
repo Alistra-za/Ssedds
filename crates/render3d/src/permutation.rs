@@ -72,9 +72,8 @@ pub fn defines(m: &Material, stage: Stage, features: &[&str], deferred: bool) ->
     if !ps && bit(m.slsf2, 5) && m.has_vertex_colors {
         out.push("VC");
     }
-    // shortcut: CS always pairs VC with PROJECTED_UV (captures 8019/18019), but the preview's VS input layout follows
-    // the mesh, so a mesh without vertex colours gets no VC (its VS Color is 1, so vertexAlpha = 1); upgrade if a
-    // capture shows a colour-less static whose coverage differs from that.
+    // CS pairs VC with PROJECTED_UV (captures 8019/18019). The game sets the vertex-colour flag itself when the mesh has
+    // colours (owner, Note GG21), so VC follows the mesh, not SLSF2.5; a colour-less mesh gets none (vertexAlpha = 1).
     if m.projected && m.has_vertex_colors {
         out.push("VC");
     }
