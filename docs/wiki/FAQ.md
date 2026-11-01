@@ -1,5 +1,7 @@
 # FAQ
 
+Short answers to common questions about Tessalith, for anyone using the GUI or `sdc`.
+
 ### What is Tessalith, and why is the command line called sdc?
 
 Tessalith is the product name. The GUI is `tessalith.exe` and its window says Tessalith. The command line, config files and folders kept the project's working name: `sdc.exe`, `sdc.toml`, `sdc-project.toml`, `%APPDATA%\sdc`, `%LOCALAPPDATA%\sdc` and the `SDC_*` environment variables. Those are what you type.
@@ -10,7 +12,7 @@ No. Tessalith is Windows-only (x86-64, built with MSVC). The GUI also uses Direc
 
 ### Is there an installer or a prebuilt download?
 
-There is a prebuilt zip, but no installer. Download `Tessalith-<version>-win-x64.zip` from the Releases page, unzip it anywhere and run `tessalith.exe`. See [Installation](Installation.md).
+There is a prebuilt zip, but no installer: unzip it anywhere and run `tessalith.exe` ([Installation](Installation.md#the-release-zip)).
 
 ### Can I save DDS straight from Photoshop, GIMP, Paint.NET or chaiNNer?
 
@@ -18,7 +20,7 @@ Yes, with the optional plugins. They use Tessalith's encoders and rules, so a fi
 
 ### Can I edit a mesh (NIF)?
 
-Yes, in the GUI's Meshes view: shader fields and flags, alpha, extra data, controllers and animation clips. Review exports an edited copy, with your textures; the source file never changes. See [NIF editing](NIF-Editing.md).
+Yes, in the GUI's Meshes view: shader fields and flags, alpha, extra data, controllers and animation clips. Review exports an edited copy, with your textures; the source file never changes. See [NIF editing](GUI-NIF-Edit.md).
 
 ### Which target should I pick?
 
@@ -34,7 +36,7 @@ Yes. Point `sdc convert` (with `--recursive`) or the GUI at the folder. Files wh
 
 ### Will it re-encode my existing DDS files?
 
-No, not by default. DDS inputs are skipped (`IN-DDS-SKIPPED`) because re-encoding loses quality. Set `reencode = true` on a file to convert it anyway. To fix only a broken header, use `sdc patch-header`.
+No, not by default ([why, and what to do](Troubleshooting.md#dds-files-in-the-folder-are-skipped)).
 
 ### Does it change my source files?
 
@@ -72,7 +74,7 @@ Whether a colour map's alpha is a cutout, a blend or unused depends on the mesh,
 
 ### Does the CLI use the GUI's set edits or mod scan?
 
-No. The CLI reads `sdc.toml` but not `sdc-project.toml` or the scan database. Set moves, borrows, shader choices and output names made in the GUI's Sets column, alpha taken from scanned meshes, and the complex-grass auto-tag apply to GUI exports only. Per-texture decisions, which go into `sdc.toml`, apply to both.
+No. The CLI reads `sdc.toml` but not `sdc-project.toml` or the scan database. What that leaves out is listed under [Review](GUI-Review-and-Export.md#review).
 
 ### Does it write the PGPatcher JSON?
 
@@ -100,8 +102,8 @@ Delete everything it wrote together: the `<project> PBR`, `<project> Vanilla` an
 
 ### Where are my settings stored?
 
-See the table in [GUI guide](GUI-Guide.md#where-settings-live).
+See the table in [GUI settings](GUI-Settings.md#where-settings-live).
 
 ### What licence is it under?
 
-Tessalith is GPL-3.0-or-later. Its conversion engine (the `engine` and `encoders-sys` crates) is MPL-2.0. The vendored encoder libraries keep their own licences; see `crates/encoders-sys/vendor/README-VENDOR.md`. The plugins have their own split; see [Host plugins](Host-Plugins.md#licences).
+See the licence line on [Home](Home.md) and, for the plugins, [Host plugins](Host-Plugins.md#licences). The vendored encoder libraries keep their own licences ([vendored files](Installation.md#ispc-objects)).

@@ -440,14 +440,14 @@ fn f1_opens_the_sheet_and_it_lists_ctrl_z() {
 #[test]
 fn the_user_guide_lists_every_shortcut() {
     let doc = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/gui.md"),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/wiki/GUI-Keyboard.md"),
     )
     .unwrap()
     .replace("\r\n", "\n");
     let table = actions::markdown_table();
     assert!(
         doc.contains(&table),
-        "docs/gui.md's Keyboard table is out of date; it should read:\n{table}"
+        "docs/wiki/GUI-Keyboard.md's Keyboard table is out of date; it should read:\n{table}"
     );
 }
 

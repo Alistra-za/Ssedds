@@ -1,5 +1,7 @@
 # Mipmap filters, normal maps and alpha coverage
 
+Written 2026-10-16 (commit 1bae037b).
+
 This page summarises the research into how mip levels should be built for each kind of texture, and how alpha-tested textures keep their shape at a distance. It was a review of published papers, engine documentation and tool source code, plus a few local tests made while building Tessalith.
 
 ## The questions
@@ -45,7 +47,7 @@ Averaging gamma-encoded values is not averaging light. With a 50/50 box under ga
 
 ### Building every level from the one before
 
-Almost every shipping tool builds level N from level N−1. For box at power-of-two sizes that is exact. For other kernels the error compounds: a repeated tent drifts toward a Gaussian, and a repeated Kaiser re-rings the previous level's overshoot. Local tests during development measured the cost of the recursive build against a direct Lanczos-8 reference at **1.1 to 2.7 dB for tent and 0.8 to 1.8 dB for Mitchell** ([DECISIONS](../DECISIONS.md), M6 Track C ruling S-mips-3).
+Almost every shipping tool builds level N from level N−1. For box at power-of-two sizes that is exact. For other kernels the error compounds: a repeated tent drifts toward a Gaussian, and a repeated Kaiser re-rings the previous level's overshoot. Local tests during development measured the cost of the recursive build against a direct Lanczos-8 reference at **1.1 to 2.7 dB for tent and 0.8 to 1.8 dB for Mitchell** ([DECISIONS](../../.claude/DECISIONS.md), M6 Track C ruling S-mips-3).
 
 ### Edges
 
@@ -105,14 +107,14 @@ Tessalith's coverage step rebuilds the idea of AlphaBloom's Auto Coverage (by tk
 
 The mip chain is in [`crates/engine/src/mips.rs`](../../crates/engine/src/mips.rs), the kernels in [`filter.rs`](../../crates/engine/src/filter.rs), coverage in [`coverage.rs`](../../crates/engine/src/coverage.rs), dilation in [`dilate.rs`](../../crates/engine/src/dilate.rs) and the normal bake in [`bake/mod.rs`](../../crates/engine/src/bake/mod.rs).
 
-- **Box is the default filter for every texture type** ([DECISIONS](../DECISIONS.md), S-mips-1).
+- **Box is the default filter for every texture type** ([DECISIONS](../../.claude/DECISIONS.md), S-mips-1).
 - **Tent, Mitchell and Kaiser are allowed only for sRGB colour whose alpha is not weighted.** Kaiser is fixed at width 3, α 4. These filters build each level directly from mip 0, with the kernel widened per level; box stays recursive, and alpha always uses the box (S-mips-2, S-mips-3, S-mips-4).
 - **Colour is filtered in linear light**, decoded with the exact sRGB curve (not a 2.2 power) in float32 ([`crates/engine/src/ops.rs`](../../crates/engine/src/ops.rs)). This depends on the content, not the DDS tag: a vanilla diffuse is filtered in linear light and still written UNORM.
 - **Edge mode defaults to wrap.** Only the non-box kernels read it.
-- **Every normal mip is renormalised.** In a TruePBR set, the `_n`'s variance goes into the `_rmaos` (or `_rfaos`) roughness with the vMF formula above, clamped at t = 0.25. A coat normal `_cnr` bakes into its own alpha. A footprint whose average length is 0.999 or more (about a 2° tilt) adds no variance, so quantisation noise adds no roughness ([DECISIONS](../DECISIONS.md) #6, Note E, M4 rulings R1 to R14 and M4-final-2). Vanilla `_n`, landscape `_n` and `_msn` are renormalised but never baked.
+- **Every normal mip is renormalised.** In a TruePBR set, the `_n`'s variance goes into the `_rmaos` (or `_rfaos`) roughness with the vMF formula above, clamped at t = 0.25. A coat normal `_cnr` bakes into its own alpha. A footprint whose average length is 0.999 or more (about a 2° tilt) adds no variance, so quantisation noise adds no roughness ([DECISIONS](../../.claude/DECISIONS.md) #6, Note E, M4 rulings R1 to R14 and M4-final-2). Vanilla `_n`, landscape `_n` and `_msn` are renormalised but never baked.
 - **Data maps use plain per-channel box mips.** Normals, `_msn`, `_flow` and roughness chains are never alpha-weighted (R11).
 - **Colour under alpha 0 is filled with a push-pull dilation before any filtering.** Colour with cutout or blend alpha uses an alpha-weighted box. Tessalith never writes premultiplied DDS files, because Skyrim blends straight alpha.
-- **Coverage preservation is on by default for `cutout` and `cutout_blend`**, with a per-texture threshold (default 127) and `>` as the test ([DECISIONS](../DECISIONS.md) Notes E and R13; [`presets/sdc-base.toml`](../../presets/sdc-base.toml)). Tessalith's solver differs from Castaño's uniform scale in three ways:
+- **Coverage preservation is on by default for `cutout` and `cutout_blend`**, with a per-texture threshold (default 127) and `>` as the test ([DECISIONS](../../.claude/DECISIONS.md) Notes E and R13; [`presets/sdc-base.toml`](../../presets/sdc-base.toml)). Tessalith's solver differs from Castaño's uniform scale in three ways:
   - it has no ×4 cap;
   - every level passes exactly `round(p · n)` texels, where p is mip 0's share; ties are split in a Bayer order of position, so thin strands neither overshoot nor vanish;
   - texels are remapped with a monotone curve (opaque stays opaque) and kept at least 2 codes clear of the threshold, so BC7's one- or two-code error cannot flip them.

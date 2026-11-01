@@ -118,7 +118,7 @@ done: 3 converted, 0 up to date, 0 skipped (0 on purpose), 0 failed, 0 failed va
 
 The three raw maps do not get lines of their own: they were consumed by the packed output and are not written separately, and they are not counted as skipped.
 
-Without `-o`, output goes to `.\sdc-out` in the current directory. The output folder is never read back as input, so it is safe to put it inside the source folder.
+Without `-o`, output goes to `.\sdc-out` in the current directory; it may sit inside the source folder ([why](Validation-and-Output.md#output-layout)).
 
 Check the exit code:
 
@@ -154,27 +154,27 @@ sdc inspect  C:\Work\IronPlate-out\textures\pbr\armor\ironplate\ironplate_rmaos.
 
 ### Step 6. Install
 
-Copy the contents of the output folder (everything except `_sdc`) into your mod, so the files land under `Data\textures\...`. A TruePBR set also needs a PGPatcher JSON that tells PGPatcher which meshes use it. The CLI does not write that JSON; the GUI does (Part 2).
+Install the output as [Installing the output](Validation-and-Output.md#installing-the-output) says. The CLI does not write the PGPatcher JSON a TruePBR set needs; the GUI does (Part 2).
 
 ## Part 2: the GUI
 
 The GUI runs the same engine and reads and writes the same `sdc.toml`, so you can switch between the two at any point.
 
-1. Start `tessalith.exe`. The start screen has one large **Open folder** button (and your recent folders below it). Click it and pick `C:\Work\IronPlate`, or drag the folder onto the window. The GUI reads the folder recursively, analyses every image and plans the conversion. Nothing is written yet.
-2. Check **Mode** in the header. It should read `cs`. Changing it writes `target` to `sdc.toml`.
+1. Start `tessalith.exe`. The start screen has one large **Open folder** button (and your recent folders below it). Click it and pick `C:\Work\IronPlate`, or drag the folder onto the window. Nothing is written yet.
+2. Check **Mode** at the top of the **Presets** tab (**Presets…** in the header's Preset menu). It should read `cs`. Changing it writes `target` to `sdc.toml`.
 3. The Textures column on the left shows a tile per file. The three raw maps show "Packed into ..." because they feed the `_rmaos`. A tile with an amber border is undecided. Click the **Undecided** pill above the tiles to see only those (**Filter ▾** has the other filters and the sort).
 4. Click a tile. The centre column shows its settings in groups (Type, Colour, Alpha, Mipmaps, Compression), and each value says where it came from. A sub-type the GUI accepted reads **(auto)**; hover it to see why.
 5. For an amber tile, answer the question shown in the centre column: the sub-type buttons, the alpha buttons (*Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*), *DirectX* or *OpenGL* for a normal map's green channel, or **Acknowledge for this texture** for a blocking warning. Each answer is written to `sdc.toml` as a `[files]` entry.
 6. Click the `ironplate` set in the Sets column on the right. Its card shows the set's status, its shader and a lettered chip per slot. The set editor shows a row for each slot (Diffuse, Normal, RMAOS and so on) and the set's **Shader**, which should read `pbr` (auto). On the RMAOS card you can set fills for missing channels; for this example set Specular to 128 to match the `sdc.toml` from Part 1.
 7. Fill in the TruePBR settings for the set (Material, Features and the rest) if you want values other than the defaults. Leave **Matching** on the diffuse path.
 8. Check **Export to** in the header (its menu has **Choose export folder…**). It reads **Export to: not chosen** until you choose a folder: use its **Choose export folder…**, or the **Choose the export folder…** button in Review. Each project remembers its own export folder. Set the **JSON:** name; by default it is the folder name.
-9. Press **Export**. The GUI saves `sdc.toml` and `sdc-project.toml` first, then converts. If something is blocked, undecided or worth a second look, the Review tab opens at the bottom first; fix or tick what it lists and press its Export. Then the Files tab shows each file, and the Problems tab lists the warnings.
+9. Press **Export**. If the Review tab opens first, fix or tick what it lists and press its Export ([Export](GUI-Review-and-Export.md#export)).
 10. When the export finishes, the GUI writes `<export folder>\PBRNIFPatcher\<name>.json` for every PBR set that exported fully.
 
-To get an equivalent command line, press **Copy CLI command** in the Files tab at the bottom. The copied command already has `--accept-suggestions high`, because the GUI accepts High-confidence suggestions and the CLI does not by default. Add `--nvtt <path>` if you use NVTT. Set edits made in the Sets column live in `sdc-project.toml`, which the CLI does not read; see [GUI guide](GUI-Guide.md#export).
+To get an equivalent command line, press **Copy CLI command** in the Files tab at the bottom. The copied command already has `--accept-suggestions high`, because the GUI accepts High-confidence suggestions and the CLI does not by default. Add `--nvtt <path>` if you use NVTT. Set edits made in the Sets column live in `sdc-project.toml`, which the CLI does not read; see [GUI guide](GUI-Review-and-Export.md#export).
 
 ## Where to go next
 
-- [GUI guide](GUI-Guide.md) for bulk editing, renaming, the 3D preview and the PGPatcher JSON editor.
+- [GUI guide](GUI-Guide.md) for bulk editing, renaming, the 3D preview and editing the PGPatcher JSON.
 - [Mod scanning](Mod-Scanning.md) to let the GUI learn alpha modes and shaders from the meshes that use your textures.
 - [Presets and targets](Presets-and-Targets.md) to switch to Vanilla output (with complex material `_m` maps if you want them), or to smaller BC1 files.

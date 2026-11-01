@@ -30,9 +30,9 @@ This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later. Its conv
 | [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, PGPatcher JSON editor, settings. |
 | [Texture types](Texture-Types.md) | Sub-types, file suffixes, naming, formats, packing and set shaders. |
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
-| [NIF editing](NIF-Editing.md) | Editing a mesh's shader, alpha, controllers and clips in the Meshes view, and exporting the edited NIF. |
+| [NIF editing](GUI-NIF-Edit.md) | Editing a mesh's shader, alpha, controllers and clips in the Meshes view, and exporting the edited NIF. |
 | [Host plugins](Host-Plugins.md) | Saving DDS from Photoshop, GIMP, Paint.NET and chaiNNer: install, options, HDR. |
-| [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools 3.2.5 as an optional BC7/BC6H encoder. |
+| [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools as an optional BC7/BC6H encoder. |
 | [Validation and output](Validation-and-Output.md) | What gets checked after encoding, the output layout, the manifest, re-run behaviour. |
 | [Troubleshooting](Troubleshooting.md) | Every diagnostic code, common errors, and the in-game checklist. |
 | [FAQ](FAQ.md) | Short answers to common questions. |
@@ -48,9 +48,8 @@ The product is called Tessalith, and the GUI program is `tessalith.exe`. The com
 | `tessalith` / `tessalith.exe` | Desktop application. |
 | `sdc.toml` | Project config file. |
 | `sdc-project.toml` | GUI-only set definitions, stored next to `sdc.toml`. |
-| `%APPDATA%\sdc\` | User config, user presets and GUI settings. |
-| `%LOCALAPPDATA%\sdc\scan.db` | Mesh and plugin scan database. |
-| `<output>\_sdc\manifest.jsonl` | Record of every file written. |
+| `%APPDATA%\sdc\`, `%LOCALAPPDATA%\sdc\` | Your settings, presets, scan database and logs ([list](Installation.md#where-tessalith-keeps-its-files)). |
+| `<output>\_sdc\manifest.jsonl` | Record of every file written ([manifest](Installation.md#where-tessalith-keeps-its-files)). |
 
 ## What Tessalith does with a folder
 
@@ -58,7 +57,7 @@ The product is called Tessalith, and the GUI program is `tessalith.exe`. The com
 2. Groups files into texture sets by base name (`rock01.png`, `rock01_n.png`, `rock01_rmaos.png` form one set).
 3. Works out a sub-type for each file from its suffix or name, for example `_n` is a normal map.
 4. Resolves the settings for each file from built-in defaults, the preset, your config files, rules and command-line overrides.
-5. Packs raw maps (roughness, metallic, AO and so on) into the packed layout the target expects.
+5. Packs raw maps into the packed layout the target expects ([packing](Presets-and-Targets.md#packed-maps-per-target)).
 6. Builds mipmaps, encodes with the chosen encoder, writes the DDS atomically.
 7. Decodes the result again and validates it, then records it in the manifest.
 

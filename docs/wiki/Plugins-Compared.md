@@ -60,7 +60,7 @@ See [Texture types](Texture-Types.md) for the packed layouts, the variance bake,
 
 - Texture sets: grouping by name, sub-types from suffixes, output paths.
 - Mod scanning: alpha and complex grass suggestions from your meshes and plugins ([Mod scanning](Mod-Scanning.md)).
-- The set editor, 3D set preview and TruePBR JSON editor ([GUI guide](GUI-Guide.md)).
+- The set editor, 3D set preview and PGPatcher JSON editor ([GUI guide](GUI-Guide.md)).
 - The command line, with a JSON event stream ([CLI reference](CLI-Reference.md)).
 
 Licences: see [Host plugins](Host-Plugins.md#licences).

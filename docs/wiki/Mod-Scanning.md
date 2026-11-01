@@ -8,10 +8,10 @@ Scanning is read-only and never changes your mods, your MO2 instance or your gam
 
 | Use | Where you see it |
 |---|---|
-| Alpha meaning of colour maps | A colour map whose alpha varies takes Blend, Cutout (at the strictest mesh threshold), Cutout + Blend or Remove from the meshes that use it. The Alpha row reads "from the meshes that use this texture". See [GUI guide](GUI-Guide.md#alpha-from-the-meshes). |
+| Alpha meaning of colour maps | A colour map whose alpha varies takes Blend, Cutout (at the strictest mesh threshold), Cutout + Blend or Remove from the meshes that use it. The Alpha row reads "from the meshes that use this texture". See [GUI guide](GUI-Texture-Panel.md#alpha-from-the-meshes). |
 | Set shader | When no map in the set decides it (PBR, Advanced skin, complex grass, complex `_m`, `_p`), the shader most of the scanned meshes use for the diffuse picks the set's shader. |
 | Complex grass | After a scan that included plugins, a texture that is the diffuse (slot 0) of a grass (GRAS) record's mesh gets a High-confidence `complex_grass` suggestion, which the GUI accepts, under either target. Only when nothing explicit (a rule, `--set`, `[files]` or a set shader) decided the sub-type, and the file passes the complex-grass shape tests (1:2, detection corner, unit normals). |
-| Path pickers | The input name box and its ▾ list, and the match pickers in the TruePBR JSON editor, list texture paths and mesh folders the scan found. |
+| Path pickers | The input name box and its ▾ list, and the match pickers in the PGPatcher JSON editor, list texture paths and mesh folders the scan found. |
 | Rename warnings | Renaming an output that scanned meshes still use under its old name (as the diffuse, slot 0) is flagged amber. PBR sets under `cs` are not flagged. |
 | 3D preview | *Auto* in the set preview shows the set on a scanned game mesh that uses its diffuse. |
 | Plugin references | The set editor's "Used by plugins" and the Meshes view's "Plugin file references…" window. |
@@ -42,7 +42,7 @@ If you start `tessalith.exe` from inside MO2, it detects that and asks: "Opened 
 
 ### Running a scan
 
-Press **Scan**. Progress shows on the scan row; **Cancel** stops it. Cancelling during the plugin pass keeps the mesh results and notes that plugin results are incomplete until the next scan.
+Press **Scan**. Progress shows on the scan row (in both views) as the phase and its count, for example `reading 120/4000 · ETA 0:42`; **Cancel** stops it. The ETA appears once the phase has finished 3 items or run for 2 seconds; it is the average over the last 10 seconds, as in the Files tab, and starts over with each phase. Cancelling during the plugin pass keeps the mesh results and notes that plugin results are incomplete until the next scan.
 
 The scan skips FaceGen meshes and LOD meshes. Meshes that are neither Skyrim SE nor Skyrim LE NIFs are counted and skipped. Meshes from Skyrim LE are read but not drawn in the 3D preview.
 
@@ -69,37 +69,7 @@ Banners about PGPatcher:
 
 ## The Meshes view
 
-Switch to it with the **Meshes** tab in the header.
-
-### Scan details
-
-The scan row's **Scan details** lists what the last scan found and any notes (missing mod folders, archive notes, meshes that failed to read).
-
-### Meshes
-
-The left column is one flat list of meshes: one row per mesh path, showing the copy that wins in game. Each row has the path (without `meshes/`; hover for the full path), the mod it comes from, and its chips.
-
-- **Search paths and mods** narrows the list to rows whose path or mod name holds the text (case does not matter, `\` and `/` are the same).
-- **Any mod** picks a mod instead: the list then shows every copy that mod has, winning or not. Only mods with meshes are offered; PGPatcher's output mod is not, and its copies show under **Any mod**.
-- **This project N** (with a texture folder open; on the first time that folder opens, then as you left it for that folder): when the folder is one of the instance's mods, only the meshes with a copy in it, whatever wins (a row another mod wins shows your mod, with "wins: <mod>" on hover); when it is not, only the meshes that use one of the folder's output textures (`textures\pbr\` paths count as their plain twin, and back). No such mesh, no pill. It combines with the filters, the search and the mod picker, and never deselects.
-- Mesh filters: *All*, *Wins* (only with a mod picked), *Overridden* (under **Any mod**: every copy that loses, with its own mod), *Conflicted* (more than one copy), *Problems* (a problem or a Skyrim LE mesh).
-- Chips on each mesh, warnings first: **Problem**, **Stale patch** (PGPatcher patch out of date), **LE** (a Skyrim LE mesh), a status chip (**Wins**, **In game** for a mesh PGPatcher patched in game, or **Overridden**), **PGPatcher** (a patched copy), and the mod's **Generated** (by PGPatcher), **BSA** or **game Data** chip. Hover the chips to see them all in full.
-- **Show in Meshes** under a texture's **Used by meshes** opens this view with a **Uses <texture> ✕** chip: only the meshes that use that texture are listed. **✕** shows them all again. While a scan runs, or after one that did not complete, the chip waits for a completed scan before it cuts the list.
-- The filters only hide rows: the selected mesh stays selected, and the count line says when the filters hide it.
-
-### Mesh detail
-
-Select a mesh to see:
-
-- **In game** / **Source**: the copy that wins in game, or the source mod's copy of a PGPatcher-patched mesh.
-- **Shapes**: the list column is titled **NIFs**, and the **Shapes of <file>** button next to the title swaps the list for the selected mesh's shape cards: number and type, shader, SLSF1/SLSF2 flags by name, geometry, alpha in words (blend, test, threshold) and the texture slots (numbered from 1 like the set editor; hover for the NIF's own index), with **Open in Textures** for files in the open folder. The right pane shows the mesh in 3D.
-- **Plugin overrides**: plugin records that use this mesh. **Show inert** includes records that have no effect.
-- Override and conflict information ("Overridden by …").
-- **Edit**: opens the mesh for editing. See [NIF editing](NIF-Editing.md).
-
-### Plugin file references
-
-**Plugin file references…** opens a window listing files that plugins reference: *Missing* (referenced but not found, with **Show inert**) and *Unused*, with **Copy**. The button is there whenever a scan database is open. After a folder scan, which reads no plugins, the window says "Plugins were not read in the last scan".
+The mesh list, mesh detail, shapes and plugin file references are on [The Meshes view](GUI-Meshes.md).
 
 ## Error messages
 

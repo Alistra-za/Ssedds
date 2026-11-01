@@ -44,9 +44,9 @@ log(`Preflight ok: ${pre.free_gb} GB free; conflicts: ${pre.conflicts.join(', ')
 phase('Merge')
 const merged = await agent(
   `Merge ${a.branch} into ${INTO} with \`git merge --no-ff ${a.branch}\` (message: "Merge ${a.branch}: <one-line summary of the branch>" plus a blank line and \`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\`). ${SHELL}
-Conflicts allowed here: docs/DECISIONS.md and .gitignore only, where both sides append at the end — keep both sides, the branch's block after ${INTO}'s. Preserve CRLF line endings.
+Conflicts allowed here: .claude/DECISIONS.md and .gitignore only, where both sides append at the end — keep both sides, the branch's block after ${INTO}'s. Preserve CRLF line endings.
 Note letters: if the branch's note letters collide with ones already on ${INTO} (${pre.note_collisions.join(', ') || 'none expected'}), rename the branch's note to the next free letters and update its item ids (XX1, XX2…) and any references to them in the branch's own changes.
-Then check \`grep -oE '^## Note [A-Z]+' docs/DECISIONS.md | sort | uniq -d\` prints nothing.
+Then check \`grep -oE '^## Note [A-Z]+' .claude/DECISIONS.md | sort | uniq -d\` prints nothing.
 If any other conflict appears, run \`git merge --abort\` and report. Return the merge commit hash or the reason you stopped.`,
   { label: 'merge', phase: 'Merge', schema: {
     type: 'object',

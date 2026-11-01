@@ -11,7 +11,7 @@ use engine::presets::AlsoTarget;
 pub const JSON_EDITOR: &str = "PGPatcher JSON editor…";
 /// The Export to ▾ entry that opens the marker cube dialog (cubemap GUI, Task 6).
 pub const MAKE_MARKER: &str = "Make marker cube…";
-/// Export's width: twice what it was (Note BH3).
+/// Export's width; Note CD1 puts it beside Save at the right edge.
 const EXPORT_WIDTH: f32 = 240.0;
 /// CF12: the export bar's fraction as drawn: it glides linearly to `frac` over 0.3 s (at once under reduce motion). A
 /// new export (a new `drawer_epoch`) is a new animation, whose first frame is its own value, so it never sweeps back.

@@ -369,7 +369,7 @@ pub fn cli_command(root: &Path, export: &Path, bc1: Bc1Choice, jobs: usize) -> S
     c
 }
 
-// ---- Task 5: progress line, Files filters and caches (DECISIONS AG35-AG38) ----
+// ---- Task 5: progress line, Files filters and caches (DECISIONS AG35-AG37, AG39) ----
 
 /// The files/s average looks back this far.
 pub const RATE_WINDOW: Duration = Duration::from_secs(10);

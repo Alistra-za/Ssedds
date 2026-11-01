@@ -54,7 +54,7 @@ Suffixes are matched case-insensitively, longest first, so `_msn` wins over `_n`
 
 A set is a PBR set (under `cs`) when its path has a `pbr` folder, or it has an `_rmaos`, `_rfaos`, `_cnr` or `_f` member, or it has a raw roughness, glossiness, metallic or AO map. A set is an Advanced skin set when it has or builds an `_rfaos`; a set whose shader you set to Advanced Skin (GUI, or `--set set:<id>.shader=advanced_skin`) builds one unless `packing.recipe` says otherwise or it has only a metallic map, and its diffuse is `skin_albedo` either way (also when written as plain `diffuse`). In the GUI, pinning the set's Diffuse slot turns this off: the set then reads and packs as it would without the shader choice, unless its diffuse is already written as `skin_albedo`. In an Advanced skin set a plain `_f` is the skin fuzz mask: a greyscale map packed into the `_rfaos` G channel and not converted on its own. A `_f` never makes a set Advanced skin by itself, and one you give a sub-type converts alone as fuzz.
 
-Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI, and on the command line with `--accept-suggestions high`.
+Medium and Low suggestions always need your confirmation. High suggestions are applied automatically in the GUI; for the command line see [`--accept-suggestions`](CLI-Reference.md#why---accept-suggestions-high-matters).
 
 A file whose name does not fit these rules is read as a colour map. A normal map saved as `rock_nm.png` would become a diffuse. Fix it by renaming, by an `[inputs]` alias, or by setting `subtype` in a `[files]` entry.
 
@@ -73,16 +73,16 @@ Tessalith also understands the names that texturing tools commonly export:
 | `_roughness`, `_rough` | Raw roughness | packed |
 | `_metallic`, `_metalness`, `_metal` | Raw metallic | packed |
 | `_ao`, `_ambientocclusion`, `_occlusion` | Raw AO | packed |
-| `_orm` | Channel-packed AO (R), roughness (G), metallic (B) | packed |
+| `_orm` | Channel-packed AO, roughness and metallic ([channels](Texture-Packing.md#packing-raw-maps)) | packed |
 | `_specular`, `_spec` | Raw specular | packed |
 | `_glossiness`, `_gloss` | Raw glossiness | packed (inverted into roughness) |
 | `_height`, `_displacement`, `_disp` | Raw height | packed |
-| `_opacity` | Raw opacity | the colour texture's alpha ([helper](#helper-textures)) |
+| `_opacity` | Raw opacity | the colour texture's alpha ([helper](Texture-Packing.md#helper-textures)) |
 | `_fuzz`, `_sheen` | Raw fuzz | packed |
 | `_curves`, `_curvature` | Raw curvature (0.5 is flat) | read only by Also export as (Vanilla / Complex material) |
 | `_cavity` | Raw cavity | read only by Also export as (Vanilla / Complex material) |
 
-A normal map named only `_normal`, `_nrm` or `_norm` does not say which way its green channel points. Tessalith assumes DirectX, which is what Skyrim uses, converts it without a flip and notes `IN-GREEN-UNSTATED` as information. If the map is OpenGL, set `channels.green_convention = "opengl"` on the file (the GUI offers a *Treat as OpenGL* button on that note) or name it `_normalgl`.
+A normal map named only `_normal`, `_nrm` or `_norm` does not say which way its green channel points. Tessalith assumes DirectX, which is what Skyrim uses, converts it without a flip and notes `IN-GREEN-UNSTATED` as information. <!-- D:AW1 --> If the map is OpenGL, set `channels.green_convention = "opengl"` on the file (the GUI offers a *Treat as OpenGL* button on that note) or name it `_normalgl`.
 
 You can add your own suffixes through a preset's `suffix_aliases`. See [Presets and targets](Presets-and-Targets.md#suffix-aliases).
 
@@ -113,15 +113,15 @@ There are 30 sub-types in five categories.
 | `height` | Grayscale | BC4 | UNORM | remove | Parallax height (`_p`). |
 | `msn_specular` | Grayscale | BC4 | UNORM | remove | `_s` beside an `_msn`. |
 | `skin_sk` | Grayscale | BC4 | UNORM | remove | `cs` Advanced skin; red channel only. |
-| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Under every target (Note AT). |
+| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Under every target. |
 | `rmaos` | MixedPacked | BC7 | UNORM | data | `cs` only. |
 | `skin_rfaos` | MixedPacked | BC7 | UNORM | data | `cs` only. Also accepted as `rfaos`. |
 | `flow` | MixedPacked | BC5 | UNORM | remove | `cs` only. Hair flow; at 32 px or less CS ignores it (`DIM-FLOW-SMALL`). |
 | `generic_two_channel` | MixedPacked | BC5 | UNORM | remove | |
 | `generic_data` | MixedPacked | BC7 | UNORM | data | Use for any data map Tessalith has no type for. |
-| `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](#complex-grass). |
+| `complex_grass` | MixedPacked | BC7 only | UNORM only | cutout (when the alpha varies) | Always BC7 UNORM at its own size. See [Complex grass](Set-Shaders.md#complex-grass). |
 | `hdr_sky` | Hdr | BC6H | n/a | | `cs` only. |
-| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube: six faces, a cross, a strip, a 360° panorama, a mirror ball, an angular map or a single photo in, one cube DDS with a full mip chain out. BC1, BC3, BC7 or RGBA8 only. Colour is the game's 1.6 curve, not sRGB. See [Cubemaps](Cubemaps.md). |
+| `cubemap` | Color | BC7 (BC1 for `vanilla_metal` and `room`) | UNORM | remove | An `_e` environment cube ([Cubemaps](Cubemaps.md)). BC1, BC3, BC7 or RGBA8 only. |
 
 Notes on the defaults:
 
@@ -147,264 +147,12 @@ The full list of format, tag and target rules is on [Presets and targets](Preset
 | RG8 | `rg8` | Uncompressed, two channels | |
 | RGBA16F | `rgba16f` | Uncompressed half-float | `cs` only. |
 
-Encoders: bc7e for BC7, rgbcx for BC1/BC3/BC4/BC5, the ISPC Texture Compressor for BC6H. NVTT can replace bc7e and the ISPC encoder for BC7 and BC6H; see [NVTT backend](NVTT-Backend.md).
+Which encoder each format uses is in [Format and encoder](Project-Config.md#format-and-encoder); see also [NVTT backend](NVTT-Backend.md).
 
-## Packing raw maps
+## Packing, helpers and shaders
 
-Raw single-channel maps (from the exporter names above) are not converted on their own. They are packed into the layout the target reads. One source per role is used; if a set has two roughness maps, the first by path wins and the other is reported as `PACK-UNUSED-INPUT`.
-
-An `_orm` file counts as three raw maps at once: AO from its R channel, roughness from G and metallic from B. Every recipe below that reads roughness, AO or metallic takes them from it. A separate map for the same slot (an `_roughness` next to the `_orm`) wins that slot; an info note, `PACK-ORM-OVERRIDDEN`, says so. The same note says when an `_rfaos` (which has no metallic channel) leaves the `_orm` metallic unused. Slots an `_orm` does not hold (specular, height, fuzz) come from their own maps, the fill, or the default, as usual. So an `_rmaos` built from an `_orm` alone has `packing.fill.specular` in alpha, or 1 when no fill is set.
-
-### Community Shaders (`cs`)
-
-`_rmaos` is built when the set has a roughness, glossiness, AO or metallic map:
-
-| Channel | Source | Default when missing |
-|---|---|---|
-| R | roughness, or 1 minus glossiness | `packing.roughness_default` (0.5) |
-| G | metallic | 0 |
-| B | AO | 1 |
-| A | specular | 1 |
-
-`_rfaos` (Advanced skin) replaces it when a fuzz map exists or the set's shader is set to Advanced Skin (`packing.recipe = "auto"`), or always with `packing.recipe = "rfaos"`:
-
-| Channel | Source | Default when missing |
-|---|---|---|
-| R | roughness, or 1 minus glossiness | 0.5 |
-| G | fuzz | 0 |
-| B | AO | 1 |
-| A | specular | 1 |
-
-`packing.recipe = "rfaos"` on a set that only has a metallic map builds an `_rmaos` instead (`PACK-RECIPE-UNBUILDABLE`).
-
-`_p` is built from a raw height map.
-
-### Vanilla, complex material set
-
-Under `vanilla`, a set whose shader is complex material (picked in the GUI, `--set set:<id>.shader=complex_material`, or chosen automatically because the set already has a complex-material `_m` file) builds the complex `_m` when it has a roughness, glossiness, metallic, height or `_orm` map. If the set already has an `_m` file, that file still wins unless `packing.prefer = "raw"`.
-
-| Channel | Source | Default when missing |
-|---|---|---|
-| R | environment: metallic, else specular | 0 |
-| G | glossiness, or 1 minus roughness | 1 minus `roughness_default` |
-| B | metallic | 0 |
-| A | height | 0 |
-
-### Vanilla, any other set
-
-`_m` is a BC4 environment mask, built from metallic (else specular) only when one of them exists. Other raw maps are not used (`PACK-UNUSED-INPUT`).
-
-The recipe id of the complex `_m` in events and manifests is `cpm_m`, a name kept from the removed `cpm` target.
-
-### Fills and defaults
-
-A channel with no source gets the neutral default and a `PACK-DEFAULTED` warning that names the output and the channel. To choose the value yourself, set a fill (0 to 255) on the packed output:
-
-```toml
-[files."textures/armor/iron/iron_rmaos"]
-packing.fill.metallic = 255     # fully metallic
-packing.fill.specular = 128
-```
-
-or for a whole run with `--fill metallic=255`. In the GUI, set it on the packed output's card in the set editor.
-
-If a set has both a ready-made packed file (`iron_rmaos.png`) and raw maps for it, the packed file wins and the raw maps are reported (`PACK-CONFLICT`). Set `packing.prefer = "raw"` to build from the raw maps instead. All sources of one recipe must be the same size (`PACK-SIZE-MISMATCH` otherwise). Set `packing.enabled = false` to leave the raw maps alone (`IN-PACKING-INPUT`).
-
-## Helper textures
-
-A **helper** is a source file that fills one channel of another output of its own set and is never written as its own DDS: the raw maps above, an opacity map, the RNM layers below, and fuzz or subsurface weight maps you mark by hand. The GUI lists every helper in a Helpers group under the tiles (see the [GUI guide](GUI-Guide.md#textures-left)); the CLI reads the same settings from `sdc.toml` ([Project config](Project-Config.md#files)), so both write the same bytes.
-
-| Role (`helper.role`) | Suggested target | Also offered |
-|---|---|---|
-| Opacity (`opacity`) | the colour texture's alpha (`diffuse.a`) | packed channels |
-| Specular (`specular`) | the `_n` alpha of a non-PBR set (`n.a`), plus its packed channel as above (`_rmaos` A, or `_m` R under vanilla) | other packed channels |
-| Fuzz weight, PBR (`fuzzweight`) | the PBR `_f` alpha (`f.a`) | packed channels |
-| Subsurface weight, PBR (`subsurfaceweight`) | the PBR `_s` alpha (`s.a`) | packed channels |
-| Roughness, glossiness, metallic, AO, height, fuzz mask (skin), `_orm`, curvature, cavity | the packed channels of the tables above, unchanged | any planned alpha target; the `_cnr` alpha (`cnr.a`, coat roughness) is offered but never suggested |
-| Bump, detail normal and the other RNM layers | the base normal, by `rnm.target` (below) | none (Read from and Invert do not apply) |
-
-Fuzz weight and subsurface weight have no file-name term: a file is one only when you set its role.
-
-**Alpha targets.** The colour texture's alpha is a `diffuse`, `pbr_albedo` or `skin_albedo` file of the set (never complex grass, a UI/sky texture or a landscape diffuse); `n.a` is a plain `normal` (so never a PBR `_n`); `f.a` is `pbr_fuzz`, `s.a` `pbr_subsurface`, `cnr.a` `coat_normal`. A target must be planned under the active target: under `vanilla` there is no `_f`, `_s`, `_cnr` or `_rmaos`, so a fuzz-weight helper reads "not used: no _f planned under vanilla". Cubemaps and the outputs of Also export never take a fill. A helper never creates an output, except the packed ones (`_rmaos`, `_rfaos`, `_m`, `_p`), as before.
-
-**Which data wins.**
-- A **suggested** helper (its role and targets come from its name) fills an alpha only when that alpha is empty in the source: no alpha, fully opaque, or one flat value. A colour PNG with a real alpha keeps it, and the helper reads "not used: x.png already has alpha".
-- An **assigned** helper (you set its role or its targets) always replaces what the channel holds, a PNG's own alpha included.
-- Two helpers on one channel: an assigned one beats a suggested one; otherwise the first by path wins, and the other reads "`<target>` is filled by `<winner>`".
-- A value fill (`packing.fill.*`) applies only when no helper fills the channel.
-
-**Sizes.** A suggested alpha fill whose helper is not the target's size is skipped ("512x512, target 1024x1024: sizes differ"). An assigned one fails the target with `PACK-SIZE-MISMATCH`, naming both sizes. Packed channels keep their rule: every source of a recipe must be the same size.
-
-**The fill comes first.** The helper's channel is written into the target before the target is analysed, so alpha policy, format choice, alpha-coverage mips and cutout handling all see the filled alpha, exactly as if the source had carried it. A diffuse that would be BC1 can therefore move to an alpha format. Only the alpha comes from the helper; the target keeps its own bit depth.
-
-**Read from and Invert.** `helper.read` picks the helper's channel: `r`, `g`, `b`, `a` or `luma` (Rec. 709 luminance). Unset reads R (or luminance where a recipe already does); A is never picked by itself. `helper.invert = true` flips whatever the channel would otherwise read (one minus the value), for an inverted mask. In a packed channel it flips on top of the recipe's own conversion: a glossiness source feeding roughness (or the reverse) is already inverted, so a gloss map needs `helper.role = "glossiness"` and no Invert; Invert there would write gloss into the roughness channel. An alpha fill has no automatic conversion, so Invert is its only flip. A helper with an explicit read is not reported for colour in a greyscale slot (`CHAN-NOT-GRAY`).
-
-**Not a helper.** `helper.role = "none"` makes the file an ordinary texture again, converted on its own. Any other `helper.role` makes a file a helper even when its name or sub-type says otherwise. Roles apply to image sources, not DDS files. A file you give a role that has no known suffix (`iron_mask.png`) joins the set of its name without the last `_part` (`iron`) when that set exists.
-
-A helper that fills nothing is reported, never a failure: `PACK-UNUSED-INPUT` (or `IN-PACKING-INPUT` with packing off), and "not used: <reason>" on its GUI row. `packing.enabled = false` stops packed outputs only: alpha fills still apply. `--on-existing if-changed` re-encodes an output when its helper, or the helper's read or invert, changes.
-
-## Variance bake
-
-In a `cs` PBR set with an `_n` and an `_rmaos` or `_rfaos`, the detail that the normal map loses in each smaller mip is added to the roughness mips, so distant surfaces do not look too shiny. The amount is limited by `mips.bake_clamp`. A `_cnr` bakes its own detail into its coat roughness.
-
-The bake needs both files in the batch, with power-of-two sizes of the same aspect. If not, it is skipped and reported: `SET-MISSING-COMPANION`, `SET-COMPANION-OUTSIDE` (the companion is on disk but not in the batch), `SET-COMPANION-DDS` (the companion only exists as DDS) or `SET-BAKE-RATIO`. A shared `_rmaos` (borrowed by several sets in the GUI) is never baked.
-
-## RNM normal layers
-
-A set can add detail normal maps that are blended into its base normal (`_n`, or `_cnr`) with reoriented normal mapping before the mips are built. Layer files are never written on their own; they are [helpers](#helper-textures), listed as helper rows in the GUI.
-
-| Layer | File suffixes | Mask suffixes | Default strength |
-|---|---|---|---|
-| bump | `_bump` | `_bumpmask`, `_bump_mask` | 0.4 |
-| bump2 | `_bump2` | `_bumpmask2`, `_bump2_mask` | 0.4 |
-| detail | `_detailnorm`, `_detail` | `_detailnormmask`, `_detail_mask` | 0.6 |
-| detail2 | `_detailnorm2`, `_detail2` | `_detailnormmask2`, `_detail2_mask` | 0.3 |
-| bent | `_bent` | `_bentmask`, `_bent_mask` | 0.35 |
-
-Any of these can be prefixed `n_` or `cnr_` (for example `iron_cnr_bump.png`) to say which base it feeds. Without a prefix it feeds `_n`, or `_cnr` when the set has no `_n`. Override with `rnm.target` on the layer file.
-
-The default blend order is bent, bump, bump2, detail, detail2. The `bent` layer by default weights itself by occlusion read from a raw `_ao` map, the R channel of an `_orm`, or the B channel of `_rmaos`/`_rfaos`; supply normal AO (white = open), Tessalith inverts it.
-
-How the layers are blended (code: `crates/engine/src/rnm/`):
-
-- **Method:** RNM for `_bump`, `_bump2`, `_detailnorm` and `_detailnorm2`. Bump layers are height maps: slopes taken from the mean of RGB become normals first.
-- **Bent:** `_bent` defaults to an AO blend: a renormalised linear mix weighted by strength × (1 − AO)^1.5 × mask. AO comes from `_ao` (R) or `_rmaos`/`_rfaos` (B). With no AO map the weight is uniform and `RNM-AO-MISSING` is reported. `rnm.bent.mode = "detail"` blends it with RNM instead.
-- **Strength:** it scales the layer's slope (0 is flat, 1 is as authored). A mask's R channel scales it per texel. `rnm.order` moves the layers it lists to the front.
-- **Where:** into the set's `_n` or `_cnr`, after decode and green flip, before mips. Layers are resampled to the base size. Alpha is untouched, so `_cnr` coat roughness passes through. The TruePBR roughness bake reads the blended normal.
-- **Bent default assumption:** the defaults assume `_bent` is a high-to-low mesh bake from the same normal source. It then holds all the detail the normal has, and the mask only reduces the AO strength. When that is not true, mix it differently (see `rnm.bent.mode`).
-
-Ways to put a detail normal on a base normal, and why RNM is used:
-
-| Method | How it combines | Preserves | Artifacts | Cost | Use for |
-|---|---|---|---|---|---|
-| Linear / overlay | Per-channel add or overlay, renormalise | Neither map exactly | Flattened detail; overlay treats vectors as colour | Lowest | Faint detail, previews |
-| Partial derivative (PD) / UDN | PD adds slopes (xy/z); UDN adds xy, keeps base z | Slopes at small angles | UDN flattens detail; both lose accuracy as the base tilts | Low | Real-time multi-layer shaders |
-| Whiteout | Adds xy, multiplies z, renormalise | More detail than UDN | Still approximate on steep bases | Low | Cheap shader blends |
-| RNM (Barré-Brisebois and Hill) | Rotates the detail into the base normal's frame | Detail as seen on the tilted surface; flat inputs leave the other unchanged | None in normal use; needs unit vectors | A little more | Highest quality: baking or high-end shaders |
-
-Settings are in [Project config](Project-Config.md#rnm-normal-layers). `sdc inspect` prints one `rnm` line per layer. Codes: `RNM-NO-BASE`, `RNM-IGNORED-EYE` (eye normals are model-space), `RNM-MASK-ORPHAN`, `RNM-LAYER-SHADOWED`, `RNM-AO-MISSING`.
-
-## Set shaders
-
-Each set is made for one Skyrim shader. The shader decides which maps the set should have, and it can change some members' types and settings.
-
-| Shader | Required maps | Optional maps |
-|---|---|---|
-| `pbr` | albedo, `_n`, `_rmaos` | `_g` emissive, `_s` subsurface/coat, `_cnr`, `_f`, `_p` |
-| `pbr_landscape` (cs only) | albedo (or landscape diffuse), `_n` | `_rmaos`, `_p` |
-| `advanced_skin` | skin albedo, `_n`/`_msn`, `_rfaos` | `_sk`, `_wet` |
-| `default` | diffuse, `_n` | `_b`/`_bl` |
-| `envmap` | diffuse, `_n` | `_m`, `_e` |
-| `complex_material` | diffuse, `_n`, complex `_m` | `_e` |
-| `glow` | diffuse, `_n`, `_g` | |
-| `parallax` | diffuse, `_n`, `_p` | |
-| `skin` | diffuse, `_n`/`_msn` | `_sk`, `_s` (with `_msn`) |
-| `hair` | diffuse, `_n` | `_flow` (`cs` only; vanilla hair does not read it) |
-| `eye` | diffuse, `_n` (model-space) | `_sk`, `_m`, `_e` |
-| `multilayer` | diffuse, `_n`, `_i` | `_m`, `_e`, `_b` |
-| `landscape` | diffuse, `_n` | |
-| `complex_grass` | the complex-grass texture | |
-
-A missing required map gives `SHADER-MISSING-MAP`; a member the shader does not use gives `SHADER-EXTRA-MAP`. Both are warnings, and extra members still convert.
-
-### How the shader is picked
-
-You can pick a set's shader in the GUI's set editor, or with `--set set:<id>.shader=<shader>`. Otherwise the first rule that fits decides (`SHADER-AUTO` says which):
-
-1. Advanced skin members or an `_rfaos`: `advanced_skin`.
-2. A PBR set or PBR members: `pbr_grass` when a grass record uses the albedo (GUI, after a scan with plugins); under `cs`, `pbr_landscape` when the set is under `textures/landscape/`, has a `landscape` folder in its path, or has a Community Shaders texture-set block (GUI); otherwise `pbr`.
-3. A complex-grass member: `complex_grass`.
-4. A complex `_m`: `complex_material`.
-5. A `_p`: `parallax`.
-6. In the GUI, after a mesh scan: the shader most of the meshes using the diffuse have (a strict majority).
-7. An `_m` env mask: `envmap`.
-8. `_g`: `glow`. `_i`: `multilayer`. `_sk`: `skin`. `_flow`: `hair`, on both targets, unless the path has a `water` or `landscape` folder.
-9. A `hair` folder in the path: `hair`. An `eyes` folder: `eye`.
-10. Landscape textures: `landscape`.
-11. Otherwise `default`.
-
-A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
-
-### What a shader changes
-
-| Shader | Effect on members |
-|---|---|
-| `hair` | Diffuse: `alpha.policy = "cutout_blend"` (cutout + blend) and `mips.coverage = "on"`. |
-| `eye` | `_n` becomes `msn` (model-space). `_m` is BC4. |
-| `landscape` | Colour becomes `landscape_diffuse` (alpha is the snow mask). |
-| `pbr_landscape` | Nothing: members convert exactly as under `pbr`. |
-| `multilayer` | Diffuse alpha is `data`. |
-| `envmap` | `_m` is BC4. |
-| `parallax` | `_p` is BC4. |
-| `complex_grass` | Colour becomes `complex_grass`. |
-
-In the GUI, when a sub-type changes this way, a format or tag you set that the new type does not allow is reset to the new type's default. On the command line the value you set stays, and the file is blocked or reports an error.
-
-### Gloss bake for a complex `_m` (opt-in)
-
-The same bake can also feed a complex-material `_m`'s green channel (its glossiness). It is off by default. Set `mips.normal = "renormalize_bake"` (the GUI's *Normal handling: Renormalise and bake*) on the set's `_n` to turn it on: every smaller mip of the `_m` gets the detail its normal map loses, so distant surfaces shimmer less. Mip 0 is not changed unless the normal is larger than the `_m`. Without the setting the `_m` is written as before. It needs the `_n` in the batch with power-of-two sizes of the same aspect, and otherwise reports `SET-BAKE-RATIO` and writes the `_m` unbaked. The choice lives in `sdc.toml`, so the CLI writes the same bytes. A project that already had this value on a vanilla `_n` changes its complex `_m` on the next export.
-
-## Height maps and the artist checks
-
-The Parallax check judges a height map against the neutral height (the value that shifts nothing) for the set's shader. White is raised and black is deepest on every path.
-
-| Path | Neutral | Where the height lives |
-|---|---|---|
-| Vanilla parallax | 0.5 | `_p`, red |
-| Complex material | 0.5 | `_m` alpha. Parallax is on only where alpha is strictly between 4/255 and 251/255; 4/255 or less keeps complex material on with no parallax |
-| PBR parallax | 0.5 | `_p`, red |
-| PBR multilayer with inner-layer (coat) parallax | 1.0 (white); black is the deepest recess and nothing is raised | `_p`, red |
-| Landscape, vanilla and PBR | 0.5 per layer | The layer alpha or displacement map |
-| Vanilla multilayer | Not a height map: the layer texture's alpha is a depth, so the height checks are skipped | The layer texture's alpha |
-
-A mostly white `_p` is normal for the coat path and a warning on the 0.5 paths. Landscape sets whose `displacementScale` differs by more than 2x from the others are flagged too (`CHK-PARALLAX-SCALE`).
-
-Other things the checks look at:
-- **Green direction.** A normal map that curls like OpenGL when it is read as DirectX gets the Info hint `CHK-GREEN-GUESS`, which suggests *Treat as OpenGL (flip green)* and never flips by itself. The test is weak on straight ridges, so look at the map. A blue channel that points the wrong way raises `CHK-Z-SIGN`.
-- **Plastic `_n` alpha.** On a vanilla `_n` the alpha is the specular. If it is missing or almost all white (at least 95 % of texels at 250 or more), the surface may look plastic (`CHK-PLASTIC`). It never fires on `pbr_normal` or `_msn`. Community Shaders does not read that alpha on hair or Advanced Skin, and the message says so.
-- **`drop_top_mip`.** A per-file field (`[files."up.png"] drop_top_mip = true`, or `--set file:<glob>.drop_top_mip=true`) that writes mip 1 as the top level: half the size, one level fewer. It is off by default and absent from the profile hash then, so existing outputs do not change. A level is dropped from what is written only, so a PBR set's `_rmaos` bake is the same. It does nothing on a texture with no mip chain. The GUI writes it from Review's half-size question (when you press Export) and from Advanced → Half size.
-
-## Generated height maps
-
-The GUI can integrate a set's normal map into a height map (**Generate from normal map…**). The result is an ordinary source file next to the normal:
-
-| File | Used as |
-|---|---|
-| `<base>_p_generated.png` | The set's `_p` |
-| `<base>_height_generated.png` | The raw height packed into a complex material `_m` alpha (vanilla target) |
-| `<base>_ao_generated.png` | The AO packed into the `_rmaos` blue channel (PBR sets, `cs` target only) |
-| `<base>_curves_generated.png` | The set's `_curves` (read only by Also export) |
-
-- 16-bit grey PNG. `_generated` after a generated role (`_p`, `_height`, `_ao`, `_curves`) is stripped when grouping, so the file joins its set by its base name.
-- **Two ranges:** 0.5 is "no shift" (Parallax, PBR, complex material, landscape); 1.0 is "no shift" for PBR multilayer with inner-layer parallax, where white is the top and nothing is raised. The `_m` alpha is kept strictly between 4/255 and 251/255 so parallax stays on.
-- **A real map always wins.** A real `_p`, `_height` or other height source for the same slot makes the generated file skipped with `GEN-REPLACED` (Info), never `IN-DUPLICATE` or `PACK-CONFLICT`. An earlier export of the generated `_p` sitting in the input folder is not a rival.
-- **Side effect:** a `_p` wins the shader auto-pick, so a default set becomes Parallax and PGPatcher patches its meshes; on a TruePBR set the `parallax` key turns on by itself (Note AJ).
-- `GEN-STALE` (Info, GUI only) marks a generated file whose normal, neutral or shader changed since; it shows on the slot row's hover, never as a problem.
-- **Generated AO** holds raw visibility (1 = open), with no strength baked in. A real `_ao` wins over it, and so does a pre-packed `_rmaos`/`_rfaos` image whose blue channel already holds AO (or one beside a loose roughness, metallic, specular or `_orm`). A pre-packed image whose blue is flat white gets the generated AO in B, with R, G and A kept from the image. It is written at the size of the set's other `_rmaos` sources, so the packed `_rmaos` has one size, and `GEN-AO` (Info) replaces `PACK-DEFAULTED` for blue. A baked AO is better; a generated one cannot see the broad cavity shading a bake gives. If the set's normal has an RNM bent layer, the bent layer is weighted by this AO too, so the normal map changes.
-- **Generated curvature** is the Laplacian of the same height, smoothed by a Gaussian of 2 texels at the solve size (up to 1024 px), stored 0.5-centred with peaks bright. It is written at the set's albedo size, because Also export's soft light reads both, and only for sets Also export derives (PBR, PBR landscape and PBR grass on `cs`, with an albedo and no DDS member). A real `_curves` or `_curvature` wins over it (`_cavity` is another map). In a plain export it writes nothing (`PACK-UNUSED-INPUT`).
-
-## Complex grass
-
-A complex-grass texture is one image twice as tall as it is wide, with power-of-two sides (for example 1024x2048): diffuse and alpha in the top half, normal and specular in the bottom half. Community Shaders detects it from the bottom-left texel.
-
-- Set the set's shader to `complex_grass`, set `subtype = "complex_grass"` on the file's `[files]` entry, or let the GUI tag it after a scan that included plugins: a texture used by a grass (GRAS) record, 1:2, with a valid detection corner and a normal-map bottom half gets a High-confidence `complex_grass` suggestion, which the GUI accepts (and records in `sdc.toml`). The GUI's sub-type picker offers **Complex grass** where the set's shader is a grass shader or no `textures` folder is above the file. A diffuse with the complex grass shape that nothing tags gets an info row in Problems with **Tag as grass**, which writes `subtype = "complex_grass"`.
-- The CLI never tags it automatically. If you convert the same folder with `sdc convert`, add `subtype = "complex_grass"` to the file's `[files]` entry, or it is converted as a diffuse.
-- Codes: `GRASS-SHAPE` (error: not 1:2 or not power of two), `GRASS-TOP-OPAQUE`, `GRASS-NORMALS`, `GRASS-DETECT-SOURCE` (the source corner already fails the CS test), and `VAL-GRASS-DETECT` (error: the encoded corner still fails after a slowest re-encode).
-
-## Also export as Vanilla and CM
-
-With `[export] also` (see [Project Config](Project-Config.md#export)), a cs export also writes a Vanilla folder and a Complex material (CM) folder. Each PBR set (by its shader in the PBR export) is converted from its albedo, `_n`, `_rmaos` (or raw roughness, metallic and AO maps) and `_p`; every other texture is copied from the PBR folder, or encoded when the copy would differ. The values below use the `[export.legacy]` defaults; gloss is 1 − roughness.
-
-| Shader | Vanilla folder | CM folder |
-|---|---|---|
-| PBR | `<name>.dds` diffuse = 0.9 × albedo × lerp(1, AO, 0.5) × lerp(1, 0.3, metal); `_n` = the normal, alpha = 0.66 × gloss × AO × lerp(1, 2, metal); env `_m` = metal × gloss when the meshes use the environment-map shader (needs a Meshes scan) | `_m`: R = gloss × metal, G = gloss (at least 5/255), B = metal, A = `_p` height (5/255–250/255, 0 without a `_p`); with Keep metal brightness, also a diffuse without the metal darkening |
-| PBR Landscape | landscape diffuse with AO strength 0.3 and no metal factor, alpha = the `_p`; landscape `_n`, alpha = 2.5 × 0.66 × gloss × AO; the set's `_p` (for Terrain Helper) | `_m` with R = B = 0 |
-| PBR grass | the converted diffuse only | the complex-grass stack (diffuse on top, `_n` below) |
-
-- **Install** Vanilla alone, or CM on top of Vanilla. With Keep metal brightness off, the CM folder holds only `_m` files (plus the complex-grass stack of each PBR grass set). Files an earlier export left in the folders are kept and listed in the report as "not written by this export"; delete them yourself.
-- **`_curves` / `_curvature` and `_cavity`** maps (see [Suffixes](#suffixes)) shade the diffuse: a soft light with the curves map (0.5 = no change), then a multiply with the cavity map, both at `curves_opacity` (0.4). They are read only by Also export; a plain export writes nothing for them (`PACK-UNUSED-INPUT`).
-- A set is not converted when a source it needs is a DDS (`DERIVE-DDS-SOURCE`), or when you skip it (`[export] skip`). The report lists such sets with the reason.
-- The defaults were checked against mods that ship both a PBR and a vanilla version by the same author (DECISIONS Note CN).
+- How raw maps pack, helper textures and RNM normal layers: [Texture packing](Texture-Packing.md).
+- Set shaders, height maps, generated maps, complex grass and the extra exports: [Shaders and height maps](Set-Shaders.md).
 
 ## Alpha policies
 
