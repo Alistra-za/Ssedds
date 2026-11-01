@@ -81,13 +81,17 @@ fn names(d: &render3d::permutation::Defines) -> Vec<&str> {
 fn defines_match_capture() {
     let mut m = pbr();
     m.has_vertex_colors = true;
-    let today_ps = defines(&perm_material(&m), Stage::Pixel, &[], true);
-    let today_vs = defines(&perm_material(&m), Stage::Vertex, &[], true);
     let mut pm = perm_material(&m);
     assert!(!pm.projected && !pm.projected_glint);
-    assert_eq!(defines(&pm, Stage::Pixel, &[], true), today_ps);
-    assert_eq!(defines(&pm, Stage::Vertex, &[], true), today_vs);
-    assert!(!names(&today_ps).contains(&"PROJECTED_UV"));
+    // Layer off: the lists before this feature (builtin_default + TruePBR: no SLSF2.5, so no VS VC).
+    assert_eq!(
+        names(&defines(&pm, Stage::Pixel, &[], true)),
+        ["PSHADER", "TRUE_PBR", "DEFERRED"]
+    );
+    assert_eq!(
+        names(&defines(&pm, Stage::Vertex, &[], true)),
+        ["VSHADER", "DEFERRED"]
+    );
     // Ash (descriptor 8019): DEFERRED + PROJECTED_UV + TRUE_PBR + VC, no GLINT.
     pm.projected = true;
     let ps = defines(&pm, Stage::Pixel, &[], true);
@@ -98,9 +102,24 @@ fn defines_match_capture() {
     let vs = defines(&pm, Stage::Vertex, &[], true);
     assert!(names(&vs).contains(&"PROJECTED_UV"), "{vs:?}");
     assert!(names(&vs).contains(&"VC"), "{vs:?}");
+    assert_eq!(
+        names(&ps),
+        ["PSHADER", "PROJECTED_UV", "VC", "TRUE_PBR", "DEFERRED"]
+    );
+    assert_eq!(names(&vs), ["VSHADER", "PROJECTED_UV", "VC", "DEFERRED"]);
     // Snow (18019): also GLINT.
     pm.projected_glint = true;
-    assert!(names(&defines(&pm, Stage::Pixel, &[], true)).contains(&"GLINT"));
+    assert_eq!(
+        names(&defines(&pm, Stage::Pixel, &[], true)),
+        [
+            "PSHADER",
+            "PROJECTED_UV",
+            "VC",
+            "TRUE_PBR",
+            "GLINT",
+            "DEFERRED"
+        ]
+    );
     // R2: no vertex colours, no VC (the VS input layout follows the mesh).
     let mut plain = perm_material(&pbr());
     plain.projected = true;
