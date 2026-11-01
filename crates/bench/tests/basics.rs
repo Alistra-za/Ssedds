@@ -80,10 +80,6 @@ fn engine_level0(src: &std::path::Path, p: &engine::config::Profile) -> Vec<u8> 
 #[test]
 fn encode_one_writes_the_engines_bytes() {
     use engine::config::{Effort, Format, Subtype, Target};
-    if !encoders_sys::BC7E_MAX_NATIVE {
-        eprintln!("skipped: no patch-0002 bc7e objects");
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let (src, dst) = (dir.path().join("n.png"), dir.path().join("n.dds"));
     // Opaque white noise (DECISIONS fix batch 41): bc7e picks rotated mode 4/5 for many blocks. At Veryslow the
@@ -109,6 +105,10 @@ fn encode_one_writes_the_engines_bytes() {
         ("bc5", "default", Subtype::Flow, Format::Bc5),
         ("bc5", "default", Subtype::GenericTwoChannel, Format::Bc5),
     ] {
+        if format == Format::Bc7 && !encoders_sys::BC7E_MAX_NATIVE {
+            eprintln!("skipped bc7: no patch-0002 bc7e objects");
+            continue;
+        }
         let mut p = reg.profile("cs-quality", Target::Cs, st).unwrap();
         p.format = format;
         if format == Format::Bc7 {
