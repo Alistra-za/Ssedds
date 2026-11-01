@@ -1,5 +1,6 @@
 mod support;
-use egui_kittest::kittest::Queryable;
+use eframe::egui::accesskit::Role;
+use egui_kittest::kittest::{NodeT as _, Queryable};
 use egui_kittest::Harness;
 use engine::config::RawMap;
 use sdc_gui::model::inspector::*;
@@ -247,7 +248,7 @@ fn the_open_drawer_shows_its_sections() {
         "Preview",
         "Advanced texture fields",
         "Unmatched [files] entries",
-        "Show only differences",
+        "Show only what differs from sdc-base",
         "BC1 decoder",
     ] {
         assert!(
@@ -256,6 +257,112 @@ fn the_open_drawer_shows_its_sections() {
         );
     }
     h.get_by_label_contains("cs-quality");
+}
+
+fn drawer_harness(width: f32, model: AppModel) -> Harness<'static, AppModel> {
+    let h = Harness::builder()
+        .with_size(eframe::egui::vec2(width, 1000.0))
+        .build_ui_state(
+            |ui, model: &mut AppModel| sdc_gui::ui::draw(ui, model),
+            model,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h
+}
+
+fn leaf_model(dir: &std::path::Path) -> AppModel {
+    let mut model = opened(dir);
+    model.settings.advanced_open = true;
+    model.select_item("landscape/leaf.png");
+    model
+}
+
+/// D10: the first column reads in words; the key rides in the AccessKit name and on hover.
+#[test]
+fn the_inspector_shows_labels_with_the_key_on_hover() {
+    let d = tempfile::tempdir().unwrap();
+    let model = leaf_model(d.path());
+    let job = model
+        .item("landscape/leaf.png")
+        .unwrap()
+        .job
+        .clone()
+        .unwrap();
+    let reg = model.session.as_ref().unwrap().engine().registry().clone();
+    let rows = inspector_rows(&job, &reg);
+    let labelled: Vec<_> = rows
+        .iter()
+        .filter(|r| sdc_gui::model::bulk::field_label(&r.field) != r.field)
+        .collect();
+    assert!(!labelled.is_empty(), "the inspector lists a labelled field");
+    let mut h = drawer_harness(1400.0, model);
+    h.run();
+    for r in &labelled {
+        let label = sdc_gui::model::bulk::field_label(&r.field);
+        h.get_by_label(&format!("{label} ({})", r.field));
+        assert!(
+            h.query_by_label(&r.field).is_none(),
+            "the raw key {} is shown as text",
+            r.field
+        );
+    }
+    // A dotted key with no label shows the readable form.
+    for r in rows
+        .iter()
+        .filter(|r| r.field.contains('.') && sdc_gui::model::bulk::field_label(&r.field) == r.field)
+    {
+        assert!(
+            h.query_by_label(&r.field).is_none(),
+            "{} shown raw",
+            r.field
+        );
+    }
+}
+
+/// D10, rule 10.3: no inspector label ends past the drawer's edge.
+#[test]
+fn no_inspector_value_passes_the_drawer_edge() {
+    use eframe::egui::containers::panel::PanelState;
+    for width in [1100.0, 1280.0, 1600.0] {
+        let d = tempfile::tempdir().unwrap();
+        let model = leaf_model(d.path());
+        let mut h = drawer_harness(width, model);
+        h.run();
+        let drawer = PanelState::load(&h.ctx, eframe::egui::Id::new("advanced"))
+            .unwrap()
+            .outer_rect;
+        let inspector_top = h.get_by_label("Preset inspector").rect().min.y;
+        let batch_top = h.get_by_label("Batch").rect().min.y;
+        let mut checked = 0;
+        for n in h.query_all_by_role(Role::Label) {
+            let r = n.rect();
+            if r.min.x >= drawer.min.x && r.min.y > inspector_top && r.min.y < batch_top {
+                checked += 1;
+                assert!(
+                    r.max.x <= drawer.max.x + 0.5,
+                    "{width}: {:?} ends at {} past the drawer edge {}",
+                    n.accesskit_node().label(),
+                    r.max.x,
+                    drawer.max.x
+                );
+            }
+        }
+        assert!(checked > 10, "{width}: only {checked} labels checked");
+    }
+}
+
+#[test]
+fn the_inspector_names_the_texture() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = drawer_harness(1400.0, leaf_model(d.path()));
+    h.run();
+    h.get_by_label("How leaf.png's settings resolve");
+    h.get_by_label("Batch preset: cs-quality");
+    h.get_by_role_and_label(Role::Button, "Presets…");
+    assert!(h.query_by_label_contains("%APPDATA%").is_none());
+    h.get_by_role_and_label(Role::Button, "Presets…").click();
+    h.run();
+    assert!(h.state().presets_open, "Presets… opens the Presets tab");
 }
 
 #[test]
