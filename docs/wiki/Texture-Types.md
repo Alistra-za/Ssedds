@@ -113,7 +113,7 @@ There are 30 sub-types in five categories.
 | `height` | Grayscale | BC4 | UNORM | remove | Parallax height (`_p`). |
 | `msn_specular` | Grayscale | BC4 | UNORM | remove | `_s` beside an `_msn`. |
 | `skin_sk` | Grayscale | BC4 | UNORM | remove | `cs` Advanced skin; red channel only. |
-| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Under every target (Note AT). |
+| `complex_material` | MixedPacked | BC7 | UNORM | data, exact opaque | Complex `_m`. Under every target. |
 | `rmaos` | MixedPacked | BC7 | UNORM | data | `cs` only. |
 | `skin_rfaos` | MixedPacked | BC7 | UNORM | data | `cs` only. Also accepted as `rfaos`. |
 | `flow` | MixedPacked | BC5 | UNORM | remove | `cs` only. Hair flow; at 32 px or less CS ignores it (`DIM-FLOW-SMALL`). |

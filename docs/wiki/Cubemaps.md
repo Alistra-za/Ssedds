@@ -133,7 +133,7 @@ A cube has no mips: `CUBE-NO-MIPS` warns when `mips.levels` is `none` or 1. A cu
 - a 1×1 cube whose +Y isn't black (Community Shaders shows it as a nearly black static reflection);
 - a cube in an sRGB format.
 
-The second check is a warning in 1.x: a 2D `_e` or `cubemaps\` file that earlier versions passed still passes (exit 0), with the warning. The game reads those files as cubes, so a 2D one is a fault; pass `--strict-cubemaps` to fail it. Failing it by default would break existing use, so it waits for 2.0.
+The second check is a warning in 1.x: a 2D `_e` or `cubemaps\` file passes (exit 0), with the warning. The game reads those files as cubes, so a 2D one is a fault; pass `--strict-cubemaps` to fail it. Failing it by default would break existing use, so it waits for 2.0.
 
 The messages read:
 

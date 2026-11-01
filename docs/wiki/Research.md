@@ -9,7 +9,7 @@ The defaults come from a literature review of BCn encoders, mip filtering and Sk
 ## Encoders
 
 - BC7: on the only independent multi-encoder benchmark (Aras Pranckevičius, 2020), bc7e "slow" averaged 47.40 dB luma PSNR against 46.28 dB for ISPC TC "slow", at about 10× the speed. Local runs put bc7e level 5 within ±0.03 dB of level 6 at 0.22 vs 0.28 s/Mpix, and level 4 below level 3 on gradients. Drove: bc7e at `veryslow` (level 5) as the default; level 4 is not offered.
-- BC7 `max` (bc7e with patch 0002) beat `veryslow` on a 150-texture Skyrim sample: +0.18 dB RGB on diffuse, +0.037° on normal maps and +0.24 dB on alpha, at 2.7 to 2.9× the time (about 3×). This confirms the study behind DECISIONS Note BZ: `max` is an opt-in effort level, not the default.
+- BC7 `max` (bc7e with patch 0002) beat `veryslow` on a 150-texture Skyrim sample: +0.18 dB RGB on diffuse, +0.037° on normal maps and +0.24 dB on alpha, at 2.7 to 2.9× the time (about 3×). So `max` is an opt-in effort level, not the default.
 - DirectXTex/texconv was the weakest BC7 encoder at every setting. Compressonator is unmaintained, never uses BC7 modes 4/5 and writes BC7 headers with required flags missing. Drove: neither is used to encode; texconv is a test oracle only.
 - BC1: all tested BC1 encoders fell within 0.66 dB of each other, with rgbcx level 18 on top (38.47 dB). Drove: rgbcx 18 for BC1/BC3; when BC3 is picked is in the [encoder benchmark](../research/encoder-benchmark.md).
 - Perceptual (luma-weighted) error raised normal-map angular error by 37%, cost 1.6 dB on packed data and 2.7 to 3.5 dB when alpha carries data. Drove: `encoder.perceptual` is off by default and locked off except for colour maps whose alpha is not data.
