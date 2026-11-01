@@ -2627,22 +2627,23 @@ impl AppModel {
         self.items_rev
     }
 
-    /// Note F?15: every item's output game path (a skipped DDS included), from its `textures/` component on,
-    /// ASCII-lowercase with `/`, sorted and deduplicated; paths with no `textures/` component are left out. The
-    /// `u64` changes only when the list does, so the Meshes view can key a cache on it.
+    /// Note F?15: every item's output game path (a skipped DDS included), from its `textures/` component on, with
+    /// `/`, lowercased by the engine's output-key fold (equal to the ASCII fold for ASCII paths), sorted and
+    /// deduplicated; paths with no `textures/` component are left out. The `u64` changes only when the list does,
+    /// so the Meshes view can key a cache on it.
     pub fn output_game_paths(&self) -> (u64, &[String]) {
         (self.game_paths.0, &self.game_paths.1)
     }
 
     /// Rebuilt once per landed plan. `job_key` is the engine's output key: root-relative, `/`, lowercased.
-    // shortcut: the engine key folds Unicode, not ASCII only; switch to the raw output paths if a non-ASCII
-    // texture folder ever matters.
+    // shortcut: the engine key folds Unicode, so a non-ASCII folder name may not match the NIF side's ASCII fold;
+    // carry an ASCII-folded game path on TextureItem if a non-ASCII path is ever reported.
     fn refresh_game_paths(&mut self) {
         let mut paths: Vec<String> = self
             .items
             .iter()
             .filter_map(|i| {
-                let k = i.job_key.to_ascii_lowercase();
+                let k = &i.job_key;
                 let at = if k.starts_with("textures/") {
                     0
                 } else {

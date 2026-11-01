@@ -2117,11 +2117,35 @@ fn output_game_paths_lists_the_folders_textures() {
 #[test]
 fn output_game_paths_leaves_out_a_path_with_no_textures_component() {
     let d = tempfile::tempdir().unwrap();
-    // The folder opened is `textures` itself, so the outputs sit at the export root.
+    // `loose.png` outputs at the export root; its sibling under `textures/` must still be listed.
+    png64(&d.path().join("loose.png"));
     png64(&d.path().join("textures/c.png"));
-    let m = opened_as_the_app(d.path().join("textures"), d.path().join("export"));
-    assert!(m.item("c.png").is_some_and(|i| i.job.is_some()));
-    assert!(m.output_game_paths().1.is_empty());
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    assert!(m.item("loose.png").is_some_and(|i| i.job.is_some()));
+    assert_eq!(m.output_game_paths().1, ["textures/c.dds"]);
+}
+
+#[test]
+fn output_game_paths_starts_at_textures_after_a_prefix() {
+    let d = tempfile::tempdir().unwrap();
+    png64(&d.path().join("mymod/textures/x.png"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    assert_eq!(m.output_game_paths().1, ["textures/x.dds"]);
+}
+
+#[test]
+fn output_game_paths_dedups_two_inputs_with_one_output() {
+    let d = tempfile::tempdir().unwrap();
+    png64(&d.path().join("textures/Ale_BC.png"));
+    bc1_dds(&d.path().join("textures/ale_bc.dds"));
+    let m = opened_as_the_app(d.path().to_path_buf(), d.path().join("export"));
+    let both = m
+        .items
+        .iter()
+        .filter(|i| i.job_key == "textures/ale_bc.dds")
+        .count();
+    assert_eq!(both, 2, "the fixture must give two inputs one output");
+    assert_eq!(m.output_game_paths().1, ["textures/ale_bc.dds"]);
 }
 
 #[test]
