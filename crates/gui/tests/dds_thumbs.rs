@@ -97,3 +97,55 @@ fn a_replan_reuses_the_cached_thumbnail() {
     assert_eq!(m.dds_thumb_requests, asked);
     assert!(m.item("landscape/stored.dds").unwrap().thumb.is_some());
 }
+
+/// Polls until no tile image is being decoded.
+fn wait_thumbs(m: &mut sdc_gui::model::AppModel) {
+    let end = Instant::now() + Duration::from_secs(30);
+    while m.dds_thumbs_pending() && Instant::now() < end {
+        m.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!m.dds_thumbs_pending(), "tile images still decoding");
+}
+
+/// A BC1 header relabelled DXT3 (BC2, which the decoder refuses) with zeroed DXT3-sized data.
+fn bc2_dds(path: &Path, size: u32, levels: usize) {
+    red_dds(path, Format::Bc1, size, levels);
+    let mut bytes = std::fs::read(path).unwrap();
+    assert_eq!(&bytes[84..88], b"DXT1");
+    bytes[84..88].copy_from_slice(b"DXT3");
+    bytes.truncate(128);
+    let data: usize = (0..levels)
+        .map(|i| ((size >> i).max(1) as usize).div_ceil(4).pow(2) * 16)
+        .sum();
+    bytes.resize(128 + data, 0);
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn a_refused_dds_is_read_once_until_it_changes() {
+    let d = tempfile::tempdir().unwrap();
+    let root = mod_folder(d.path());
+    let p = root.join("landscape/stored.dds");
+    bc2_dds(&p, 256, 9);
+    let mut m = opened(d.path());
+    wait_thumbs(&mut m);
+    let asked = m.dds_thumb_requests;
+    assert!(asked >= 1);
+    assert!(m.item("landscape/stored.dds").unwrap().thumb.is_none());
+    for _ in 0..2 {
+        m.replan();
+        assert!(m.wait_idle(Duration::from_secs(60)));
+        wait_thumbs(&mut m);
+    }
+    assert_eq!(m.dds_thumb_requests, asked, "a refused DDS was read again");
+    // A changed file (new size, so a new stamp) is tried again.
+    red_dds(&p, Format::Bc1, 128, 8);
+    m.replan();
+    assert!(m.wait_idle(Duration::from_secs(60)));
+    wait_thumbs(&mut m);
+    assert!(
+        m.dds_thumb_requests > asked,
+        "a changed DDS was not retried"
+    );
+}

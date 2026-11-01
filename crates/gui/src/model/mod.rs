@@ -420,6 +420,8 @@ pub struct AppModel {
     dds_thumbs: std::collections::HashMap<PathBuf, (SourceStamp, Arc<Thumbnail>)>,
     /// The DDS tile images asked for and not landed yet (no second request while one is out; the repaint gate).
     dds_thumbs_asked: std::collections::HashMap<PathBuf, SourceStamp>,
+    /// DDS tile images the decoder refused, with the stamp it refused (not read again until the file changes).
+    dds_thumbs_failed: std::collections::HashMap<PathBuf, SourceStamp>,
     /// Paths sent to `spawn_dds_thumbs` so far (tests: a re-plan reuses the cache).
     #[doc(hidden)]
     pub dds_thumb_requests: usize,
@@ -736,6 +738,7 @@ impl AppModel {
             game_paths: (0, vec![]),
             dds_thumbs: Default::default(),
             dds_thumbs_asked: Default::default(),
+            dds_thumbs_failed: Default::default(),
             dds_thumb_requests: 0,
             check_state: Default::default(),
             inputs_rev: 0,
@@ -960,6 +963,7 @@ impl AppModel {
         // Note FI1: the previous folder's DDS tile images.
         self.dds_thumbs.clear();
         self.dds_thumbs_asked.clear();
+        self.dds_thumbs_failed.clear();
         self.drawer_epoch += 1;
         self.folder_epoch += 1;
         self.dropped_fills.clear();
@@ -2098,6 +2102,7 @@ impl AppModel {
         // Note FI1: the DDS tile images are read again with the reload.
         self.dds_thumbs.clear();
         self.dds_thumbs_asked.clear();
+        self.dds_thumbs_failed.clear();
         self.replan();
     }
 
@@ -2521,7 +2526,8 @@ impl AppModel {
             };
             match self.dds_thumbs.get(&item.input) {
                 Some((s, t)) if *s == stamp => item.thumb = Some(t.clone()),
-                _ if self.dds_thumbs_asked.get(&item.input) == Some(&stamp) => {}
+                _ if self.dds_thumbs_asked.get(&item.input) == Some(&stamp)
+                    || self.dds_thumbs_failed.get(&item.input) == Some(&stamp) => {}
                 _ => ask.push((item.input.clone(), stamp)),
             }
         }
@@ -2534,7 +2540,8 @@ impl AppModel {
     }
 
     /// Note FI1: a DDS tile image landed. True when an item took it (the caller invalidates the views once). An
-    /// error stores nothing: the tile stays grey and the preview gives the reason.
+    /// error keeps only the refused stamp (not read again until the file changes): the tile stays grey and the
+    /// preview gives the reason.
     fn dds_thumb_landed(
         &mut self,
         path: PathBuf,
@@ -2545,6 +2552,7 @@ impl AppModel {
             self.dds_thumbs_asked.remove(&path);
         }
         let Ok(thumb) = thumb else {
+            self.dds_thumbs_failed.insert(path, stamp);
             return false;
         };
         let mut took = false;
