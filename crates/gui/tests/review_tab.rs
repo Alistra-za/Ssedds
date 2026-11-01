@@ -151,7 +151,9 @@ fn a_nif_edit_waiting_for_a_folder_is_listed_not_warned() {
     m.open_review();
     let blockers =
         pbr_export::export_blocks(&m).len() + usize::from(m.export_folder_chosen().is_none());
-    m.set_nif_review_rows(vec![nif_row(Some("No export folder chosen"))]);
+    m.set_nif_review_rows(vec![nif_row(Some(
+        sdc_gui::model::review::NO_EXPORT_FOLDER,
+    ))]);
     let mut h = harness(m);
     h.run();
     h.get_by_label("NIF edits skipped until an export folder is chosen (1)");

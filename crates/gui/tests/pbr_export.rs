@@ -1388,7 +1388,11 @@ fn a_tessalith_json_gains_no_entry_without_a_change() {
     dds_pbr_sets(d.path(), &["a", "b", "c"]);
     m.replan();
     idle(&mut m);
-    assert!(m.sets.iter().filter(|s| s.key.contains("pbr/a/a")).count() == 1);
+    assert_eq!(
+        m.sets.iter().filter(|s| s.key.contains("pbr/a/a")).count(),
+        1,
+        "the all-DDS set a is listed once"
+    );
     m.open_review();
     let line = m
         .review_json()
