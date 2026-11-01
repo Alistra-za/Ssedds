@@ -4,8 +4,8 @@
 use super::columns::{AMBER, RED};
 use super::path_picker;
 use crate::model::input_name::{
-    bare_name, closest_first, completion, in_form_of, live_rows, replace_segment, segment_at,
-    segment_choices, segment_index, segment_start, snap_to_segments, tab_part, Choice,
+    bare_name, closest_first, completion, in_form_of, is_sep, live_rows, replace_segment,
+    segment_at, segment_choices, segment_index, segment_start, snap_to_segments, tab_part, Choice,
 };
 use crate::model::known_paths::strip_dds;
 use crate::model::sets::is_json_set;
@@ -71,6 +71,8 @@ struct Live {
     /// Note F?17: the segment list (Ctrl+Up/Down): the segment's index and its rows. While it shows it takes the live
     /// list's place, `sel` and the row clicks.
     seg: Option<(usize, Vec<Choice>)>,
+    /// `rows` were the segment list's: a click there names a segment, never a path to commit.
+    seg_rows: bool,
 }
 
 /// Note F?17: the hint while a separator is highlighted by a first Backspace / Delete.
@@ -84,10 +86,6 @@ fn separator_hint(text: &str, r: Option<CCursorRange>) -> Option<&'static str> {
     } else {
         "Delete again to remove the folder separator"
     })
-}
-
-fn is_sep(c: char) -> bool {
-    c == '/' || c == '\\'
 }
 
 /// A cursor range from `anchor` (secondary) to `head` (primary), char indices.
@@ -199,6 +197,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
     let edit_id = id.with("edit");
     let buf = id.with("buf");
     let anchor_id = id.with("drag-anchor");
+    let full_id = id.with("menu-full");
     let key = (Arc::as_ptr(&model.known) as usize, model.items_rev());
     let salt = if bare_name(&current) {
         "input-name-bare"
@@ -227,15 +226,16 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         ui.end_row();
     }
     // Note F?17 (rule 14): the known paths, folded, for the amber "no known texture" check (built once per list).
+    // Keyed by the list itself (held, so its address is never reused while cached).
     let known: Arc<HashSet<String>> = {
         let kid = egui::Id::new(("input-name-known", salt));
-        let k = Arc::as_ptr(&paths) as usize;
-        match ui.data(|d| d.get_temp::<(usize, Arc<HashSet<String>>)>(kid)) {
-            Some((pk, s)) if pk == k => s,
+        type Known = (Arc<Vec<String>>, Arc<HashSet<String>>);
+        match ui.data(|d| d.get_temp::<Known>(kid)) {
+            Some((pk, s)) if Arc::ptr_eq(&pk, &paths) => s,
             _ => {
                 let s: Arc<HashSet<String>> =
                     Arc::new(paths.iter().map(|p| fold_path(p)).collect());
-                ui.data_mut(|d| d.insert_temp(kid, (k, s.clone())));
+                ui.data_mut(|d| d.insert_temp::<Known>(kid, (paths.clone(), s.clone())));
                 s
             }
         }
@@ -581,7 +581,8 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             // A pressed row, else the highlighted row on Enter, else the typed text (AO4). Esc reverts; an invalid or
             // unchanged value reverts; a valid change commits (one commit path, AO1).
             let cancelled = ui.input(|i| i.key_pressed(Key::Escape));
-            let row = live.clicked.take().or_else(|| {
+            // A segment row's label is a folder or texture name, not a path (review fix): it never commits here.
+            let row = live.clicked.take().filter(|_| !live.seg_rows).or_else(|| {
                 live.sel
                     .filter(|_| live.open && ui.input(|i| i.key_pressed(Key::Enter)))
                     .and_then(|s| rows.get(s).cloned())
@@ -600,6 +601,7 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         live.rows.clear();
         let has_focus = r.has_focus() || refocus;
         let seg_rows = live.seg.clone().filter(|_| has_focus);
+        live.seg_rows = seg_rows.is_some();
         let live_open = has_focus && seg_rows.is_none() && live.open && !rows.is_empty();
         // The separator hint (F?17 rule 4) heads the list under the box, so it never adds a header row.
         if live_open || seg_rows.is_some() || hint.is_some() {
@@ -703,8 +705,10 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
             if slot == 1 && !all {
                 ui.label(egui::RichText::new(HEADING).strong());
                 ui.weak(format!("now: {current}"));
-                // Only paths under the folder before the last segment (F?17, was the path lock).
-                let cut = segment_start(&text);
+                // Only paths under the folder before the last segment (F?17, was the path lock); opened by Ctrl+Up/Down
+                // on the whole text, every path (rule 10, ruling R2: a whole-name selection has no folder).
+                let full = ui.data(|d| d.get_temp::<bool>(full_id)).unwrap_or(false);
+                let cut = if full { 0 } else { segment_start(&text) };
                 let pre = text[..cut].replace('\\', "/");
                 let under_key = (Arc::as_ptr(&paths) as usize, egui::Id::new(&pre).value());
                 let under = path_picker::cached(ui, "input-name-under", under_key, || {
@@ -716,8 +720,10 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
                 });
                 if under.is_empty() && !paths.is_empty() {
                     // Note DO: the scan knows paths, just none under the folder (F?17: no path lock to move).
+                    // Review fix: advice that works (the box reverts when ▾ takes its focus, so editing it first does not).
                     ui.weak(format!(
-                        "No known paths under {pre}: shorten the folder in the box to see more."
+                        "No known paths under {pre}. In the box, Ctrl+Down on a folder lists the others; Ctrl+A then \
+                         Ctrl+Down lists every path."
                     ));
                 } else if let Some(p) = path_picker::list(ui, ("input-name", &v.id), &under, false) {
                     match model.set_input_name(&v.id, &p) {
@@ -768,13 +774,14 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         if slot != chosen {
             model.set_match_slot(&v.id, slot);
         }
-        // Note F?17 (rule 10): Ctrl+Up/Down with the whole text selected opens this list, as a click on ▾ does.
+        // Note F?17 (rule 10): Ctrl+Up/Down with the whole text selected opens this list unfiltered; a ▾ click, filtered.
+        let popup = egui::Popup::default_response_id(&menu.response);
         if open_menu {
-            egui::Popup::open_id(
-                ui.ctx(),
-                egui::Popup::default_response_id(&menu.response),
-            );
+            egui::Popup::open_id(ui.ctx(), popup);
+            ui.data_mut(|d| d.insert_temp(full_id, true));
             ui.ctx().request_repaint();
+        } else if !egui::Popup::is_id_open(ui.ctx(), popup) {
+            ui.data_mut(|d| d.remove::<bool>(full_id));
         }
         menu.response.on_hover_text(
             "Pick the game path this set's textures are read as. Each texture keeps its own suffix; files on \

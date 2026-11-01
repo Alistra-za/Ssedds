@@ -372,7 +372,7 @@ fn key_down(h: &mut H, key: Key) {
         key,
         physical_key: None,
         pressed: true,
-        repeat: true,
+        repeat: false,
         modifiers: Modifiers::NONE,
     });
     h.run();
@@ -1187,7 +1187,8 @@ fn esc_closes_the_segment_list_unchanged() {
     );
 }
 
-/// Note F?17: with the whole text selected, Ctrl+Down opens the ▾ list.
+/// Note F?17 (rule 10, controller ruling R2): with the whole text selected, Ctrl+Down opens the ▾ list unfiltered
+/// (another folder's rows too); a plain ▾ click afterwards keeps the folder filter.
 #[test]
 fn ctrl_down_with_all_selected_opens_the_full_list() {
     let (_d, mut h) = harness();
@@ -1197,6 +1198,82 @@ fn ctrl_down_with_all_selected_opens_the_full_list() {
     key(&mut h, Key::ArrowDown, ctrl());
     h.get_by_label("Read this set's textures as");
     h.get_by_label("textures/landscape/rock02");
+    h.get_by_label("textures/other/thing");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(h.query_by_label("Read this set's textures as").is_none());
+    h.get_by_label(sdc_gui::ui::input_name::DROPDOWN).click();
+    h.run();
+    h.get_by_label("textures/landscape/rock02");
+    assert!(
+        h.query_by_label("textures/other/thing").is_none(),
+        "a ▾ click is filtered"
+    );
+}
+
+/// Review fix (F?17 rule 9): a click on a segment row replaces only that segment and commits nothing, whether the
+/// press and the release land in separate frames or in one.
+#[test]
+fn a_click_on_a_segment_row_replaces_only_that_segment() {
+    for one_frame in [false, true] {
+        let (_d, mut h) = harness();
+        let steps = h.state().0.history.undo.len();
+        focus(&mut h);
+        segment_back(&mut h, 2);
+        key(&mut h, Key::ArrowDown, ctrl());
+        let p = h.get_by_label("other").rect().center();
+        press_release(&mut h, p, one_frame);
+        h.run();
+        assert_eq!(free(&h), "textures/other/rock01", "{one_frame}");
+        assert_eq!(
+            h.state().0.history.undo.len(),
+            steps,
+            "{one_frame}: a pick only edits the text"
+        );
+        assert_eq!(
+            h.state().0.input_name_of(ROCK_SET).as_deref(),
+            Some(ROCK01),
+            "{one_frame}: nothing committed"
+        );
+        let edit = sdc_gui::ui::input_name::edit_id(ROCK_SET);
+        assert!(
+            h.ctx.memory(|m| m.has_focus(edit)),
+            "{one_frame}: the box keeps its focus"
+        );
+    }
+}
+
+/// Note F?17 (rule 1): a triple-click still selects the whole path (egui's line select).
+#[test]
+fn triple_click_selects_the_whole_path() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    let p = egui::pos2(x_after(&h, "textures/lan"), box_rect(&h).center().y);
+    h.input_mut().events.push(egui::Event::PointerMoved(p));
+    h.run();
+    for _ in 0..3 {
+        pointer(&mut h, p, true, Modifiers::NONE);
+        pointer(&mut h, p, false, Modifiers::NONE);
+        h.step();
+    }
+    h.run();
+    assert_eq!(sel_sorted(&h), (0, ROCK01.len()));
+}
+
+/// Note F?17 (rule 5): a held Delete deletes characters but stops at a `/`, without highlighting it.
+#[test]
+fn held_delete_stops_at_a_slash() {
+    let (_d, mut h) = harness();
+    focus(&mut h);
+    segment_back(&mut h, 2);
+    assert_eq!(sel(&h), (9, 9));
+    // The first press, then 12 repeats: `landscape` is 9 characters.
+    for _ in 0..13 {
+        key_down(&mut h, Key::Delete);
+    }
+    key_up(&mut h, Key::Delete);
+    assert_eq!(free(&h), "textures//rock01", "stopped at the /");
+    assert_eq!(sel(&h), (9, 9), "nothing highlighted");
 }
 
 const ARMOR: &str = "textures/armor/iron/shield";

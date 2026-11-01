@@ -324,7 +324,7 @@ pub fn live_rows(paths: &[String], text: &str, cut: usize, limit: usize) -> Vec<
 }
 
 /// Note F?17: a path separator (`\` is read as `/` everywhere in the box).
-fn is_sep(c: char) -> bool {
+pub fn is_sep(c: char) -> bool {
     c == '/' || c == '\\'
 }
 
@@ -558,6 +558,28 @@ mod tests {
                 ("armor/iron/boots", "boots")
             ]
         );
+    }
+
+    /// Review fix: the folder match folds ASCII only (Note BF's game-path fold), so a Unicode case change whose byte
+    /// length differs (`ẞ` 3 bytes, `ß` 2) is no match rather than a slice off a char boundary.
+    #[test]
+    fn segment_choices_survive_a_non_ascii_case_change() {
+        let list = paths(&[
+            "textures/ẞtraße/x/a",
+            "textures/ßtraße/x/b",
+            "TEXTURES/ßtraße/y/c",
+        ]);
+        let c = segment_choices(&list, "textures/ßtraße/x/a", 3);
+        let labels: Vec<&str> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["textures/ßtraße/x/b"]);
+        // `ẞtraße` and `ßtraße` are two folders: only the first one's `x` is listed.
+        let c = segment_choices(&list, "textures/ẞtraße/q/a", 2);
+        let labels: Vec<&str> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["x"]);
+        // ASCII case still folds.
+        let c = segment_choices(&list, "Textures/ßtraße/x/a", 2);
+        let labels: Vec<&str> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, vec!["x", "y"]);
     }
 
     #[test]
