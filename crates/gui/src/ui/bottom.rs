@@ -41,7 +41,13 @@ fn tab_buttons(ui: &mut egui::Ui, model: &mut AppModel) {
     }
 }
 
-pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::DrawerState) {
+/// `nif_preview`: the Meshes view with a NIF selected, whose 3D preview needs the room above the panel (Note F?18).
+pub fn draw(
+    ui: &mut egui::Ui,
+    model: &mut AppModel,
+    drawer: &mut drawer::DrawerState,
+    nif_preview: bool,
+) {
     // Another folder or a new export: the cached file checks belong to another run.
     if drawer.epoch != model.drawer_epoch {
         drawer.stats.clear();
@@ -64,31 +70,36 @@ pub fn draw(ui: &mut egui::Ui, model: &mut AppModel, drawer: &mut drawer::Drawer
     } else {
         ("bottom", 240.0)
     };
-    let panel = egui::Panel::bottom(id)
+    // Note F?18 (GH6/N6 hand-off, the NIF team's 310): room for the 3D preview; Review's 40 % default obeys it too.
+    let cap = nif_preview.then(|| (ui.available_height() - 310.0).max(120.0));
+    let mut panel = egui::Panel::bottom(id)
         .resizable(true)
-        .default_size(height)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                tab_buttons(ui, model);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("▼")
-                        .on_hover_text("Collapse the panel")
-                        .clicked()
-                    {
-                        model.collapse_bottom();
-                    }
-                });
+        .default_size(cap.map_or(height, |c| height.min(c)));
+    if let Some(c) = cap {
+        panel = panel.max_size(c);
+    }
+    let panel = panel.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            tab_buttons(ui, model);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("▼")
+                    .on_hover_text("Collapse the panel")
+                    .clicked()
+                {
+                    model.collapse_bottom();
+                }
             });
-            ui.separator();
-            match model.bottom.tab {
-                BottomTab::Messages => messages::tab(ui, model),
-                BottomTab::Problems => problems::tab(ui, model),
-                BottomTab::Review if model.review.is_some() => review::tab(ui, model),
-                // A closed Review shows Files.
-                BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
-            }
         });
+        ui.separator();
+        match model.bottom.tab {
+            BottomTab::Messages => messages::tab(ui, model),
+            BottomTab::Problems => problems::tab(ui, model),
+            BottomTab::Review if model.review.is_some() => review::tab(ui, model),
+            // A closed Review shows Files.
+            BottomTab::Review | BottomTab::Files => drawer::files_tab(ui, model, drawer),
+        }
+    });
     let (pass, top) = (ui.ctx().cumulative_pass_nr(), panel.response.rect.top());
     ui.ctx()
         .data_mut(|d| d.insert_temp(open_top_id(), (pass, top)));

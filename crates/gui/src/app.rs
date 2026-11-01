@@ -425,7 +425,8 @@ impl eframe::App for SdcApp {
             // C7: the one header in both views (MO2… framed with Mode), then the bottom panel (R7), then the view.
             crate::ui::header::draw(ui, &mut self.model, Some(&mut self.meshes));
             crate::ui::record_below_header(ui);
-            crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer);
+            let nif_preview = self.meshes.selected_nif.is_some();
+            crate::ui::bottom::draw(ui, &mut self.model, &mut self.state.drawer, nif_preview);
             crate::ui::meshes::show(ui, &mut self.meshes);
             if let Some(fp) = self.meshes.v3.take_shaders_changed() {
                 self.model.settings.render3d.shaders = Some(fp);

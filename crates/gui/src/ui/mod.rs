@@ -152,7 +152,7 @@ pub fn draw_with_scan(
     // A9: what is left under the header and the scan row, for windows that must not cover them.
     record_below_header(ui);
     // Under the header and the scan row, before the columns (R7).
-    bottom::draw(ui, model, &mut state.drawer);
+    bottom::draw(ui, model, &mut state.drawer, false);
     // Note FB7: a new selection (or preview) brings the selection back to the front of the centre.
     let seen = (model.selection.clone(), model.expanded.clone());
     let seen_id = egui::Id::new("centre-tab-seen");

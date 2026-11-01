@@ -42,7 +42,7 @@ fn harness_sized(m: AppModel, size: egui::Vec2, meshes_view: bool) -> H {
             if meshes_view {
                 // K6: the app's Meshes branch (K3): the header, the bottom panel, then the view.
                 sdc_gui::ui::header::draw(ui, m, Some(&mut *me));
-                sdc_gui::ui::bottom::draw(ui, m, &mut s.drawer);
+                sdc_gui::ui::bottom::draw(ui, m, &mut s.drawer, false);
                 sdc_gui::ui::meshes::show(ui, me);
             } else {
                 sdc_gui::ui::draw_with_scan(ui, m, s, Some(me));

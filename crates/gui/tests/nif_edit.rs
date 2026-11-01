@@ -11471,6 +11471,66 @@ fn the_meshes_side_gets_a_new_output_path_on_the_next_frame() {
     );
 }
 
+/// Note F?18 (2; HANDOFF owed item 2, GH6/N6): in the Meshes view with a NIF selected, the bottom panel stops at
+/// `available - 310` (at least 120), the NIF team's value as given. Pinned: a Review dragged to 600 px is cut down in
+/// the Meshes view and kept in the Textures view (NIF still selected); Review's 40 % default keeps the preview 160 px
+/// at 1536x864 (a guard: 40 % is under the cap there). The 310 does not keep 160 px past a ~400 px Review (F?18).
+#[test]
+fn the_bottom_panel_is_capped_only_in_the_meshes_view_with_a_nif() {
+    use egui::containers::panel::PanelState;
+    let (w, hgt) = (1536.0, 864.0);
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(w, hgt));
+    assert!(h.state().meshes.selected_nif.is_some());
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let frame = h
+        .get_by_label(sdc_gui::model::viewport3d::FRAME_LABEL)
+        .rect();
+    assert!(frame.height() >= 159.5, "40 % Review: preview {frame:?}");
+    let tall = |h: &mut AppH| {
+        let r =
+            egui::Rect::from_min_size(egui::pos2(8.0, hgt - 600.0), egui::vec2(w - 16.0, 600.0));
+        h.ctx.data_mut(|d| {
+            d.insert_persisted(egui::Id::new("bottom-review"), PanelState { outer_rect: r })
+        });
+        h.run_steps(8);
+    };
+    tall(&mut h);
+    let capped = review_height(&h);
+    assert!(capped < 600.0, "Meshes view: Review {capped}");
+    // The Textures view, the NIF still selected: the panel is not capped.
+    sdc_gui::ui::header::set_meshes_view(&h.ctx, false);
+    tall(&mut h);
+    assert!(h.state().meshes.selected_nif.is_some());
+    assert_eq!(
+        review_height(&h),
+        600.0,
+        "the Textures view's Review is uncapped"
+    );
+}
+
+fn review_height(h: &AppH) -> f32 {
+    egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("bottom-review"))
+        .unwrap()
+        .outer_rect
+        .height()
+}
+
+/// Note F?18 (2): Review's 40 % default obeys the cap too. At 1536x600 the default (240) is over it.
+#[test]
+fn reviews_default_height_obeys_the_meshes_cap() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let model = support::opened(&t.path().join("mod"));
+    let (_d, mut h) = in_the_meshes_view_sized(model, 1, egui::vec2(1536.0, 600.0));
+    h.state_mut().model.open_review();
+    h.run_steps(8);
+    let r = review_height(&h);
+    assert!((120.0..239.0).contains(&r), "Review opened at {r}");
+}
 /// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
 #[test]
 fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {
