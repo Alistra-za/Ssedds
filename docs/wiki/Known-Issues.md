@@ -11,9 +11,7 @@ Sometimes the graphics device is lost, and the app has to close. The cause is no
 - Version 1.0.0 closes with a crash message about failing to create a "staging buffer".
 - Later versions show a message that the graphics device was lost and that unsaved edits were kept, then close.
 
-- Unsaved edits to `sdc.toml` and `sdc-project.toml` are kept beside the original as `<file>.recovery`. The original is not touched.
-- The next time you open the folder, the edits come back by themselves as unsaved changes, and a toast says "Restored unsaved edits from the crash". The toast's Undo takes them back and deletes the `.recovery` file. Ctrl+Z takes them back but keeps the file. Clicking Save deletes it; the saves Tessalith makes on its own (an export folder, an export's JSON record) keep it.
-- If `sdc.toml` or `sdc-project.toml` does not parse, it is read-only and cannot take the edits. The `.recovery` file stays, a banner names it, and the edits come back when you fix the file and reload.
+- Unsaved edits are kept beside the original and come back the next time you open the folder ([crash recovery](GUI-Settings.md#when-something-goes-wrong)).
 - The crash log is in the logs folder ([where](Installation.md#where-tessalith-keeps-its-files)). Attach it if you report the crash.
 
 ## Speed
@@ -58,11 +56,11 @@ The program is not code-signed yet. On first run, click **More info**, then **Ru
 
 **Paint.NET opens DDS files with its own reader**
 
-Paint.NET always opens `.dds` with its built-in support, even files Tessalith wrote. To save with Tessalith again, use Save As once and pick **Tessalith DDS**.
+Paint.NET always opens `.dds` with its built-in support, even files Tessalith wrote ([saving with Tessalith again](Host-Plugins.md#things-to-know)).
 
 **chaiNNer: the nodes vanish after a chaiNNer update**
 
-An update installs chaiNNer into a new folder and deletes the old one. Close chaiNNer and run `install.ps1` again.
+Close chaiNNer and run `install.ps1` again ([why](Host-Plugins.md#chainner)).
 
 **Photoshop: a normal map converted from 16-bit to 32-bit**
 

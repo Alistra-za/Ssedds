@@ -28,3 +28,6 @@ fbbe797a2bdc	validate flag lists the same value names as the alpha.policy key (f
 2bfceb582906	FAQ question heading; Home answers it with a link
 f44f25a20df4	two see-also link lines to the GUI guide
 0df5213cabe1	the verbatim error message, in the key row and in the error-message table
+df398ccdfb5e	each plugin developer page says which branch holds its source (pages are read on their own)
+318eb20e5f48	two code rows (IN-ALIAS-INVALID, IN-ALIAS-STALE) link their one home in Project-Config [inputs]
+0abf7fbc4cea	false match: HDR save formats and GIMP own plug-in reading HDR are different facts

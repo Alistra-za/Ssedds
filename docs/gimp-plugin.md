@@ -29,7 +29,7 @@ Always with GIMP's own Python and `-I` (never `python -`):
 `package.ps1` builds the DLL first, needs `cargo-about` (`cargo install cargo-about --locked`) for `THIRD_PARTY_NOTICES.md`, and fails when the zip's file list, the DLL bytes, the licence texts or the DLL's ABI are wrong. For development, `TESSALITH_PSDDS_DLL` points the wrapper at another DLL.
 
 ## Install
-Copy the `tessalith-dds` folder into `%APPDATA%\GIMP\3.0\plug-ins\` and restart GIMP. GIMP caches a plug-in's registration until its `.py` file changes, so after replacing only the DLL or after a failed load, change or recopy the `.py` file.
+Install as [Host plugins](wiki/Host-Plugins.md#gimp) says. GIMP caches a plug-in's registration until its `.py` file changes, so after replacing only the DLL or after a failed load, change or recopy the `.py` file.
 
 ## Licence split
-The plug-in's Python files are GPL-3.0-or-later (`COPYING`). `psdds.dll` ships with its own MIT text (`LICENSE`) for the psdds crate, MPL-2.0 for the engine and encoders-sys code inside it (DC41), and the vendored encoders' licences, all listed in `THIRD_PARTY_NOTICES.md`. All of them are GPL-3.0-compatible. Nothing in the package may describe the engine as MIT.
+The licences are listed in [Host plugins](wiki/Host-Plugins.md#licences); the package carries `COPYING`, `LICENSE` and `THIRD_PARTY_NOTICES.md`, all GPL-3.0-compatible. The engine code inside `psdds.dll` is MPL-2.0 (DC41): nothing in the package may describe the engine as MIT.

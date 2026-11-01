@@ -66,7 +66,7 @@ Photoshop, GIMP and Paint.NET show the same options in a dialog when you save. T
 | **Format** | Colour: BC1, BC3, BC7 or RGBA8 (uncompressed). Normal map adds BC5. Linear mask adds BC4. For 16 and 32-bit images, Colour also offers BC6H and RGBA16F (see [HDR](#16-bit-32-bit-and-hdr)). |
 | **Discard transparency** | Saves the texture opaque, whatever the pixels hold. Always on for BC1, BC4, BC5 and BC6H, which store no alpha. |
 | **Alpha is transparency** | Off by default. See [Alpha](#alpha-data-or-transparency). |
-| **Mipmaps** and **Filter** | A full mip chain, or none. The filter (Box, Tent, Mitchell, Kaiser) sets how mips are shrunk. It is greyed, showing Box, where the encoder uses Box anyway. |
+| **Mipmaps** and **Filter** | A full mip chain, or none, and the [mip filter](Project-Config-Fields.md#mipmaps); it is greyed, showing Box, where the encoder uses Box anyway. |
 | **Quality** | How hard the encoder works for the chosen format. Greyed for RGBA8. |
 
 Your last choices are remembered for the next save. Photoshop and GIMP accept images up to 16384 x 16384, the most Skyrim supports; Paint.NET names its limit in the error message. Large images need a lot of free memory: saving at the largest size takes about 10 GB in Photoshop and Paint.NET. Close other programs or save at 8192 x 8192 if it fails.
