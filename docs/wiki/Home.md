@@ -27,7 +27,7 @@ This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later. Its conv
 | [CLI reference](CLI-Reference.md) | Every `sdc` subcommand and flag, exit codes, the JSON event stream. |
 | [Project config](Project-Config.md) | Every `sdc.toml` key, its default, and how settings layer. |
 | [Presets and targets](Presets-and-Targets.md) | The built-in presets, writing your own, and what each target allows. |
-| [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, TruePBR JSON editor, settings. |
+| [GUI guide](GUI-Guide.md) | Every panel in the GUI: the converter, set editor, bulk editing, 3D preview, PGPatcher JSON editor, settings. |
 | [Texture types](Texture-Types.md) | Sub-types, file suffixes, naming, formats, packing and set shaders. |
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
 | [NIF editing](NIF-Editing.md) | Editing a mesh's shader, alpha, controllers and clips in the Meshes view, and exporting the edited NIF. |

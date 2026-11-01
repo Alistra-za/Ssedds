@@ -317,7 +317,7 @@ fn tabs(
         if json && !open {
             ui.add_space(8.0);
             if ui
-                .small_button("TruePBR JSON editor…")
+                .small_button("PGPatcher JSON editor…")
                 .on_hover_text(
                     "Every set's entry and the delete sections of the PGPatcher JSON, in one view",
                 )

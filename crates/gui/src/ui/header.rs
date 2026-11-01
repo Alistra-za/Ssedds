@@ -844,7 +844,7 @@ fn export_to_menu(ui: &mut egui::Ui, model: &mut AppModel, text: String, full: O
             json = ui
                 .button(JSON_EDITOR)
                 .on_hover_text(
-                    "Edit the whole TruePBR JSON: its file name, every set's entry and the delete sections",
+                    "Edit the whole PGPatcher JSON: its file name, every set's entry and the delete sections",
                 )
                 .clicked();
         }

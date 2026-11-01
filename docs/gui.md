@@ -703,6 +703,9 @@ One word for each idea, everywhere in the window (Note FC9). The code or the old
 - **Set.** The textures that belong to one material: they share a name stem (and a PGPatcher JSON entry under Community Shaders).
 - **Helper.** A source file that is not a texture of its own: it fills a channel of another output, or blends into the normal. It is never written as a DDS.
 - **Sub-type labels.** A sub-type reads as its id with spaces (*pbr albedo*); *Skin RFAOS* is the one name spelled out. The id (`skin_rfaos`) is on hover.
+- **PGPatcher JSON.** The editor for the JSON PGPatcher reads is *PGPatcher JSON* everywhere: the *PGPatcher JSON editor…* menu item and set button, and the tab or window title. Its *+ Add a delete section* button adds a PGPatcher "delete" section. Not *TruePBR JSON*.
+- **Drop the alpha anyway.** The acknowledgement button of a texture whose varying alpha the chosen format or setting discards: the export writes the texture without its alpha. Every other blocking warning keeps *Acknowledge*.
+- **Not exported yet.** What the Files tab says before the first export of the session; the counts (*converted*, *up to date*, …) appear once there are files.
 - **One accent.** The window has one non-status colour (teal), for selection, the RNM outline, a slot's flash and the path lock. Red, amber and green are for status only.
 
 ## Where settings live

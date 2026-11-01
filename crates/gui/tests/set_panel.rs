@@ -235,7 +235,7 @@ fn the_json_editor_button_is_small_and_on_the_tab_row() {
     let mut h = harness(m);
     h.run();
     let tab = h.get_by_role_and_label(Role::Button, "Advanced").rect();
-    let b = h.get_by_label("TruePBR JSON editor…");
+    let b = h.get_by_label("PGPatcher JSON editor…");
     assert!(b.rect().width() < 220.0);
     assert!(
         b.rect().min.x > tab.max.x && tab.y_range().contains(b.rect().center().y),
@@ -271,7 +271,7 @@ fn the_json_editor_button_stays_inside_a_narrow_centre() {
     let mut h = harness_with(m, 1000.0, 800.0, false);
     h.run();
     let p = centre(&h);
-    let b = h.get_by_label("TruePBR JSON editor…").rect();
+    let b = h.get_by_label("PGPatcher JSON editor…").rect();
     assert!(b.max.x <= p.max.x, "button {b:?} inside the centre {p:?}");
 }
 

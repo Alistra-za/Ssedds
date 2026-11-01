@@ -2442,7 +2442,7 @@ impl AppModel {
         // The JSON rows are added once the plan settles (`finish_plan`): they read the settled sets.
         self.stale_json.clear();
         // The count of undecided textures is shown (amber) in the Textures column header.
-        self.status_line = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        self.status_line = self.counts_line();
         // The undo note stays through the plan the undo started, and goes with the next one.
         if matches!(self.undo_note_at, Some((_, true))) {
             self.drop_undo_note();
@@ -2935,13 +2935,20 @@ impl AppModel {
         Some(UNDO_NOTE_FOR.saturating_sub(now.saturating_duration_since(at)))
     }
 
+    /// "1 texture, 1 set" / "3 textures, 2 sets" (Note F?14).
+    fn counts_line(&self) -> String {
+        let pl = |n: usize| if n == 1 { "" } else { "s" };
+        let (t, s) = (self.items.len(), self.sets.len());
+        format!("{t} texture{}, {s} set{}", pl(t), pl(s))
+    }
+
     /// Show "Undid: <label>" (or "Redid") in the status line until the next edit. It stands beside an Export-cancelled
     /// note (AF10, AF11), which stays; the encoding note went with the undo's `reset_type_follow`.
     fn undo_noted(&mut self, verb: &str, label: &str) {
         self.drop_undo_note();
         let n = format!("{verb}: {label}.");
         // In front of the normal status text, not in place of it; the plan the step started rewrites the counts.
-        let counts = format!("{} textures, {} sets", self.items.len(), self.sets.len());
+        let counts = self.counts_line();
         self.status_line = match &self.status_note {
             Some(c) => format!("{n} {c} {counts}"),
             None => format!("{n} {counts}"),

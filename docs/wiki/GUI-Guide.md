@@ -108,7 +108,7 @@ A texture that still needs an answer has an amber border. The centre column then
 | What kind of texture is this? | A sub-type dropdown and **Confirm**. |
 | What does the alpha channel mean? | *Remove*, *Cutout*, *Blend*, *Cutout + Blend*, *Data*. |
 | An info line "IN-GREEN-UNSTATED" on a plain `_normal` | The map is converted as DirectX. Press *Treat as OpenGL (flip green)* if it is an OpenGL map; an OpenGL file then shows *Green: OpenGL (flipped)* with a *Treat as DirectX* button that undoes it. |
-| A blocking warning | **Acknowledge for this texture**. For `DIM-NPOT` there is also **Resize to a power of two**, which writes `resize = "pot-down"`. |
+| A blocking warning | **Acknowledge for this texture** (**Drop the alpha anyway for this texture** when the warning is a varying alpha the format discards). For `DIM-NPOT` there is also **Resize to a power of two**, which writes `resize = "pot-down"`. |
 
 Every answer is written to `sdc.toml`, as a field value or as an `allow` code on the file's `[files]` entry. A choice you make always wins over a suggestion.
 
@@ -223,7 +223,7 @@ Double-click a tile (or a set member) to expand it into a preview with a Source 
 2. If something is blocked, undecided or worth a second look, **Review** opens in the bottom panel instead of exporting (see the bottom panel, [Main window](#main-window) item 13). Decide the textures there (or **Accept all suggestions**), fix the blockers, tick the warnings, then press Review's **Export**, which exports the decided textures and skips the rest. It never decides for you and never exports by itself.
 3. If a source changed on disk since it was planned, Export plans again first. The Textures column also offers **Reload** for changed files.
 4. The bottom panel opens on its *Files* tab (one row per file: queued, running, converted, validation failed, up to date, skipped, failed, cancelled). Click a row to select that texture; hover it for the file's warnings, which *Problems* also lists.
-5. After a complete export, the TruePBR JSON is written (see below).
+5. After a complete export, the PGPatcher JSON is written (see below).
 
 While it runs the Files tab shows done/total, elapsed time, files per second and an ETA. The *Files* tab handles thousands of rows, with **Failed only** and **Has warnings** filters; **Show in Explorer** on a row selects the output. Buttons: **Cancel** stops the batch. **Open export folder** opens it in Explorer. **Save report…** writes the report as JSON Lines or Markdown. **Close** collapses the panel. **Copy CLI command** copies an `sdc convert` command for this export: the same folder (with `--recursive`), output, BC1 decoder and thread count, plus `--accept-suggestions high`, because the GUI accepts High-confidence suggestions. Before you run it, check two things it does not carry over:
 
@@ -330,14 +330,14 @@ Rules:
 
 After a complete export, Export writes `<export folder>\PBRNIFPatcher\<name>.json`, with `<name>` from the editor's **JSON name:** field (by default the folder name). Only sets that exported fully are written. If the file exists and is not the one Tessalith wrote last time, you are asked before it is overwritten; a byte-identical file is never prompted. The JSON is written in `cs` mode only.
 
-### The TruePBR JSON editor
+### The PGPatcher JSON editor
 
-Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** with no project open) or from the **TruePBR JSON editor…** button in a set's Material tab. It opens as a tab of the centre column; **Pop out** moves it to a window of its own, titled "TruePBR JSON — Tessalith", and **Dock** brings it back (see [Presets](#presets)). Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
+Open it with **PGPatcher JSON editor…** in the header's **Export to ▾** menu (**More ▾** with no project open) or from the **PGPatcher JSON editor…** button in a set's Material tab. It opens as a tab of the centre column; **Pop out** moves it to a window of its own, titled "PGPatcher JSON — Tessalith", and **Dock** brings it back (see [Presets](#presets)). Its top field, **JSON name:**, names the JSON file; a change applies when you leave the field, as one undo step.
 
 - Each PBR set's entry is a pill with its title, output prefix and **Show** (selects the set and brings its editor to the front), then its keys as small pills with the same controls as the Material tab's groups.
 - **+ key** adds any schema key. Keys Tessalith does not know are shown in amber and kept as written; they can be removed.
 - A texture match pill picks how it matches: *Match: exact, slot N (diffuse)* (`matchN`) or *path contains*. A set's own diffuse path reads *derived from the set*. A lock key reads *Keep the original texture (PGPatcher won't replace it): diffuse* (`lock_diffuse`, shown on hover). In Slot commands the box that locks slot N is named *Pin slot N (always use this file)*. The **▾** picker lists the scan's textures for that slot, or every known texture path. The *mesh path contains* pill (`nif_filter`) has a picker of folders that hold scanned meshes. Without a scan, the pickers list only the project's own paths.
-- **+ Delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
+- **+ Add a delete section** adds an entry that belongs to no set and makes PGPatcher delete the shapes it matches, for example a vanilla glow shape the PBR base shape replaces. Sections are saved as `[[pgp_sections]]` in `sdc-project.toml` (keys `match1` to `match8`, `path_contains`, `nif_filter`) and written with `delete: true` after every set's entry. A section with no texture match is not written.
 - A delete section that hits one of your sets (by exact match on the set's texture, or `path_contains` in its diffuse path) strikes that set's pill through, outlines it amber and warns. The set editor shows the same warning with a button to the editor.
 - The header reads "N errors, M warnings". Errors block Export and show as a red line under their entry; warnings are what Export asks about. **Next error** / **Prev** (F8 / Shift+F8) jump between entries with errors, and a search box filters entries by set name or path.
 - **JSON text** shows the file as it would be written now, with **Copy**.

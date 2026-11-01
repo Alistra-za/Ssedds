@@ -919,7 +919,11 @@ fn decision_box(
                             ui.label(m);
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("Acknowledge for this texture").clicked() {
+                            if ui
+                                .button(crate::model::code_text::ack_label_for_texture(*code))
+                                .on_hover_text(code_line(*code))
+                                .clicked()
+                            {
                                 actions.push(Action::Decide(Answer::Acknowledge(*code)));
                             }
                             if *code == Code::DimNpot

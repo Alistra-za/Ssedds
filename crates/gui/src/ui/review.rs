@@ -6,7 +6,7 @@ use super::settings_panel::{
 use super::status::{AMBER, RED};
 use super::type_picker::{self, TypeKind};
 use crate::model::bottom::{problems, Level};
-use crate::model::code_text::code_line;
+use crate::model::code_text::{ack_label, ack_label_for_texture, code_line};
 use crate::model::items::Decision;
 use crate::model::picker::{self, PickerPurpose, PickerSpec};
 use crate::model::review::{
@@ -132,7 +132,8 @@ pub fn undecided_row(
                     // Note FB8: the sentence, with the code on its hover.
                     ui.label(code_line(*code)).on_hover_text(code.as_str());
                     if ui
-                        .button("Acknowledge for this texture")
+                        .button(ack_label_for_texture(*code))
+                        .on_hover_text(code_line(*code))
                         .on_disabled_hover_text(why)
                         .clicked()
                     {
@@ -250,7 +251,8 @@ pub fn fix_buttons(
                 }
                 Decision::Acknowledge(code) => {
                     if ui
-                        .button("Acknowledge")
+                        .button(ack_label(*code))
+                        .on_hover_text(code_line(*code))
                         .on_disabled_hover_text(why)
                         .clicked()
                     {

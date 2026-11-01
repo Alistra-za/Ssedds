@@ -89,7 +89,7 @@ fn the_advanced_drawer_is_hidden_while_a_docked_view_is_in_front() {
 fn json_editor_opens_as_a_centre_tab() {
     let d = tempfile::tempdir().unwrap();
     let mut h = harness(pbr_opened(d.path()));
-    // The same menu item as before: Export to ▾ → TruePBR JSON editor….
+    // The same menu item as before: Export to ▾ → PGPatcher JSON editor….
     h.get_by_label_contains("Export to: ").click();
     h.run();
     h.get_by_label(sdc_gui::ui::header::JSON_EDITOR).click();
@@ -101,7 +101,7 @@ fn json_editor_opens_as_a_centre_tab() {
     assert_in_centre(&h, WINDOW_TITLE);
     assert_in_centre(&h, NAME_LABEL);
     assert_in_centre(&h, &format!("Pop out {WINDOW_TITLE}"));
-    assert_eq!(windows(&h), 0, "no floating TruePBR JSON window");
+    assert_eq!(windows(&h), 0, "no floating PGPatcher JSON window");
 }
 
 #[test]
@@ -170,9 +170,9 @@ fn docked_and_popped_controls_have_distinct_names() {
     assert_eq!(
         names,
         [
+            "Close PGPatcher JSON",
             "Close Presets",
-            "Close TruePBR JSON",
-            "Dock TruePBR JSON",
+            "Dock PGPatcher JSON",
             "Pop out Presets"
         ],
         "one of each, no two alike"
