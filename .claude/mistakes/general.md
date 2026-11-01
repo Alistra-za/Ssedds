@@ -10,3 +10,4 @@ Format and rules: [README.md](README.md).
 - 2026-11-01 Merging a branch that stops tracking files (`git rm --cached`) deleted those files from the other checkout's disk → back them up first (git merge)
 - 2026-11-01 A shared CARGO_TARGET_DIR on C: grew to 432 GB and filled the drive → check its size and put it on F: (`CARGO_TARGET_DIR`)
 - 2026-11-01 `cargo clean` missed the real build folder → pass `--target x86_64-pc-windows-msvc` too (`cargo clean`)
+- 2026-11-01 A `///` doc-comment change on a `JsonSchema` field left `schema/*.json` stale and failed `committed_schemas_match_the_types` in the full gate → after editing such a comment run `sdc presets schema all --out schema` and commit the diff (`crates/engine/tests/schemas.rs`)

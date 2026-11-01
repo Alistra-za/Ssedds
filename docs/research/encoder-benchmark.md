@@ -46,7 +46,7 @@ The [encoder survey](encoder-survey.md) found that nobody had published a fair c
 
 ### Protocol
 
-- **One decoder for every output**, mip 0 only, compared with the source in 8-bit code values. No colour-space conversion on either side. BC1 colours were decoded as `round((2a+b)/3)` ("IdealRound4"). BC4 interpolants (BC4, BC5, BC3 alpha) were decoded rounded down, as upstream rgbcx does, where GPUs round to nearest; [BC3, BC4 and BC5](#bc3-bc4-and-bc5-tessaliths-encoder-against-the-others-2026-10-31) rescores them both ways.
+- **One decoder for every output**, mip 0 only, compared with the source in 8-bit code values. No colour-space conversion on either side. BC1 colours were decoded as `round((2a+b)/3)` ("IdealRound4"). BC4 interpolants (BC4, BC5, BC3 alpha) were decoded rounded down, as upstream rgbcx does, where GPUs round to nearest; [BC3, BC4 and BC5](#bc3-bc4-and-bc5-tessaliths-encoder-against-the-others-2026-11-01) rescores them both ways.
 - **Normal maps** were scored the way a BC5 shader reads them: X and Y decoded, Z rebuilt. BC7 was also scored with its stored Z.
 - **BC6H** used identical fp16 input for every tool. mPSNR uses 13 exposures from 2⁻⁶ to 2⁶. Peak ratio is decoded peak luminance divided by source peak; 1.0 means the brightest highlight survives.
 - **Alpha flags were set the way a real pipeline would**: NVTT `-noalpha` on opaque sets and `-alpha` on alpha sets; ISPC alpha profiles on alpha sets.
