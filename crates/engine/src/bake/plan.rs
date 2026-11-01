@@ -187,7 +187,7 @@ fn missing_normal(cx: &BakeCtx, set: &TextureSet, outside: &Outside, j: &mut Res
     }
 }
 
-/// `SET-MISSING-COMPANION`'s text for a roughness member with no `_n` at all (also `memory::encode_rmaos_set`'s note).
+/// `SET-MISSING-COMPANION`'s text for a roughness member with no `_n` at all.
 pub const NO_NORMAL: &str =
     "no _n in this PBR set: the roughness is written without the variance bake";
 

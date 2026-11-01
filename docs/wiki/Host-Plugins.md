@@ -13,7 +13,11 @@ The plugins save one image at a time. They do not read `sdc.toml`, sets or a mod
 
 All of them are Windows x64 only. They are not code-signed, so Windows may block the zip or warn when you run it. Right-click the zip, choose **Properties**, tick **Unblock**, then unzip.
 
-Each zip holds a README with the full guide. The same guides are in the repository: [Photoshop](../../photoshop/README.md), [GIMP](../../gimp/README.md), [Paint.NET](../../paintdotnet/README.md), [chaiNNer](../../chainner/README.md).
+Each zip holds a README with the full guide. The same guides are on the `host-plugins` branch: [Photoshop](https://github.com/Alistra-za/Tessalith/tree/host-plugins/photoshop/README.md), [GIMP](https://github.com/Alistra-za/Tessalith/tree/host-plugins/gimp/README.md), [Paint.NET](https://github.com/Alistra-za/Tessalith/tree/host-plugins/paintdotnet/README.md), [chaiNNer](https://github.com/Alistra-za/Tessalith/tree/host-plugins/chainner/README.md).
+
+## Where the plugins live
+
+The plugins' source (`photoshop/`, `gimp/`, `paintdotnet/`, `chainner/` and the shared `crates/psdds`) is on the [`host-plugins` branch](https://github.com/Alistra-za/Tessalith/tree/host-plugins), not on `main`. Plugin bug fixes go to that branch. The plugins are built against the engine version on that branch (1.2.0) and are not updated with later engine versions, so a later Tessalith release can encode some textures differently from the plugins. To build a plugin, check out `host-plugins` and follow its build steps there.
 
 ## Install
 

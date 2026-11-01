@@ -1,5 +1,7 @@
 # Tessalith DDS plugin for Photoshop
 
+The plugin's source, and every path and build command on this page, are on branch `host-plugins`, not `main`; see [Host plugins](wiki/Host-Plugins.md#where-the-plugins-live).
+
 `TessalithDDS.8bi` is a Photoshop file-format plugin (Windows x64, Photoshop 2020+) that opens and saves Skyrim DDS textures with Tessalith's encoders and rules. Its user guide is `photoshop/README.md`; the rulings are Note DC (the plugin) and Note DF (16-bit, 32-bit and HDR: 32-bit RGB documents, BC6H and RGBA16F under Colour for 16/32-bit documents, Open of HDR files as 32-bit) in [DECISIONS.md](DECISIONS.md).
 
 ## Layout
