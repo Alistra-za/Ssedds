@@ -683,7 +683,9 @@ impl CsPbrScan {
         db: Option<&Path>,
         f: impl FnOnce(&Store) -> Result<T, String>,
     ) -> Result<T, String> {
-        let s = match self.store.borrow().clone() {
+        // Bound first: a borrow in the match scrutinee lives through the arms, and the `None` arm borrows mutably.
+        let cached = self.store.borrow().clone();
+        let s = match cached {
             Some(s) => s,
             None => {
                 let s = std::rc::Rc::new(open(db)?);
