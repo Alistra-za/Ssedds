@@ -159,9 +159,12 @@ enum Act {
     Slot(MenuAction),
 }
 
-/// Below this inner card width the pill and the ⚠ button go under the name, so the header row never holds the
-/// Sets column open past `SETS_MIN`.
-const WIDE_CARD: f32 = 150.0;
+/// The card's heading is one row only when the name keeps this much beside the pill and badges; otherwise the pill
+/// and badges go under the name (Note F?13).
+const NAME_MIN: f32 = 80.0;
+/// The position number and the ≡ handle before the name, and the status dot with the pill's frame margins.
+const CARD_LEAD: f32 = 32.0;
+const PILL_CHROME: f32 = 22.0;
 /// The size of a member thumbnail (`columns::member`), which an empty chip matches.
 const CHIP: f32 = 32.0;
 
@@ -252,19 +255,35 @@ fn warn_button(ui: &mut egui::Ui, v: &SetView, rows: &[(&str, &Warning)], acts: 
 /// The artist checks' "ⓘ n" badge (DECISIONS Note CL): `n` counts the Warning-level results, in the weak text colour
 /// because a check never changes "ready" (owner answer 1); the hover lists every result, Info ones included (owner
 /// answer 2); a click opens Problems on the set (ui-rules 1.3).
-fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts: &mut Vec<Act>) {
-    if checks.is_empty() {
-        return;
-    }
+fn check_badge_text(checks: &[(&str, &Warning)]) -> (usize, String) {
     let n = checks
         .iter()
         .filter(|(_, w)| super::counts_toward_badge(w))
         .count();
-    let text = if n == 0 {
-        "ⓘ".to_string()
-    } else {
-        format!("ⓘ {n}")
-    };
+    (
+        n,
+        if n == 0 {
+            "ⓘ".into()
+        } else {
+            format!("ⓘ {n}")
+        },
+    )
+}
+
+/// The width of `text` in the small font, as a button or pill would paint it (a few short strings per card per frame).
+fn small_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font, egui::Color32::PLACEHOLDER)
+        .size()
+        .x
+}
+
+fn check_badge(ui: &mut egui::Ui, v: &SetView, checks: &[(&str, &Warning)], acts: &mut Vec<Act>) {
+    if checks.is_empty() {
+        return;
+    }
+    let (n, text) = check_badge_text(checks);
     let weak = ui.visuals().weak_text_color();
     let r = ui.add(egui::Button::new(
         egui::RichText::new(text).small().color(weak),
@@ -872,7 +891,11 @@ fn new_set_area(ui: &mut egui::Ui, editing: &Editing, acts: &mut Vec<Act>) {
         egui::Frame::group(ui.style()).corner_radius(12.0),
         |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Drop here to start a new set").color(AMBER));
+            // A one-off hint: it wraps rather than elides (the column's style truncates).
+            ui.add(
+                egui::Label::new(egui::RichText::new("Drop here to start a new set").color(AMBER))
+                    .wrap(),
+            );
         },
     );
     if !editing.on {
@@ -1028,7 +1051,21 @@ fn pill(
                                 .map(|w| (v.id.as_str(), w)),
                         )
                         .collect();
-                    let wide = ui.available_width() >= WIDE_CARD;
+                    // One row only when the name keeps NAME_MIN px beside the pill and badges (Note F?13).
+                    let sp = ui.spacing().item_spacing.x;
+                    let btn = 2.0 * ui.spacing().button_padding.x + sp;
+                    let mut need = CARD_LEAD
+                        + NAME_MIN
+                        + small_width(ui, kind_text(model, v))
+                        + PILL_CHROME
+                        + sp;
+                    if !rows.is_empty() {
+                        need += small_width(ui, &format!("⚠ {}", rows.len())) + btn;
+                    }
+                    if !checks.is_empty() {
+                        need += small_width(ui, &check_badge_text(&checks).1) + btn;
+                    }
+                    let wide = ui.available_width() >= need;
                     let name = |ui: &mut egui::Ui| {
                         ui.add(egui::Label::new(egui::RichText::new(&v.id).strong()).truncate());
                     };

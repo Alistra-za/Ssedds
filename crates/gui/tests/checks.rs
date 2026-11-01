@@ -920,6 +920,68 @@ fn the_card_shows_check_results_on_an_info_badge_outside_the_warning_count() {
     assert!(b.min.y > name.max.y, "the badge wrapped below the name row");
 }
 
+/// The painted text of the label whose whole text is `full`, row by row, whitespace removed; `None` if none is painted.
+fn painted_text(h: &Harness<'static, AppModel>, full: &str) -> Option<String> {
+    h.output().shapes.iter().find_map(|c| match &c.shape {
+        egui::Shape::Text(t) if t.galley.job.text == full => Some(
+            t.galley
+                .rows
+                .iter()
+                .map(|r| r.text())
+                .collect::<String>()
+                .split_whitespace()
+                .collect::<String>(),
+        ),
+        _ => None,
+    })
+}
+
+/// Note F?13 (A10): at the narrowest Sets column a PBR set's pill and badges leave its name no room on one row, so
+/// the name has its own row and is painted whole, not as `…`.
+#[test]
+fn a_narrow_set_card_keeps_its_name() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_sets(d.path(), &[("mead_bottle", 20)], true);
+    let mut h = harness(m, 1100.0);
+    h.ctx
+        .data_mut(|d| d.insert_persisted(egui::Id::new("sets").with("chosen"), 210.0f32));
+    h.run();
+    let sets = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sets"))
+        .expect("the Sets column")
+        .outer_rect;
+    assert!(sets.width() < 230.0, "{sets:?}");
+    let name = h
+        .query_all_by_label("test/mead_bottle")
+        .map(|n| n.rect())
+        .filter(|r| sets.contains_rect(*r))
+        .min_by(|a, b| a.min.x.total_cmp(&b.min.x))
+        .expect("the card's name");
+    assert!(
+        name.width() >= 60.0,
+        "the name is squeezed: {name:?} in {sets:?}"
+    );
+    assert_eq!(
+        painted_text(&h, "test/mead_bottle").as_deref(),
+        Some("test/mead_bottle"),
+        "the name is painted whole"
+    );
+}
+
+/// Note F?13: the drop zone's one-off hint wraps instead of eliding.
+#[test]
+fn the_drop_zone_hint_is_whole() {
+    let d = tempfile::tempdir().unwrap();
+    let m = pbr_sets(d.path(), &[("mead_bottle", 20)], true);
+    let mut h = harness(m, 1100.0);
+    h.ctx
+        .data_mut(|d| d.insert_persisted(egui::Id::new("sets").with("chosen"), 0.0f32));
+    h.run();
+    assert_eq!(
+        painted_text(&h, "Drop here to start a new set").as_deref(),
+        Some("Dropheretostartanewset")
+    );
+}
+
 /// Review I1: an undecided member's results are left out of the badge, as Problems leaves out its rows.
 #[test]
 fn an_undecided_members_check_results_are_not_on_the_badge() {
