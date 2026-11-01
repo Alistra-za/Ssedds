@@ -244,6 +244,120 @@ fn projected_missing_lists_unresolved_paths() {
     assert!(r.projected_missing().is_empty());
 }
 
+/// Every projected register binds its resolved texture, not the fallback (review I2): the stand-in's
+/// STANDIN_PROJECTED returns r = 0.5·t3 + 0.25·t11, g = 0.5·t8, b = 0.5·t10, and a black texture at one path moves
+/// only that register's term. The installed CS optimises the t8/t10 samples of a flat quad away, so this is the
+/// check for those two.
+#[test]
+fn projected_registers_bind_resolved_textures() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = common::renderer(
+        cache.path(),
+        &[common::FLAT, &["STANDIN_PROJECTED"]].concat(),
+    );
+    let parsed = render3d::ParsedNif {
+        shapes: vec![common::plane_shape(0, common::IDENT, [0.0; 3], 0)],
+        ..Default::default()
+    };
+    let rep = r.load_parsed(&parsed, &|_| None);
+    assert!(rep.compile_errors.is_empty(), "{rep:?}");
+    let frame = |r: &mut Renderer, black: Option<&str>| {
+        let dds = common::dds_rgba8(1, 1, &[[0, 0, 0, 255]]);
+        r.set_projected_layer(None, &|_| None);
+        r.set_projected_layer(Some(ash()), &|p| (Some(p) == black).then(|| dds.clone()));
+        assert_eq!(r.shapes()[0].status, ShapeStatus::Drawing);
+        centre(&r.render(&Scene::neutral(), 32, 32).unwrap(), 32, 32)
+    };
+    // Fallbacks: t3 white, t11 mid grey (128), t8/t10 flat normal (r = 128).
+    let base = frame(&mut r, None);
+    let near = |a: u8, b: f32| (f32::from(a) - b).abs() <= 2.0;
+    assert!(
+        near(base[0], 255.0 * (0.5 + 0.25 * 128.0 / 255.0))
+            && near(base[1], 64.0)
+            && near(base[2], 64.0),
+        "{base:?}"
+    );
+    for (path, want) in [
+        (DIFFUSE, [255.0 * 0.25 * 128.0 / 255.0, 64.0, 64.0]),
+        ("textures/effects/projectednoise.dds", [127.5, 64.0, 64.0]),
+        (
+            "textures/effects/projectednormal.dds",
+            [base[0].into(), 0.0, 64.0],
+        ),
+        (
+            "textures/effects/projectednormaldetail.dds",
+            [base[0].into(), 64.0, 0.0],
+        ),
+    ] {
+        let px = frame(&mut r, Some(path));
+        assert!(
+            (0..3).all(|c| near(px[c], want[c])),
+            "{path}: {px:?} want {want:?}"
+        );
+    }
+}
+
+/// With the layer on, an edit that makes it stop or start applying is a permutation (review I3): `classify` alone
+/// sees no define change for type 0 ↔ 14 or a PBR SLSF2.24 toggle. The stand-in reflects t3 only under PROJECTED_UV,
+/// so the rebuilt draw's bindings show which program it has.
+#[test]
+fn eligibility_flip_is_a_permutation() {
+    use render3d::{classify, EditKind};
+    let cache = tempfile::tempdir().unwrap();
+    let mut r = common::renderer(
+        cache.path(),
+        &[common::FLAT, &["STANDIN_PROJECTED"]].concat(),
+    );
+    let shape = common::plane_shape(0, common::IDENT, [0.0; 3], 0);
+    let plain = shape.material.clone();
+    let mut pbr_plain = plain.clone();
+    pbr_plain.slsf2 |= 1 << 23;
+    let parsed = render3d::ParsedNif {
+        shapes: vec![shape],
+        ..Default::default()
+    };
+    r.set_projected_layer(Some(ash()), &|_| None);
+    let rep = r.load_parsed(&parsed, &|_| None);
+    assert!(rep.compile_errors.is_empty(), "{rep:?}");
+    let projected = |r: &mut Renderer| {
+        assert_eq!(r.shapes()[0].status, ShapeStatus::Drawing);
+        let (ps, ..) = r.draw_diag(ShapeId(0)).unwrap();
+        let has = ps.iter().any(|(k, _)| k == "PROJECTED_UV");
+        // t3 is in the draw only when its program has PROJECTED_UV; then it holds the white fallback.
+        let t3 = r.draw_default_at(ShapeId(0), 3);
+        assert_eq!(t3.is_some(), has, "{ps:?}");
+        if has {
+            assert_eq!(t3.unwrap().1, [255; 4]);
+        }
+        has
+    };
+    assert!(projected(&mut r));
+    let mut sparkle = plain.clone();
+    sparkle.shader_type = 14;
+    let mut mlp = pbr_plain.clone();
+    mlp.slsf2 |= 1 << 24;
+    for (from, to) in [(&plain, &sparkle), (&pbr_plain, &mlp)] {
+        // Without the layer these edits are cbuffer-only.
+        assert_eq!(classify(from, to, &[], false), EditKind::Cbuffer);
+        assert_eq!(
+            r.set_material(ShapeId(0), from.clone(), &|_| None)
+                .map(|_| ()),
+            Ok(())
+        );
+        assert!(projected(&mut r));
+        assert_eq!(
+            r.set_material(ShapeId(0), to.clone(), &|_| None),
+            Ok(EditKind::Permutation)
+        );
+        assert!(!projected(&mut r));
+        assert_eq!(
+            r.set_material(ShapeId(0), from.clone(), &|_| None),
+            Ok(EditKind::Permutation)
+        );
+        assert!(projected(&mut r));
+    }
+}
+
 // ---- render_projected_*: the installed CS (`SDC_CS_SHADERS`); run alone with --test-threads=1. ----
 
 fn cs_renderer(cache: &std::path::Path) -> Option<Renderer> {
@@ -362,6 +476,43 @@ fn render_projected_tints_up_faces() {
     // Off again: the old look returns.
     r.set_projected_layer(None, &|_| None);
     assert_eq!(centre(&r.render(&top_scene(), w, h).unwrap(), w, h), off);
+    // A resolved non-white diffuse is what the layer shows (review I2): red keeps, green and blue drop.
+    let red = common::dds_rgba8(1, 1, &[[255, 64, 64, 255]]);
+    r.set_projected_layer(Some(ash()), &|p| (p == DIFFUSE).then(|| red.clone()));
+    let on_red = centre(&r.render(&top_scene(), w, h).unwrap(), w, h);
+    println!("on_red {on_red:?}");
+    assert!(
+        on_red[1] + 30 < on[1]
+            && on_red[2] + 30 < on[2]
+            && (on_red[0] as i32 - on[0] as i32).abs() <= 2,
+        "{on:?} → {on_red:?}"
+    );
+    // A resolved noise texture moves the coverage: with bias 0.9 the grey fallback noise (0.5) gives
+    // projWeight 0.1 − 0.4·0.5 < −0.1, so no layer; a black noise map gives 0.1, a full layer.
+    let edge = ProjectedLayer {
+        falloff_bias: 0.9,
+        ..ash()
+    };
+    r.set_projected_layer(None, &|_| None);
+    r.set_projected_layer(Some(edge.clone()), &|p| (p == DIFFUSE).then(|| red.clone()));
+    let grey_noise = centre(&r.render(&top_scene(), w, h).unwrap(), w, h);
+    let black = common::dds_rgba8(1, 1, &[[0, 0, 0, 255]]);
+    r.set_projected_layer(None, &|_| None);
+    r.set_projected_layer(Some(edge), &|p| match p {
+        DIFFUSE => Some(red.clone()),
+        "textures/effects/projectednoise.dds" => Some(black.clone()),
+        _ => None,
+    });
+    let black_noise = centre(&r.render(&top_scene(), w, h).unwrap(), w, h);
+    println!("grey noise {grey_noise:?} black noise {black_noise:?}");
+    assert!(
+        (0..3).all(|c| (grey_noise[c] as i32 - off[c] as i32).abs() <= 1),
+        "no coverage with the fallback noise: {off:?} vs {grey_noise:?}"
+    );
+    assert!(
+        (0..3).all(|c| (black_noise[c] as i32 - on_red[c] as i32).abs() <= 1),
+        "full coverage with the black noise: {on_red:?} vs {black_noise:?}"
+    );
 }
 
 #[test]
