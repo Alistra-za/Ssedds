@@ -262,7 +262,12 @@ const SNOW: [f32; 11] = [0.5, 0.2, 30.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.9, 0.8, 0.7]
 
 /// A scanned MO2 instance: Skyrim.esm with [`SNOW`], and mod A's loose projected diffuse.
 fn scanned(root: &Path) -> PathBuf {
-    scan_fixture::put(root, "Game/Data/Skyrim.esm", &skyrim_esm(SNOW));
+    scanned_with(root, &skyrim_esm(SNOW))
+}
+
+/// [`scanned`] with `esm` as Skyrim.esm.
+fn scanned_with(root: &Path, esm: &[u8]) -> PathBuf {
+    scan_fixture::put(root, "Game/Data/Skyrim.esm", esm);
     scan_fixture::put(
         root,
         "mods/A/textures/effects/projecteddiffuse.dds",
@@ -577,6 +582,47 @@ fn reads_are_kept_per_key() {
     frame(&mut s, &m);
     assert_eq!(s.v3.projected(), Some(&snow(0.7)), "served from the cache");
     assert_eq!(n.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+/// Fix round 2, I2: one plugin read at a time across keys. A, B and C are picked while A's read is gated: only A runs.
+/// The user is on C when A lands, so B (queued, no longer current) is skipped and never read, and C is read next.
+#[test]
+fn one_plugin_read_at_a_time() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let inst = scan_fixture::instance_fixture("+A\n");
+    let recs: Vec<_> = [("SnowMat1P", 0.5), ("AshMat1P", 0.6), ("MossMat1P", 0.7)]
+        .into_iter()
+        .zip(0xA00u32..)
+        .map(|((e, falloff), id)| {
+            let mut f = SNOW;
+            f[0] = falloff;
+            rec(b"MATO", id, &[edid(e), sub(b"DATA", &data(f, 1))])
+        })
+        .collect();
+    let db = scanned_with(
+        inst.path(),
+        &plugin(esp::FLAG_ESM, &[], &[top(b"MATO", &recs)]),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let (mut m, mut s) = snow_preview(&db, dir.path());
+    let (reader, n, gate) = gated_reader();
+    s.set_plugin_reader(reader);
+    s.set_mato_layer(true);
+    frame(&mut s, &m);
+    reads_started(&n, 1);
+    for e in ["AshMat1P", "MossMat1P"] {
+        m.set_cs_edids(ROCK, Kind::Mato, &[e.to_string()]);
+        frame(&mut s, &m);
+    }
+    assert!(s.busy());
+    assert_eq!(n.load(SeqCst), 1, "one read at a time: B and C wait");
+    // Two tokens for A and C; a third so a reader that also starts B does not hang the test.
+    for _ in 0..3 {
+        gate.send(()).unwrap();
+    }
+    run(&mut s, &m);
+    assert_eq!(n.load(SeqCst), 2, "A and C were read; B was skipped");
+    assert_eq!(s.v3.projected().map(|l| l.falloff_scale), Some(0.7));
 }
 
 /// Fix round 1, I3 (controller ruling): a finite value outside the cs_mato card's range for that field

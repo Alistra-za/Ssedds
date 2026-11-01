@@ -41,7 +41,7 @@ use render3d::{Glint, ParsedNif, ProjectedLayer, ShapeId, Variant};
 use serde_json::{json, Value};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1701,8 +1701,10 @@ pub struct SetPreview {
     mato_data: Option<esp::MatoData>,
     /// A record was picked and its DATA is read or being read (false: default coverage).
     mato_found: bool,
-    /// Keys being read, picked or not: at most one read per key, and a finished one is cached under its own key.
-    mato_inflight: HashSet<MatoKey>,
+    /// The one plugin read running (each can hold a ~250 MB buffer), and the keys waiting for it, each once, with their
+    /// EDID. A finished read is cached under its own key; a queued key no longer picked when its turn comes is skipped.
+    mato_running: Option<MatoKey>,
+    mato_queue: VecDeque<(MatoKey, String)>,
     mato_cache: HashMap<MatoKey, Option<esp::MatoData>>,
     /// Reads a plugin file (`std::fs::read`; a test seam).
     mato_reader: PluginReader,
@@ -1781,7 +1783,8 @@ impl SetPreview {
             mato_key: None,
             mato_data: None,
             mato_found: false,
-            mato_inflight: HashSet::new(),
+            mato_running: None,
+            mato_queue: VecDeque::new(),
             mato_cache: HashMap::new(),
             mato_reader: Arc::new(|p: &Path| std::fs::read(p)),
             mato_due: false,
@@ -1854,7 +1857,7 @@ impl SetPreview {
             })
             || self.querying.is_some()
             || self.loading.is_some()
-            || !self.mato_inflight.is_empty()
+            || self.mato_running.is_some()
             || (self.want_scene && !self.enc.paused && (self.shown || self.visible))
     }
 
@@ -2077,7 +2080,8 @@ impl SetPreview {
                     }
                     self.want_scene = true;
                 }
-                SpMsg::MatoRead { key, result } if self.mato_inflight.remove(&key) => {
+                SpMsg::MatoRead { key, result } if self.mato_running.as_ref() == Some(&key) => {
+                    self.mato_running = None;
                     // A read for a key that is no longer picked is cached for a later pick, never shown.
                     let current = self.mato_key.as_ref() == Some(&key);
                     match result {
@@ -2098,6 +2102,7 @@ impl SetPreview {
                     if current {
                         self.push_layer();
                     }
+                    self.next_mato_read();
                 }
                 _ => {}
             }
@@ -2656,12 +2661,28 @@ impl SetPreview {
             self.mato_found = d.is_some();
             return;
         }
-        // Pending: counts as found. A key already being read is never read again (one read per key).
+        // Pending: counts as found. A key running or queued is not queued again.
         self.mato_found = true;
-        if !self.mato_inflight.insert(key.clone()) {
+        if self.mato_running.as_ref() != Some(&key)
+            && self.mato_queue.iter().all(|(k, _)| *k != key)
+        {
+            self.mato_queue.push_back((key, w.edid));
+            self.next_mato_read();
+        }
+    }
+
+    /// Starts the first queued read whose key is still picked, unless a read is running (one at a time).
+    fn next_mato_read(&mut self) {
+        if self.mato_running.is_some() {
             return;
         }
-        let (edid, same, read) = (w.edid, key.clone(), self.mato_reader.clone());
+        let Some((key, edid)) = std::iter::from_fn(|| self.mato_queue.pop_front())
+            .find(|(k, _)| self.mato_key.as_ref() == Some(k))
+        else {
+            return;
+        };
+        self.mato_running = Some(key.clone());
+        let (same, read) = (key.clone(), self.mato_reader.clone());
         spawn(
             self.tx.clone(),
             move || {
