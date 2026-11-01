@@ -443,7 +443,12 @@ pub fn spawn_dds(tx: Sender<WorkerMsg>, path: PathBuf, max: u32, bc1: Bc1Model, 
 pub fn spawn_dds_thumbs(tx: Sender<WorkerMsg>, paths: Vec<(PathBuf, SourceStamp)>, bc1: Bc1Model) {
     spawn_guarded(tx, "dds thumbnails", move |tx| {
         for (path, stamp) in paths {
-            let thumb = dds_thumbnail(&path, bc1).map(Arc::new);
+            // A decoder panic fails this file only (it lands as a refused file, not read again), not the batch.
+            let thumb = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                dds_thumbnail(&path, bc1)
+            }))
+            .unwrap_or_else(|_| Err("the DDS decoder panicked".to_string()))
+            .map(Arc::new);
             let _ = tx.send(WorkerMsg::DdsThumb { path, stamp, thumb });
         }
     });
