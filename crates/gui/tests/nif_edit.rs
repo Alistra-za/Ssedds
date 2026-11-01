@@ -11415,6 +11415,62 @@ fn the_preview_keeps_160_px_with_review_open() {
     );
     assert_eq!(tops[3], tops[4], "the head is at its least: {tops:?}");
 }
+
+/// Note F?18 (1; HANDOFF 2026-11-01 owed item 1, GH3): the app hands the opened folder's output game paths to the
+/// Meshes side each frame. Idle frames build nothing (the rev is unchanged); a newly added output reaches it on the
+/// next frame.
+#[test]
+fn the_meshes_side_gets_a_new_output_path_on_the_next_frame() {
+    app_data();
+    let t = tempfile::tempdir().unwrap();
+    let png = |p: &Path| {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        image::RgbImage::from_pixel(64, 64, image::Rgb([90, 120, 30]))
+            .save(p)
+            .unwrap();
+    };
+    let root = t.path().join("mod");
+    png(&root.join("textures/xmead/ale.png"));
+    let model = support::opened_as_the_app(root.clone(), t.path().join("export"));
+    let mut app = sdc_gui::app::SdcApp::new(model);
+    app.meshes.procs = sdc_gui::model::meshes::no_procs;
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            move |ui, app: &mut sdc_gui::app::SdcApp| eframe::App::ui(app, ui, &mut frame),
+            app,
+        );
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run_steps(4);
+    let rev = h.state().model.output_game_paths().0;
+    let builds = h.state().meshes.project_builds;
+    h.run_steps(5);
+    assert_eq!(h.state().model.output_game_paths().0, rev, "idle: same rev");
+    assert_eq!(
+        h.state().meshes.project_builds,
+        builds,
+        "idle frames build nothing"
+    );
+    png(&root.join("textures/xmead/mead.png"));
+    h.state_mut().model.replan();
+    assert!(h
+        .state_mut()
+        .model
+        .wait_idle(std::time::Duration::from_secs(60)));
+    let (rev2, paths) = h.state().model.output_game_paths();
+    assert!(rev2 > rev);
+    assert!(
+        paths.iter().any(|p| p == "textures/xmead/mead.dds"),
+        "{paths:?}"
+    );
+    h.step();
+    assert!(
+        h.state().meshes.project_builds > builds,
+        "the Meshes side did not get the new paths"
+    );
+}
+
 /// GH7 (N7): the shader form numbers slots from 1, and the NIF's own index is on hover.
 #[test]
 fn texture_slots_are_numbered_from_one_with_the_nif_index_on_hover() {
