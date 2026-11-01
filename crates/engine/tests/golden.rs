@@ -4067,12 +4067,12 @@ fn cube_vstrip_bc7() {
 }
 
 /// The encode-versions guard (`encode_versions.rs`) re-pins every sub-type's encode input and fails a changed hash
-/// unless that sub-type's `encode_version` arm was bumped. Every 2D arm staying at the released version is what makes
-/// it fail on any 2D change; only the cube arm (DECISIONS DS6, DS10) and the BC6H-capable arms (Note FF) moved.
+/// unless that sub-type's `encode_version` arm was bumped. Every other 2D arm staying at 1.0.0 is what makes it fail
+/// on any 2D change; only the cube arm (DECISIONS DS6, DS10) and the BC6H-capable arms (Note FF) moved.
 #[test]
 fn two_d_outputs_unchanged() {
     use engine::config::{Format, Subtype};
-    use engine::manifest::{encode_version, RELEASED_ENGINE_VERSION};
+    use engine::manifest::{encode_version, LEGACY_ENCODE_VERSION};
     let bc6h = |st: Subtype| {
         engine::policy::allowed_encodings(st, Target::Cs)
             .iter()
@@ -4093,7 +4093,7 @@ fn two_d_outputs_unchanged() {
         if st != Subtype::Cubemap && !bc6h(st) {
             assert_eq!(
                 encode_version(st),
-                RELEASED_ENGINE_VERSION,
+                LEGACY_ENCODE_VERSION,
                 "{key}: a 2D arm was bumped"
             );
         }

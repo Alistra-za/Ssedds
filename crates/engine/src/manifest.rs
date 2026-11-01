@@ -20,7 +20,7 @@ pub const LEGACY_ENCODE_VERSION: &str = "1.0.0";
 
 /// The newest released engine version. The release commit sets it to [`ENGINE_VERSION`]; the encode-version guard
 /// accepts a changed hash only for an arm bumped in the current, unreleased cycle.
-pub const RELEASED_ENGINE_VERSION: &str = "1.0.0";
+pub const RELEASED_ENGINE_VERSION: &str = "1.1.0";
 
 /// The engine version in which each sub-type's output last changed. Set an arm to the current `ENGINE_VERSION` in
 /// the same commit that changes that type's output bytes or validation verdict. Bumping the engine version alone
