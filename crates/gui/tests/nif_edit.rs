@@ -1122,7 +1122,7 @@ fn in_game_and_back_keeps_the_session_and_shows_every_edit() {
     wait_pg(&mut m);
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)");
+    h.get_by_label("In game");
     h.get_by_label(NO_MATCH);
     let m = h.state_mut();
     m.set_view_source(true);
@@ -4953,8 +4953,8 @@ fn the_clock_row_fits_the_centre_column() {
         nodes.push(h.get_by_label("Play"));
         nodes.push(h.get_by_label("Loop"));
         // v2 B8: the edit-mode toggle above them, too.
-        nodes.push(h.get_by_label("In game (simulated)"));
-        nodes.push(h.get_by_label("Edited source"));
+        nodes.push(h.get_by_label("In game"));
+        nodes.push(h.get_by_label("Source"));
         let speed: Vec<_> = h.query_all_by_label("Speed").collect();
         assert!(!speed.is_empty(), "the Speed label and its value");
         nodes.extend(speed);
@@ -6542,7 +6542,7 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     m.select_edit(Selection::Shape(shape));
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)").click();
+    h.get_by_label("In game").click();
     h.run_steps(4);
     wait_pg(h.state_mut());
     h.run_steps(4);
@@ -6562,7 +6562,7 @@ fn in_game_mode_applies_pgpatcher_json_from_mods() {
     );
     assert_eq!(g.params.uv_offset[0], 0.25, "the edit survives the sim");
 
-    h.get_by_label("Edited source").click();
+    h.get_by_label("Source").click();
     h.run_steps(4);
     let m = h.state();
     assert!(m.view_source);
@@ -6598,6 +6598,91 @@ fn a_second_switch_to_in_game_does_not_read_the_json_again() {
         notes(m, shape)[0],
         r"In game: PGPatcher applies PBRNIFPatcher\x.json."
     );
+}
+
+/// Note GH1 (review D5): two lit shapes, S0 naming `textures\white.dds` (A's x.json matches it; only the PBR copy
+/// exists) and S1 naming `textures\nowhere.dds` (no file, no JSON entry).
+fn supplied_and_missing() -> Vec<u8> {
+    let mut b = builder::Nif::new(100);
+    let names = [b.string("S0"), b.string("S1")];
+    for (i, name) in names.iter().enumerate() {
+        b.block("BSTriShape", one_tri(*name, 2 + i as i32));
+    }
+    for i in 0..2 {
+        b.block("BSLightingShaderProperty", scenes::lsp(0, 4 + i));
+    }
+    for t in ["textures\\white.dds", "textures\\nowhere.dds"] {
+        b.block("BSShaderTextureSet", scenes::texset(&[t]));
+    }
+    b.bytes()
+}
+
+const PG_SUPPLIED: &str =
+    "1 texture path is replaced by PGPatcher at run time: switch to In game to see them";
+
+/// Note GH1 (A26): the toggle reads `In game` / `Source` in and out of Edit.
+#[test]
+fn the_in_game_toggle_has_one_label_pair_in_and_out_of_edit() {
+    let d = pg_files();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    assert!(m.pair.is_some(), "PGP's copy makes the pair");
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("In game");
+    h.get_by_label("Source");
+    h.state_mut().open_edit();
+    h.run_steps(4);
+    assert!(h.state().edit.is_some());
+    h.get_by_label("In game");
+    h.get_by_label("Source");
+    for old in ["In game (simulated)", "Edited source"] {
+        assert!(h.query_by_label(old).is_none(), "{old}");
+    }
+}
+
+/// Note GH1 (review D5, brief Review Focus 1): on the source side a path PGPatcher's JSON replaces is one grey line
+/// naming the toggle's In game label, with the path on hover; a path nothing supplies stays a `Missing texture:` line.
+#[test]
+fn source_lists_paths_pgpatcher_supplies_on_one_line_and_keeps_missing_ones() {
+    let d = pg_files();
+    put(
+        d.path(),
+        "mods/A/meshes/x.nif",
+        Some(&supplied_and_missing()),
+    );
+    let mut m = pg_session_in(d.path());
+    assert!(m.view_source);
+    // The source side reads the JSON too.
+    wait_pg(&mut m);
+    // What render3d lists for this content: neither source path is in the scan.
+    m.v3.report = Some(render3d::LoadReport {
+        missing_textures: vec!["textures/white.dds".into(), "textures/nowhere.dds".into()],
+        ..Default::default()
+    });
+    m.poll();
+    assert_eq!(m.edit.as_ref().unwrap().pg_supplied, ["textures/white.dds"]);
+    assert_eq!(
+        m.v3.report.as_ref().unwrap().missing_textures,
+        ["textures/nowhere.dds"]
+    );
+    let mut h = view(m);
+    h.run_steps(4);
+    h.get_by_label("Missing texture: textures/nowhere.dds");
+    assert!(h
+        .query_by_label("Missing texture: textures/white.dds")
+        .is_none());
+    let paths = |h: &Harness<'_, MeshesModel>| h.query_all_by_label("textures/white.dds").count();
+    let before = paths(&h);
+    h.get_by_label(PG_SUPPLIED).hover();
+    h.run_steps(30);
+    assert_eq!(paths(&h), before + 1, "the path on hover");
+    // In game shows PGPatcher's paths: no grey line there.
+    h.state_mut().set_view_source(false);
+    h.state_mut().poll();
+    h.run_steps(4);
+    assert!(h.query_by_label(PG_SUPPLIED).is_none());
 }
 
 /// `n` BSTriShapes, each with its own BSLSP and a texture set naming `textures\white.dds`.
@@ -7003,9 +7088,14 @@ fn a_folder_scan_says_in_game_needs_an_instance() {
 /// Fix F3: an instance that cannot be read says so, in place of the scope line; no shape claims "no match".
 #[test]
 fn an_unreadable_instance_has_its_own_line() {
-    let (d, mut m) = pg_session();
-    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
+    let d = pg_files();
+    let mut m = MeshesModel::new(Some(d.path().join("scan.db")), MeshesSettings::default());
+    m.procs = sdc_gui::model::meshes::no_procs;
+    scan_and_select(&mut m, d.path());
+    // Before Edit: the JSON read starts when the edit opens (Note GH1).
     std::fs::remove_file(d.path().join("ModOrganizer.ini")).unwrap();
+    m.open_edit();
+    let (shape, _) = lit_shape(m.edit.as_ref().unwrap());
     m.select_edit(Selection::Shape(shape));
     in_game(&mut m);
     assert!(notes(&m, shape).is_empty());
@@ -9759,12 +9849,12 @@ fn in_game_label_reads_simulated_as() {
     m.select_edit(Selection::Shape(shape));
     let mut h = view(m);
     h.run_steps(4);
-    h.get_by_label("In game (simulated)").click();
+    h.get_by_label("In game").click();
     h.run_steps(4);
     wait_pg(h.state_mut());
     h.run_steps(4);
     h.get_by_label(pgpsim::SIMULATED_AS);
-    h.get_by_label("In game (simulated)").hover();
+    h.get_by_label("In game").hover();
     h.run_steps(30);
     assert_eq!(
         h.query_all_by_label(pgpsim::SIMULATED_AS).count(),

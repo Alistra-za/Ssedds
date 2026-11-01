@@ -358,7 +358,7 @@ Switch the set editor to **3D** to see the set on a mesh, rendered with Direct3D
 | Sun brightness, Point light brightness and radius | Lighting. |
 | **Reset view** | Reset the camera. |
 
-Moving around: drag to orbit, scroll to zoom, middle-drag or Shift+drag to pan, Shift+right-drag to turn the sun, double-click or Home to recentre. **View** has a debug view (Lit or UV checker; V steps through them), **Accurate (deferred)** and **Reset view**. Missing textures show in magenta, listed under the frame with **Open in Textures** when the file is in the folder. **Copy image** (Ctrl+Shift+C) copies the frame to the clipboard.
+Moving around: drag to orbit, scroll to zoom, middle-drag or Shift+drag to pan, Shift+right-drag to turn the sun, double-click or Home to recentre. **View** has a debug view (Lit or UV checker; V steps through them), **Accurate (deferred)** and **Reset view**. Missing textures show in magenta, listed under the frame with **Open in Textures** when the file is in the folder. While you edit a NIF, its **Source** view lists the paths PGPatcher's JSON replaces at run time as one grey line instead. **Copy image** (Ctrl+Shift+C) copies the frame to the clipboard.
 
 Notes:
 

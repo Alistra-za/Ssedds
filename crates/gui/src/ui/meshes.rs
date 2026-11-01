@@ -31,8 +31,11 @@ const EDIT_DEFAULT: f32 = 380.0;
 /// The left column's widest share of the window (T7 review Minor 1).
 const TREE_MAX_SHARE: f32 = 0.4;
 
-/// The In game toggle's label, as the Meshes view draws it (Note GH1).
+/// The In game / Source toggle's labels, the same in and out of Edit (Note GH1, rule 4.6).
 pub const IN_GAME: &str = "In game";
+pub const SOURCE: &str = "Source";
+/// The Source side's hover while editing.
+const EDITED_SOURCE: &str = "The edited source NIF, before PGPatcher";
 
 /// Note GH1: the weak line for `n` source paths PGPatcher's JSON replaces at run time; it names the toggle as drawn.
 pub fn pg_supplied_line(n: usize) -> String {
@@ -793,13 +796,9 @@ fn detail_head(ui: &mut egui::Ui, m: &mut MeshesModel, row: Option<&NifRow>) {
     // v2 B8: during an edit the toggle always shows; In game is pgpsim over the edited NIF.
     let editing = m.edit.as_ref().is_some_and(|e| !e.le_mesh);
     if m.pair.is_some() || editing {
-        let (game, source) = match editing {
-            true => ("In game (simulated)", "Edited source"),
-            false => ("In game", "Source"),
-        };
-        // Wrapped: the two edit-mode labels are wider than the centre column at 1100 px.
+        // Note GH1: one label pair; in Edit the hovers say In game is simulated and Source is edited.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.selectable_label(!m.view_source, game);
+            let r = ui.selectable_label(!m.view_source, IN_GAME);
             // Note GD7: the simulated side says what it simulates.
             let r = match editing {
                 true => r.on_hover_text(pgpsim::SIMULATED_AS),
@@ -808,7 +807,12 @@ fn detail_head(ui: &mut egui::Ui, m: &mut MeshesModel, row: Option<&NifRow>) {
             if r.clicked() {
                 m.set_view_source(false);
             }
-            if ui.selectable_label(m.view_source, source).clicked() {
+            let r = ui.selectable_label(m.view_source, SOURCE);
+            let r = match editing {
+                true => r.on_hover_text(EDITED_SOURCE),
+                false => r,
+            };
+            if r.clicked() {
                 m.set_view_source(true);
             }
         });

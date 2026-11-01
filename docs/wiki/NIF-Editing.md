@@ -60,7 +60,9 @@ To write just this NIF, right-click the 3D view (a click, not a drag) and choose
 
 If PGPatcher has patched this mesh, the game loads PGPatcher's copy, which was made from the unedited file. After you export, **re-run PGPatcher** so its output includes your edit. A warning row reminds you.
 
-The **In game (simulated)** view runs Tessalith's own PGPatcher simulation on your edited mesh, so you can see the patched look before you re-run PGPatcher. It reads loose PGPatcher JSON in MO2 mod order and does not read JSON inside BSAs.
+While you edit, the **In game** view runs Tessalith's own PGPatcher simulation on your edited mesh, so you can see the patched look before you re-run PGPatcher; **Source** shows your edited mesh as it is. It reads loose PGPatcher JSON in MO2 mod order and does not read JSON inside BSAs.
+
+On **Source**, a texture path that no mod ships but that PGPatcher's JSON replaces at run time (a PBR mod whose mesh still names the old path) is not called missing: one grey line says PGPatcher replaces it and to switch to **In game** to see it. A path nothing supplies is still listed as a missing texture.
 
 ## Not supported
 

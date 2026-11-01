@@ -24,7 +24,7 @@ use nif::model::{read_model, NifModel, ShapeModel};
 use nif::props::LightingTrailer;
 use render3d::{ParsedNif, ShapeId};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -181,6 +181,9 @@ pub struct NifEdit {
     /// v2 B8: In game (simulated) is showing: each shape's simulated material and its lines. None on Edited source.
     /// `preview_nif` draws these materials, so `materials()` and every `before` follow the shown side.
     pub in_game: Option<Vec<(ShapeId, MaterialState, Vec<String>)>>,
+    /// Note GH1: on Edited source, the slot paths the simulation replaces on every shape naming them (empty In game
+    /// and before the JSON lands). `MeshesModel::poll` lists the missing ones apart.
+    pub pg_supplied: Vec<String>,
     /// A merged (drag) push not saved yet.
     unsaved: bool,
     /// The merge key of the drag whose ops are the last ones, and how many; a push with the same key and count
@@ -199,8 +202,7 @@ struct SimCache {
 }
 
 /// Under the toggle when `show_edit_preview` failed and a plain copy shows (fix F8).
-pub const EDIT_HIDDEN: &str =
-    "Your edit could not be shown. Switch to In game (simulated) or Edited source to retry.";
+pub const EDIT_HIDDEN: &str = "Your edit could not be shown. Switch to In game or Source to retry.";
 
 /// The open guard dialog: the block diff, whether Diff is showing it, and the hash of the file it was asked about
 /// (Overwrite applies only while the file still has it).
@@ -719,6 +721,7 @@ impl NifEdit {
             sim_runs: 0,
             match_tests: 0,
             in_game: None,
+            pg_supplied: vec![],
             // a recovered autosave is saved into the folder with the next save or close
             unsaved: recovered,
             drag: None,
@@ -1490,6 +1493,32 @@ impl NifEdit {
         rows
     }
 
+    /// Note GH1: the edited slot paths that `rows` (the simulation) replaces with another path, minus any path a
+    /// shape or slot keeps as it is (that one is still loaded as named).
+    pub(super) fn supplied_by(
+        &self,
+        rows: &[(ShapeId, MaterialState, Vec<String>)],
+    ) -> Vec<String> {
+        let (mut replaced, mut kept) = (BTreeSet::new(), BTreeSet::new());
+        for s in &self.parsed.shapes {
+            let sim = rows.iter().find(|(id, ..)| *id == s.id).map(|(_, m, _)| m);
+            for (i, t) in s.material.slots.iter().enumerate() {
+                if t.norm.is_empty() {
+                    continue;
+                }
+                let by = sim
+                    .and_then(|m| m.slots.get(i))
+                    .map_or("", |q| q.norm.as_str());
+                if by.is_empty() || by == t.norm {
+                    kept.insert(t.norm.as_str());
+                } else {
+                    replaced.insert(t.norm.as_str());
+                }
+            }
+        }
+        replaced.difference(&kept).map(|p| p.to_string()).collect()
+    }
+
     /// In game before the JSON lands, or when it could not be read: every shape as edited, no line.
     pub fn plain_rows(&self) -> Vec<(ShapeId, MaterialState, Vec<String>)> {
         self.parsed
@@ -1932,6 +1961,7 @@ impl MeshesModel {
                 self.shapes_col_before = Some(column);
                 // The edit opens on Edited source (v2 B8: In game is pgpsim over it).
                 self.view_source = true;
+                self.refresh_in_game(); // Note GH1: starts the JSON read for the paths PGPatcher supplies
                 if let Some(c) = content {
                     self.v3.set_content(Some(c), false);
                     self.v3.nif_view = true;

@@ -968,7 +968,29 @@ impl MeshesModel {
                 _ => {}
             }
         }
+        self.split_supplied();
         changed
+    }
+
+    /// Note GH1: on Edited source, the report's missing paths PGPatcher supplies move to `supplied_textures` (one
+    /// weak line), and back when they no longer are. Before `app.rs`'s `route_3d`, which indexes `missing_textures`.
+    fn split_supplied(&mut self) {
+        let set = match &self.edit {
+            Some(e) if self.view_source => &e.pg_supplied[..],
+            _ => &[],
+        };
+        let Some(r) = self.v3.report.as_mut() else {
+            return;
+        };
+        if r.missing_textures.iter().all(|t| !set.contains(t))
+            && r.supplied_textures.iter().all(|t| set.contains(t))
+        {
+            return; // already split (the usual frame)
+        }
+        let all = std::mem::take(&mut r.missing_textures)
+            .into_iter()
+            .chain(std::mem::take(&mut r.supplied_textures));
+        (r.supplied_textures, r.missing_textures) = all.partition(|t| set.contains(t));
     }
 
     fn finished(&mut self, r: Result<Report, ScanError>) {
