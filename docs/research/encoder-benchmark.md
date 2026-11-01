@@ -275,11 +275,11 @@ Round 3, mean Δ of `bc7e_max` against the other encoder [95% t-interval], wins 
 | `data_real` (96) | RGB PSNR | +0.25 [±0.13], 96/96 | −0.13 [±0.03], 18/96 | +0.40 [±0.13] |
 | `dataa_real` (96) | lowest-channel PSNR | +0.19 [±0.04], 92/96 | −0.08 [±0.04], 25/96 | +0.24 [±0.03] |
 
-- **`max` beats bc7e u6 on every set in every round**, by 0.1 to 0.3 dB on real textures (round 1: +0.15 dB on `rgb_real`, n = 7; up to +3.2 dB on the `rgb_grad` gradients).
+- **`max` beats bc7e u6 on every set in every round**, by 0.1 to 0.3 dB on real textures (cutout coverage error moves by 0.002 points, negligible) (round 1: +0.15 dB on `rgb_real`, n = 7; up to +3.2 dB on the `rgb_grad` gradients).
 - **It now beats NVTT Production on colour and alpha** (opaque, cutout, smooth alpha, stray). On linear data and normal maps NVTT Production stays ahead by about 0.1 dB, or 0.01 to 0.02°, at roughly 100× the time.
 - **On gradients (rounds 1 and 2) it roughly ties NVTT Production** (`rgb_grad` −0.13 dB [±0.73]), where u6 was 3.9 dB behind.
 - Against bc7e u6 perceptual it loses luma, as linear mode always does (`rgb_real` luma PSNR −3.5 dB).
-- **Speed.** Round 1, run on an idle machine: about 1.0 to 1.3× the time of bc7e u6 per image (process start included; 2.5 s against 2.2 s for the 7 `rgb_real` images). In round 3 `max` measured 0.64 to 0.83× the time of u6, but the round-3 r1 and r2 passes that wrote the u6 rows ran at the same time (their logs overlap on 9 October), while `max` ran alone. Those ratios favour `max` and are not a speed claim.
+- **Speed.** Round 1: 0.9 to 1.5× the time of bc7e u6 per set, 8.7 s against 8.2 s over all 39 images (process start included; 2.5 s against 2.2 s for the 7 `rgb_real` images). In round 3 `max` measured 0.64 to 0.83× the time of u6, but the round-3 r1 and r2 passes that wrote the u6 rows ran at the same time (their logs overlap on 9 October), while `max` ran alone. Those ratios favour `max` and are not a speed claim.
 
 The full per-set tables for all three rounds (including bc7e u6 perceptual, and the seconds) are in the bench folder, `results/summary_maxpeak.md`, written by `scripts/analyze_maxpeak.py`.
 
