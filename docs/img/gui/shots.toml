@@ -4,5 +4,21 @@
 size = [1600, 900]
 pixels_per_point = 1.0
 theme = "dark"
-adapter = ""          # filled by Task 2 from the first render
-[render.fonts]        # filled by Task 2: file name -> sha256 of %WINDIR%\Fonts\<file>
+# The wgpu adapter and the font files (sha256 of %WINDIR%\Fonts\<file>) the committed shots were made with.
+# summary.md warns when a render differs: such shots are not comparable.
+adapter = "Microsoft Basic Render Driver"
+
+[render.fonts]
+"YuGothM.ttc" = "cb2021bbfe40b21ec564848b8d702125661594e1b4f1eb2e77fd8a98b485cf19"
+"consola.ttf" = "cf00b507b3286870cc5064ebd0633c303f70b491a4af25eec2d32df413db0179"
+"malgun.ttf" = "7a183cf1c6c56b9609fcc16eda8b5229fbc11758a21e669ec00343239b02192f"
+"msyh.ttc" = "d79c55e68b1131eea0cc1c47be4f572d964f28c682e143db2ad09c1e4cb07a3f"
+"segoeui.ttf" = "704eada12961a27fd271f7d3b09e2066520e758390c1776744eff430fee30f6e"
+"seguiemj.ttf" = "451df9bb5546055af625ff86aa72695df43e8e170b4c6c1316fe44e9c7a22f7c"
+"seguisym.ttf" = "a4a35dcc62cd30e1a6c97b695ecef83e59d2b149e3af834f6a49f11851d56b37"
+
+[[shot]]
+id = "main-window"
+page = "GUI-Guide"
+scenario = "main_window"
+used_by = ["GUI-Guide.md"]

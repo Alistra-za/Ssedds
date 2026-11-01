@@ -26,7 +26,7 @@ Every fact has exactly one home: the one place where it is explained in full, wi
 - **A fact appears at most twice:** its home plus one short reference.
 - **Three times is the cap,** only when a third mention is essential. For example, a warning that prevents data loss may also appear next to the button that causes it.
 - **The same fact reworded still counts.** "BC7 is used for colour with alpha" and "alpha textures encode as BC7" are one statement.
-- **A short reference is one line,** and it links to the home: "Tessalith never overwrites a file it didn't write ([why](Validation-and-Output.md#overwrite-guard))". Quick-reference tables, the FAQ, Getting-Started, tooltip lists and the sidebar are all short references.
+- **A short reference is one line,** and it links to the home: "Tessalith never overwrites a file it didn't write ([why](wiki/Validation-and-Output.md#re-runs-and-if-changed))". Quick-reference tables, the FAQ, Getting-Started, tooltip lists and the sidebar are all short references.
 - **Before you add a sentence,** grep docs/ and README.md for the fact. If it already has a home, link to it. If the new place should be the home, move the full text there and turn the old place into a link.
 - **One home per topic family:**
   - GUI behaviour: the GUI pages in docs/wiki;
@@ -69,8 +69,8 @@ Every fact has exactly one home: the one place where it is explained in full, wi
 
 ## 5. Screenshots
 Every menu, context menu, panel, tab and dialog the guide documents has a screenshot on its page.
-- **Generated, never hand-taken.** A headless kittest test renders each shot from a generated demo project. The demo uses made-up textures, never game or mod assets. The pattern already exists: `crates/gui/tests/gui_guide_screenshot.rs`, plus `ui_shots.rs` on branch `scratch/ui-shots`.
-- **Settings are fixed** so the same build renders the same pixels: one window size, one UI scale, the dark theme and the bundled fonts.
+- **Generated, never hand-taken.** A headless kittest test renders each shot from a generated demo project. The demo uses made-up textures, never game or mod assets. The pattern is `crates/gui/tests/doc_shots.rs`.
+- **Settings are fixed** so the same build renders the same pixels: one window size, one UI scale, the dark theme and the system fonts the app loads (hashes in shots.toml).
 - **Layout:**
   - images go in `docs/img/gui/<page>/<shot>.png`;
   - a manifest, `docs/img/gui/shots.toml`, lists each shot with the test that makes it and the pages that use it.

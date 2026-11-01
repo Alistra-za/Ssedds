@@ -6,7 +6,7 @@ The window has two views, picked in the header: the Textures view (converter and
 
 ## Main window
 
-![Tessalith's main window with a folder open: the header on top, the Textures and Sets columns, the settings of the selected texture, the Advanced strip at the right and the bottom panel with its Problems tab. Numbered red markers point at the areas listed below.](../img/gui-main.png)
+![Tessalith's main window with a folder open: the header on top, the Textures and Sets columns, the settings of the selected texture, the Advanced strip at the right and the bottom panel with its Problems tab. Numbered red markers point at the areas listed below.](../img/gui/GUI-Guide/main-window.png)
 
 The picture shows the Textures view after a folder is open, with a small made-up mod loaded. The numbers match the list. The 2D preview is not shown: it replaces the centre when you double-click a tile (see [The 2D preview](#the-2d-preview)).
 
