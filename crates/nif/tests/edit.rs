@@ -371,7 +371,7 @@ fn slot_past_the_count_is_refused() {
     let r = apply(&b, &[op]).unwrap();
     assert_eq!(
         r.outcomes,
-        vec![Outcome::Refused("slot 2 is past the set's 2 slots".into())]
+        vec![Outcome::Refused("slot 3 is past the set's 2 slots".into())]
     );
     assert_eq!(r.bytes, b);
 }

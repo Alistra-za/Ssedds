@@ -175,7 +175,13 @@ fn op_row(ui: &mut egui::Ui, e: &NifEdit, i: usize, label: &str, failed: bool, a
         ui,
         |ui| {
             let t = egui::RichText::new(&text);
-            ui.add(egui::Label::new(if failed { t.color(RED) } else { t }).truncate());
+            let r = ui.add(egui::Label::new(if failed { t.color(RED) } else { t }).truncate());
+            // Note GH7: the row says "Texture slot N" (1-based); the NIF's own index is on hover.
+            if let Some(nif::edit::Op::SetTexturePath { slot, .. }) =
+                e.doc.ops.get(i).map(|d| &d.op)
+            {
+                r.on_hover_text(format!("NIF texture index {slot}"));
+            }
         },
         |ui| {
             if conflict {

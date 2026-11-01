@@ -11335,3 +11335,69 @@ fn true_pbr_slots_use_the_set_editors_names() {
     assert_eq!(edit_slot_shown(0, 0, 0, 2), "Rim / back-light");
     assert_eq!(edit_slot_shown(1, 0, 0, 4), "Env cube");
 }
+
+/// GH2 (N2, the brief's test): Ctrl+Z after Add alpha takes the alpha op back out (the header's step is named for it).
+#[test]
+fn ctrl_z_undoes_add_alpha() {
+    let (_t, _d, mut h) = both_histories(0);
+    let m = &mut h.state_mut().meshes;
+    let e = m.edit.as_ref().unwrap();
+    let (shape, _) = lit_shape(e);
+    assert!(
+        e.model.shape(shape).unwrap().alpha.is_none(),
+        "the fixture's lit shape has no alpha"
+    );
+    let at = nif::edit::anchor_shape(&e.model, shape);
+    m.edit_push(
+        vec![Op::AddAlpha {
+            at,
+            flags: 0x00ED,
+            threshold: 128,
+        }],
+        None,
+    );
+    m.edit.as_mut().unwrap().flush();
+    h.run_steps(4);
+    let add_alpha = |h: &AppH| {
+        let e = h.state().meshes.edit.as_ref().unwrap();
+        e.doc
+            .ops
+            .iter()
+            .filter(|d| matches!(d.op, Op::AddAlpha { .. }))
+            .count()
+    };
+    assert_eq!(add_alpha(&h), 1);
+    assert_eq!(
+        h.state().meshes.edit.as_ref().unwrap().history.undo_label(),
+        Some("Add alpha")
+    );
+    press(&mut h, egui::Modifiers::COMMAND, egui::Key::Z);
+    assert_eq!(add_alpha(&h), 0, "Ctrl+Z took the Add alpha back");
+}
+
+/// GH7: a pending texture row ("Texture slot 2") gives the NIF's own index on hover.
+#[test]
+fn a_pending_texture_row_gives_the_nif_index_on_hover() {
+    let (_d, mut m) = export_session();
+    m.open_edit();
+    let e = m.edit.as_ref().unwrap();
+    let (shape, shader) = lit_shape(e);
+    let set = e.model.lighting[&shader].texture_set.unwrap();
+    let base = String::from_utf8_lossy(&e.model.texsets[&set].raw.slots[1]).into_owned();
+    let on_shape = nif::edit::anchor_shape(&e.model, shape);
+    // A path outside Windows-1252 is refused: a red row, so the pending list is open.
+    m.edit_push(
+        vec![Op::SetTexturePath {
+            at: on_shape,
+            slot: 1,
+            path: "textures\\\u{4e2d}.dds".into(),
+            base,
+        }],
+        None,
+    );
+    let mut h = view(m);
+    h.run_steps(3);
+    h.get_by_label_contains(": Texture slot 2: ").hover();
+    h.run_steps(30);
+    h.get_by_label("NIF texture index 1");
+}
