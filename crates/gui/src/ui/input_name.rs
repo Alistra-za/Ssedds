@@ -468,7 +468,8 @@ pub fn picker(ui: &mut egui::Ui, model: &mut AppModel, v: &SetView, matching: bo
         };
         let chosen = slot;
         let mut all = json && ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
-        let name = |n: u8| format!("Match {n} · {}", crate::model::sets::slot_name(n));
+        let name = |n: u8| format!("Match {n} · {}", crate::model::sets::slot_name(true, n));
+        // (The Match menu is TruePBR-only, so the PBR names.)
         if json {
             egui::ComboBox::from_id_salt(slot_id)
                 // Short in the header row, so it does not wrap a narrow 3D view's header; the list names the slots.

@@ -74,6 +74,14 @@ impl SlotKind {
             SlotKind::Subsurface => "s",
         }
     }
+    /// The slot's name without the number: `label`, but a shared slot names both kinds (as `slot_label`'s empty card).
+    pub fn short_label(self) -> &'static str {
+        match self.slot_number() {
+            3 => "Emissive / Skin",
+            7 => "Coat normal / Fuzz",
+            _ => self.label(),
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             SlotKind::Diffuse => "Diffuse",
@@ -121,14 +129,15 @@ pub fn slot_kinds_label(slot: SlotKind) -> String {
     kinds.join(" or ")
 }
 
-/// Note F?11 (A15): PGPatcher slot `n` as the set editor's empty card names it, without the "(slot n)" its title adds
-/// (the Match menu and Slot commands say the number themselves). Slot 5 has no card: the cubemap.
-pub fn slot_name(n: u8) -> &'static str {
+/// Note F?11 (A15): slot `n` as the set editor's empty card names it, without the "(slot n)" its title adds (the Match
+/// menu and Slot commands say the number themselves). Slot 5 has no card: the cubemap. A vanilla set (`!pbr`) takes the
+/// Meshes tab's name for the texture-set slot (`edit_slot_label`, read only; keep in step with nif_edit.rs).
+pub fn slot_name(pbr: bool, n: u8) -> &'static str {
+    if !pbr {
+        return super::meshes::nif_edit::edit_slot_label(0, 0, 0, usize::from(n.max(1) - 1));
+    }
     match SlotKind::ALL.iter().find(|k| k.slot_number() == n) {
-        Some(k) => slot_label(*k, "")
-            .split(" (slot")
-            .next()
-            .unwrap_or_default(),
+        Some(k) => k.short_label(),
         None => "Cubemap",
     }
 }
@@ -1059,6 +1068,9 @@ pub fn locked_items(m: &AppModel) -> BTreeMap<String, String> {
     out
 }
 
+/// What `slot_gives` says for a slot the set has no file for.
+pub const NOTHING: &str = "nothing";
+
 /// What set `set` itself gives at slot `n` (the Slot commands window, the slot menu): the file names of its own
 /// slot cards there, or "nothing".
 pub fn slot_gives(m: &AppModel, set: &str, n: u8) -> String {
@@ -1075,7 +1087,7 @@ pub fn slot_gives(m: &AppModel, set: &str, n: u8) -> String {
         })
         .collect();
     if names.is_empty() {
-        "nothing".into()
+        NOTHING.into()
     } else {
         names.join(", ")
     }

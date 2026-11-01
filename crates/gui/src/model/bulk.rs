@@ -8,7 +8,7 @@ use super::fields::{backend_lock, encoding_options};
 use super::from_normal::{GenMap, GenOp};
 use super::sets::{
     engine_inputs, game_path_in, locked_items, member_game_path, slot_gives, slot_of, SlotCommand,
-    SlotKind, SLOT_LOCKED,
+    SlotKind, NOTHING, SLOT_LOCKED,
 };
 use super::{AppModel, Dialog, Selection};
 use engine::config::{ColorTag, Format, MipFilter, Subtype, Target};
@@ -1300,7 +1300,7 @@ impl AppModel {
                 // Note F?11 (D13): a slot the set has no file for says so, not "already".
                 disabled: off.clone().or_else(|| {
                     current.is_none().then(|| {
-                        if gives == "nothing" {
+                        if gives == NOTHING {
                             "This set has no file for this slot".into()
                         } else {
                             "already from this set".into()
