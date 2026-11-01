@@ -721,7 +721,7 @@ fn mipmaps(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>) {
         let f = levels_view(model.target, &job);
         ui.add_enabled_ui(!read_only, |ui| {
             egui::Grid::new(("advanced-mips", &key))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     let cx = Ctx {
                         key: &key,
@@ -758,7 +758,7 @@ fn texture_fields(ui: &mut egui::Ui, model: &AppModel, actions: &mut Vec<Action>
         let why = toml_read_only_reason(model);
         ui.add_enabled_ui(!read_only, |ui| {
             egui::Grid::new(("advanced-fields", &key))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     let cx = Ctx {
                         key: &key,

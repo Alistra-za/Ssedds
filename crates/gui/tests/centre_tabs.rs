@@ -233,3 +233,89 @@ fn the_tab_strip_keeps_later_auto_ids() {
     };
     assert_eq!(next_id(false), next_id(true));
 }
+
+/// A leaf with two edited fields, the drawer open: the texture panel's rows carry a hint and a ↺ each.
+fn edited_leaf(dir: &std::path::Path) -> AppModel {
+    let mut m = opened(dir);
+    m.settings.advanced_open = true;
+    m.select_item("landscape/leaf.png");
+    m.set_field(
+        "landscape/leaf.png",
+        "alpha.threshold",
+        serde_json::json!(90),
+    );
+    m.set_field("landscape/leaf.png", "resize", serde_json::json!("half"));
+    assert!(m.wait_idle(std::time::Duration::from_secs(60)));
+    m
+}
+
+fn sized(width: f32, m: AppModel) -> H {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(width, 1000.0))
+        .build_ui_state(|ui, m: &mut AppModel| sdc_gui::ui::draw(ui, m), m);
+    sdc_gui::fonts::install_system_fonts(&h.ctx).expect("system fonts");
+    h.run();
+    h
+}
+
+/// Note F?12 (A9): a row's ↺ is laid out before its hint, so it stays inside the centre at every width with the
+/// drawer open (the kittest stands in for screenshots at 1100, 1280 and 1600 px).
+#[test]
+fn the_reset_button_stays_on_the_panel() {
+    for width in [1100.0f32, 1280.0, 1600.0] {
+        let d = tempfile::tempdir().unwrap();
+        let h = sized(width, edited_leaf(d.path()));
+        let c = sdc_gui::ui::centre_rect(&h.ctx).expect("the centre is drawn");
+        let resets: Vec<_> = h
+            .query_all_by_label("↺")
+            .map(|n| n.rect())
+            .filter(|r| r.min.x < c.max.x)
+            .collect();
+        assert!(!resets.is_empty(), "{width}: no ↺ in the centre");
+        for r in resets {
+            assert!(
+                c.expand(0.5).contains_rect(r),
+                "{width}: ↺ {r:?} leaves the centre {c:?}"
+            );
+        }
+        for n in h.query_all_by_label("↺") {
+            assert!(
+                n.rect().max.x <= width,
+                "{width}: ↺ {:?} is off the window",
+                n.rect()
+            );
+        }
+    }
+}
+
+/// A clipped hint keeps its whole text in the AccessKit name and on one tooltip, never two.
+#[test]
+fn a_clipped_hint_keeps_its_text_on_hover() {
+    let d = tempfile::tempdir().unwrap();
+    let mut h = sized(1100.0, edited_leaf(d.path()));
+    // The hint column is the drawer's (the centre's rows are compact and leave it blank).
+    let drawer = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("advanced"))
+        .expect("the drawer is drawn")
+        .outer_rect;
+    let text = "from this texture's settings";
+    let hints = |h: &H| {
+        h.query_all_by_label(text)
+            .filter(|n| n.rect().min.x >= drawer.min.x && n.rect().max.y <= drawer.max.y)
+            .map(|n| n.rect())
+            .collect::<Vec<_>>()
+    };
+    let before = hints(&h);
+    assert!(!before.is_empty(), "the edited rows show their hint");
+    for r in &before {
+        assert!(
+            drawer.expand(0.5).contains_rect(*r),
+            "hint {r:?} leaves the drawer {drawer:?}"
+        );
+    }
+    h.get_all_by_label(text)
+        .find(|n| n.rect().min.x >= drawer.min.x && n.rect().max.y <= drawer.max.y)
+        .unwrap()
+        .hover();
+    h.run();
+    assert_eq!(hints(&h).len(), before.len() + 1, "one tooltip, not two");
+}

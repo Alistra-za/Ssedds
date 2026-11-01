@@ -644,34 +644,61 @@ pub fn field_row(ui: &mut egui::Ui, cx: &Ctx, f: &FieldView) -> Option<RowEdit> 
     if let Some(v) = set {
         edit = Some(RowEdit::Set(v));
     }
-    if cx.compact {
-        ui.label("");
-    } else if let Some(reason) = f.lock {
-        ui.label(egui::RichText::new(reason).small().weak());
-    } else if let Some(why) = (f.field == "subtype")
-        .then(|| auto_subtype_reason(cx.job))
-        .flatten()
-    {
-        // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
-        ui.label(egui::RichText::new("(auto)").small().weak())
-            .on_hover_text(why);
-    } else {
-        ui.label(
-            egui::RichText::new(provenance_text(&f.provenance))
-                .small()
-                .weak(),
-        );
-    }
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    let mut cleared = false;
+    hint_and_reset(ui, f.edited, &mut cleared, |ui| {
+        if cx.compact {
+            ui.label("");
+        } else if let Some(reason) = f.lock {
+            hint_label(ui, reason);
+        } else if let Some(why) = (f.field == "subtype")
+            .then(|| auto_subtype_reason(cx.job))
+            .flatten()
+        {
+            // M6 Track E (Note U4): a sub-type an accepted High suggestion decided; hover says why.
+            ui.label(egui::RichText::new("(auto)").small().weak())
+                .on_hover_text(why);
+        } else {
+            hint_label(ui, &provenance_text(&f.provenance));
+        }
+    });
+    if cleared {
         edit = Some(RowEdit::Clear);
     }
     ui.end_row();
     edit
+}
+
+/// A row's hint, cut to the room left with the whole text on one tooltip (Note F?12, rule 3.4).
+fn hint_label(ui: &mut egui::Ui, text: &str) {
+    ui.add(
+        egui::Label::new(egui::RichText::new(text).small().weak())
+            .truncate()
+            .show_tooltip_when_elided(false),
+    )
+    .on_hover_text(text);
+}
+
+/// The last cell of a field row: ↺ (when `edited`) is laid out first on the right, the hint takes what is left
+/// (Note F?12, rule 3.3), so the reset never leaves the panel. Sets `cleared` when ↺ is clicked.
+fn hint_and_reset(
+    ui: &mut egui::Ui,
+    edited: bool,
+    cleared: &mut bool,
+    hint: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Sides::new()
+        .shrink_left()
+        .truncate()
+        .show(ui, hint, |ui| {
+            if edited
+                && ui
+                    .small_button("↺")
+                    .on_hover_text("Use the inherited value")
+                    .clicked()
+            {
+                *cleared = true;
+            }
+        });
 }
 
 /// The Sub-type field (Note FB9, owner amendment J): a button showing the type that opens the type picker, the
@@ -711,22 +738,21 @@ fn mipmaps_rows(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
             json!(if on { "full" } else { "none" }),
         ));
     }
-    match mips_count(&f.value) {
-        Some(n) if !cx.compact => ui.label(format!("({n} levels — see Advanced)")),
-        _ if cx.compact => ui.label(""),
-        _ => ui.label(
-            egui::RichText::new(provenance_text(&f.provenance))
-                .small()
-                .weak(),
-        ),
+    // The hint sits in the editor column, so the third cell holds only ↺.
+    let mut cleared = false;
+    let hint_text = match mips_count(&f.value) {
+        Some(n) if !cx.compact => Some(format!("({n} levels — see Advanced)")),
+        _ if cx.compact => None,
+        _ => Some(provenance_text(&f.provenance)),
     };
-    ui.label("");
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    match &hint_text {
+        Some(t) => hint_label(ui, t),
+        None => {
+            ui.label("");
+        }
+    }
+    hint_and_reset(ui, f.edited, &mut cleared, |_| {});
+    if cleared {
         actions.push(Action::Clear(f.field));
     }
     ui.end_row();
@@ -781,21 +807,15 @@ fn filter_row(ui: &mut egui::Ui, cx: &Ctx, actions: &mut Vec<Action>) {
     if let Some(m) = picked {
         actions.push(Action::Set(f.field, json!(m)));
     }
-    if cx.compact {
-        ui.label("");
-    } else {
-        ui.label(
-            egui::RichText::new(provenance_text(&f.provenance))
-                .small()
-                .weak(),
-        );
-    }
-    if f.edited
-        && ui
-            .small_button("↺")
-            .on_hover_text("Use the inherited value")
-            .clicked()
-    {
+    let mut cleared = false;
+    hint_and_reset(ui, f.edited, &mut cleared, |ui| {
+        if cx.compact {
+            ui.label("");
+        } else {
+            hint_label(ui, &provenance_text(&f.provenance));
+        }
+    });
+    if cleared {
         actions.push(Action::Clear(f.field));
     }
     ui.end_row();
@@ -806,7 +826,7 @@ fn group(ui: &mut egui::Ui, name: &'static str, cx: &Ctx, actions: &mut Vec<Acti
         .default_open(true)
         .show(ui, |ui| {
             egui::Grid::new((cx.key, name))
-                .num_columns(4)
+                .num_columns(3)
                 .show(ui, |ui| {
                     if name == "Mipmaps" {
                         mipmaps_rows(ui, cx, actions);
