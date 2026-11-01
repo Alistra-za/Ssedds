@@ -1,0 +1,3 @@
+# Allowed duplicates for tools/doc-dupes.py (docs/DOCUMENTATION.md §2: a third mention only when it is essential).
+# One line per allowed sentence: <first 12 hex of sha1 of its content words joined by spaces><TAB><reason>.
+# The hash is in the hash_a / hash_b columns of `doc-dupes.py --out <tsv>`. An allowed cluster still fails above 3 members.
