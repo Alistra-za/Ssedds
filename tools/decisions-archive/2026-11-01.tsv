@@ -1,0 +1,2 @@
+id	note	line	marker	superseder	superseder_quote	class	date	code_cites	remark
+T13	T	364	forward	F?	(the rgbcx_patch tag widens to bc4-round-to-nearest+bc4-search, hashing rgbcx.h and rgbcx.cpp)	partial	2026-11-01	crates/engine/src/manifest.rs:74	goes: the tag name and the rgbcx.h-only hash, and "PSNR now rises monotonically with the radius" (not guaranteed with the BC4 search); stays: the rounding patch, its gain, the never-worse bench gates, the BC3 validation quirk

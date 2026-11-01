@@ -86,7 +86,7 @@ Across every variant, round and set (43.2 M block-channels, rounds 1 to 3), **0 
 | mask_real (BC4) | 0.568 | 0.484 | 0.486 | 0.876 | 1.022 (1.80×) | 1.278 |
 | normal_real (BC5) | 1.253 | 1.039 | 1.036 | 1.874 | 2.153 (1.72×) | 2.713 |
 
-v4 roughly doubles the BC4 search time: 1.7 to 2.1× the shipped FFI and 2.1 to 3.4× the Rust port. The measured v5 re-runs v0 for its guard. A real guard reuses the shipped candidate, so it costs about the same as v4 plus a 16-texel comparison. For BC3 the alpha search is a small part of the encode, since BC1 at level 18 dominates, so the whole BC3 encode slows by much less than 2×. That was not measured end to end. The near-ceiling v3 costs 7 to 40×.
+v4 roughly doubles the BC4 search time: 1.7 to 2.1× the shipped FFI and 2.1 to 3.4× the Rust port. The measured v5 re-runs v0 for its guard. A real guard reuses the shipped candidate, so it costs about the same as v4 plus a 16-texel comparison. For BC3 the alpha search is a small part of the encode, since BC1 at level 18 dominates, so the whole BC3 encode slows by much less than 2×; the end-to-end times are in "Shipped: end to end and bench re-run". The near-ceiling v3 costs 7 to 40×.
 
 ## BC1: luma-weighted error
 
@@ -105,14 +105,13 @@ Reading: the weighting does what it says. It moves error out of luma into chroma
 
 ## What this means for Tessalith
 
-- The data supports shipping v4's search for BC4, for BC5's two channels and for BC3 alpha, and v5's coverage guard for BC3 alpha. The plan is `docs/superpowers/plans/2026-10-31-bc4-family.md` (not committed).
-- Owner calls: whether BC3 alpha takes the coverage guard (−0.22 dB, half the alpha-test errors at 128); whether BC1 gets a perceptual option, and its default; whether the near-ceiling search becomes the `max` search radius.
-- Until then nothing changes: no shipped encoder output changed on this branch.
+- **Shipped (engine 1.2.0, DECISIONS Note F?):** v4's search for BC4 and BC5's two channels, v5 (v4 plus the coverage guard at 128) for BC3 alpha, at every search radius (`fast` 4, `default` 5, `max` 10). It lives in the vendored rgbcx (`encode_bc4_hq`, flags `BC4_SDC_SEARCH` and `BC4_SDC_GUARD128`, set by the shim) and equals `sdc_bench::bc4ref::search` byte for byte. Existing BC3/BC4/BC5 outputs re-encode once through the manifest's `rgbcx_patch` tag. The engine end-to-end time and the re-run bench rows are in "Shipped: end to end and bench re-run" below.
+- Owner calls (2026-11-01): the coverage guard on BC3 alpha, yes; no BC1 perceptual option; the fast presets take the new search; `max` stays the new search at radius 10, without the near-exhaustive pass ("no exhaustive", see "max: near-exhaustive").
 
 ## Limitations
 
 - The coverage metric and v5's guard use a single alpha-test value, 128. Skyrim's per-mesh alpha threshold varies, so a guard at 128 protects the common value only.
-- `premul_psnr` for alpha_real was not recomputed: only alpha changes, and the colour half is identical, but premultiplied scores combine both.
+- The probe did not compute `premul_psnr` for alpha_real (only alpha changes, but premultiplied scores combine both halves). The bench re-run below does, under both decoders.
 - BC5 classes and attribution use channel 0's class for both channels.
 - The time table measures the BC4 search in Rust. A C++ port inside rgbcx will differ by a constant factor (the Rust v0 port is already 0.6 to 0.96× the FFI). Rounds 1 and 2 hold 2 to 7 images per set.
 - BC1 is scored under the bench decoder (`bcdecode.exe`), and the base run uses the Ideal model the engine encodes for. The weighted-vs-unweighted comparison shares that decoder, so the Δs stand. Absolute values are 0.01 dB from the bench's own `bc1_rgbcx_L18` row (39.413 vs 39.424 dB), since bc7enc's CLI flags differ slightly.
@@ -188,4 +187,37 @@ Alpha-test flips at 128 (BC3, percent of texels that cross 128, mean per image):
 
 Never-worse check (`search_max_never_worse_than_v4` in crates/bench/tests/bc4ref.rs, 2000 synthetic blocks at radius 10): SSE(max, no guard) <= SSE(search r10, no guard) on all 2000, 103 strictly better; SSE(max, guard) <= SSE(search r10, guard) and flips(max, guard) <= flips(shipped r10) on all 2000; on 28 the exhaustive pass raised flips and the guard fell back to guarded v4.
 
-Reading: the extra gain over the shipped v4 search is 0.02-0.03 dB on BC4/BC5/BC3 masks and 0.2 dB at most on the guarded cutout set, for 2.4x the v4 time. Steps 2-6 (C++, shim, engine flag) wait for the owner.
+Reading: the extra gain over the shipped v4 search is 0.02-0.03 dB on BC4/BC5/BC3 masks and 0.2 dB at most on the guarded cutout set, for 2.4x the v4 time. Not shipped: the owner declined it after this timing (2026-11-01, "no exhaustive"), so `search_max` exists only in the Rust reference.
+
+## Shipped: end to end and bench re-run (2026-11-01)
+
+Build: branch `research/bc4-family` a3785aef (engine 1.2.0, the C++ search in the vendored rgbcx), against main 0d9a8221 (the unpatched search). Both as `sdc-bench encode-one`, which calls `engine::encode::encode_level` with the default preset's profile; `--level max` (added on this branch) sets only `encoder.bc45_search_radius = "max"`. The 0d9a8221 build used here is that commit plus the same `--level max` arm; at `default` it writes the same bytes as the bench's `sdc-bench-0d9a8221.exe` (checked on 3 images per format).
+
+End-to-end time per texture, seconds, first 20 images (sorted) of round 3 `cutout_real` (BC3), `mask_real` (BC4) and `normal_real` (BC5), one process per image with start-up and PNG/DDS I/O included, the engine's own thread pool, old and new run alternately per image:
+
+| Format (set) | Radius | 0d9a8221 median / worst | new median / worst | Ratio of medians |
+|---|---|---|---|---|
+| BC3 (`cutout_real`) | `default` (5) | 0.145 / 0.199 | 0.159 / 0.265 | 1.09× |
+| BC3 (`cutout_real`) | `max` (10) | 0.151 / 0.267 | 0.165 / 0.406 | 1.09× |
+| BC4 (`mask_real`) | `default` (5) | 0.165 / 0.181 | 0.289 / 0.335 | 1.75× |
+| BC4 (`mask_real`) | `max` (10) | 0.359 / 0.419 | 0.598 / 0.746 | 1.67× |
+| BC5 (`normal_real`) | `default` (5) | 0.301 / 0.382 | 0.569 / 0.694 | 1.89× |
+| BC5 (`normal_real`) | `max` (10) | 0.776 / 0.926 | 1.348 / 1.497 | 1.74× |
+
+The machine was not idle: other sessions' cargo builds and tests ran throughout (CPU load 35 to 71 % around the run). Each time is therefore the minimum of 3 runs, old and new alternating, which drops most load spikes; a first single-run pass under heavier load (load 93 %) gave the same ratios within 0.04× (1.07, 0.98, 1.75, 1.65, 1.85, 1.71). Compare ratios, not absolute seconds. BC3 slows by under 10 % because its BC1 colour half dominates; BC4 and BC5 pay about 1.7 to 1.9× end to end, below the 2.2 to 2.5× of the bare C++ search, since start-up and I/O are included.
+
+Bench re-run: the `sdc_bc3_rounded`, `sdc_bc4_rounded` and `sdc_bc5_rounded` rows of all three rounds were deleted and re-run with the new exe (F:\ai\dds\bench, `run_bench.py`, `run_bench2.py`, `run_bench3.py r1|r2`, then `rescore_rounded.py` and `analyze_engine_bytes.py`; previous CSVs in `results/backup-2026-11-01/`). No other encoder's rows changed. `rescore_rounded.py` scores through the runners' metric functions, so `premul_psnr` is recomputed under both decoders. Round 3, round-to-nearest decoder, paired per image (+ = new better, coverage sign-flipped), mean [95 % t], wins/losses:
+
+| Set, metric | n | New against the 2026-10-31 rows | New against NVTT `-highest` |
+|---|---|---|---|
+| cutout_real `a_psnr` | 95 | +3.183 [±0.468] 95/0 | +1.175 [±0.096] 95/0 |
+| cutout_real `coverage_err_pct` | 95 | +0.0175 [±0.0060] 89/0 | +0.0263 [±0.0077] 90/0 |
+| cutout_real `vis_rgb_psnr` | 95 | 0 (colour unchanged) | −0.075 [±0.016] 3/92 |
+| alpha_real `a_psnr` | 96 | +0.925 [±0.280] 96/0 | +0.787 [±0.085] 96/0 |
+| alpha_real `premul_psnr` | 96 | +0.395 [±0.148] 71/25 | +0.214 [±0.048] 76/20 |
+| packed_real `a_psnr` | 95 | +0.104 [±0.110] 92/0 | +0.970 [±0.140] 94/1 |
+| mask_real BC4 `c0_psnr` | 93 | +0.154 [±0.092] 90/0 | +0.080 [±0.046] 46/47 |
+| normal_real BC5 `rg_psnr` | 91 | +0.105 [±0.037] 89/0 | +0.002 [±0.025] 17/74 |
+| normal_real BC5 `ang_mean` (°) | 93 | −0.001 [±0.003] 60/29 | +0.004 [±0.002] 77/14 |
+
+The deltas against the old rows equal the probe's v5 (BC3) and v4 (BC4, BC5) predictions above to the third decimal, so the C++ in the engine does what the reference measured. `stray_real` alpha is exact before and after. Under the bench's floor decoder the gains are close (cutout +3.16 dB, BC4 +0.13 dB, BC5 RG +0.09 dB). Rounds 1 and 2 agree (cutout +3.79 dB n = 4, BC4 `mask_real` +0.38 dB n = 6). `alpha_real` `premul_psnr` loses on 25 images: premultiplied error mixes the unchanged colour error with the alpha change. Full tables: `results/summary_bc4_rerun.md` (`tools/compare_prev_sdc.py`) and `results/summary_engine_bytes.md` (all encoders); the latter's generated header still describes the 2026-10-31 run (`scripts/analyze_engine_bytes.py` was not edited).
