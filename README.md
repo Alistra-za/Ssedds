@@ -121,11 +121,11 @@ See [Known issues](docs/wiki/Known-Issues.md) and the [CHANGELOG](CHANGELOG.md).
 | [Troubleshooting](docs/wiki/Troubleshooting.md) | [Research behind the defaults](docs/wiki/Research.md) | [Host plugins](docs/wiki/Host-Plugins.md) |
 | | [NIF editing](docs/wiki/NIF-Editing.md) | |
 
-Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Host-Plugins.md)):
+Plugins for other programs, all optional (overview: [Host plugins](docs/wiki/Host-Plugins.md); their source is on branch `host-plugins`, which gets bug fixes but is not kept in step with the engine):
 - Photoshop: a [Tessalith DDS plugin](docs/photoshop-plugin.md) (MIT, with the engine under MPL-2.0) opens and saves DDS.
 - GIMP 3: a [Tessalith DDS plug-in](docs/gimp-plugin.md) (GPL-3.0-or-later, with the same MIT/MPL-2.0 `psdds.dll`) opens and exports DDS.
 - Paint.NET: a [Tessalith DDS file type](docs/paintdotnet-plugin.md) (GPL-3.0-or-later with a Paint.NET permission, same `psdds.dll`) saves DDS.
-- chaiNNer: three [Tessalith DDS nodes](chainner/README.md) (GPL-3.0-or-later, same `psdds.dll`) save DDS.
+- chaiNNer: three [Tessalith DDS nodes](https://github.com/Alistra-za/Tessalith/tree/host-plugins/chainner/README.md) (GPL-3.0-or-later, same `psdds.dll`) save DDS.
 
 Design records: [docs/DECISIONS.md](docs/DECISIONS.md), [docs/RULINGS.md](docs/RULINGS.md), [docs/presets-changelog.md](docs/presets-changelog.md) and the research pages in [docs/research/](docs/research/README.md).
 

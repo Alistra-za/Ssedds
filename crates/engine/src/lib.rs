@@ -26,7 +26,6 @@ pub mod helper;
 pub mod image;
 pub mod load;
 pub mod manifest;
-pub mod memory;
 pub(crate) mod migrate;
 pub mod mips;
 pub mod nvtt;

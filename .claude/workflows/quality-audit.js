@@ -69,9 +69,9 @@ const SECTIONS = [
   { id: 'R3', name: 'render3d extras: CS settings, replay, HDRI, compositing, golden, debug', lines: 4000,
     paths: ['crates/render3d/src/cs_settings.rs', 'replay.rs', 'hdri.rs', 'background.rs', 'composite.rs', 'golden.rs', 'perf_log.rs', 'debug.rs'],
     entry: 'CS settings profile -> shader defines; frame replay and golden comparison; HDRI backdrop and compositing; perf and debug logs' },
-  { id: 'R4', name: 'BSA, PGPatcher sim, CLI, Photoshop plugin: vfs, pgpsim, cli, psdds', lines: 4900,
-    paths: ['crates/vfs/src/', 'crates/pgpsim/src/', 'crates/cli/src/', 'crates/psdds/src/'],
-    entry: 'hostile BSA archives -> bounded reader; PGPatcher simulation; CLI verbs -> exit codes and stdout/JSON; Photoshop plugin ABI (FFI boundary, settings, RMAOS split)' },
+  { id: 'R4', name: 'BSA, PGPatcher sim, CLI: vfs, pgpsim, cli', lines: 4900,
+    paths: ['crates/vfs/src/', 'crates/pgpsim/src/', 'crates/cli/src/'],
+    entry: 'hostile BSA archives -> bounded reader; PGPatcher simulation; CLI verbs -> exit codes and stdout/JSON' },
 ]
 
 // Whole-repo sweeps: things no single section can see.
