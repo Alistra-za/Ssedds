@@ -407,6 +407,8 @@ pub struct Renderer {
     projected_missing: Vec<String>,
     /// CS's glint noise map at t20 ([glint_noise]), uploaded on the first GLINT draw.
     glint_noise: Option<ID3D11ShaderResourceView>,
+    /// The glint-noise failure was already logged ([glint_noise_or_fallback]).
+    glint_noise_logged: bool,
 }
 
 impl Renderer {
@@ -516,6 +518,7 @@ impl Renderer {
             projected_tex: vec![],
             projected_missing: vec![],
             glint_noise: None,
+            glint_noise_logged: false,
             gpu,
             sources: SourceSet::new(shaders.root.clone()),
             shaders,
@@ -754,7 +757,7 @@ impl Renderer {
         }
         let s = glint_noise::SIZE;
         let v = textures::rgba32f_srv(&self.gpu, s, s, &glint_noise::noise_map())
-            .map_err(|e| format!("glint noise map: {e}"))?;
+            .map_err(|e| with_context("glint noise map", e))?;
         self.glint_noise = Some(v.clone());
         Ok(v)
     }
@@ -1158,8 +1161,11 @@ impl Renderer {
         for (srv_name, reg, kind) in &program.ps.reflection.srvs {
             // Every GLINT permutation reads it (Glints2023.hlsli:230); a 1×1 default would give no glints.
             if *reg == 20 && *kind == SrvKind::Tex2D && srv_name.ends_with("Glint2023NoiseMap") {
-                srvs.push((20, self.glint_noise_srv()?));
-                continue;
+                let r = self.glint_noise_srv();
+                if let Some(v) = glint_noise_or_fallback(r, &mut self.glint_noise_logged)? {
+                    srvs.push((20, v));
+                    continue;
+                }
             }
             if let Some(v) = self.override_at(m, *reg, *kind) {
                 srvs.push((*reg, v));
@@ -2840,10 +2846,51 @@ fn with_context(what: &str, e: String) -> String {
     device::gpu_error(Ok(()), what, e)
 }
 
+/// The glint noise map, or `None` when its upload failed: the shape then keeps the 1x1 default at t20 as before
+/// Note GG, and the failure is logged once. A lost device is still an error, for the GUI to rebuild on.
+fn glint_noise_or_fallback<T>(
+    r: Result<T, String>,
+    logged: &mut bool,
+) -> Result<Option<T>, String> {
+    match r {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.starts_with(device::DEVICE_REMOVED) => Err(e),
+        Err(e) => {
+            if !std::mem::replace(logged, true) {
+                eprintln!("render3d: {e}; glint shapes keep the default noise map");
+            }
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod context_tests {
     use super::*;
 
+    /// Final review M4: a glint-noise upload that fails leaves the shape on the old 1x1 default and is logged once;
+    /// a lost device still fails so the GUI rebuilds. (Tested on the decision itself: no seam makes the real upload fail.)
+    #[test]
+    fn a_failed_glint_noise_falls_back_and_logs_once() {
+        let mut logged = false;
+        assert_eq!(glint_noise_or_fallback(Ok(7), &mut logged), Ok(Some(7)));
+        assert!(!logged);
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err("oom".into()), &mut logged),
+            Ok(None)
+        );
+        assert!(logged);
+        // The second failure is still a fallback; `logged` stays set (the line was printed once).
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err("oom".into()), &mut logged),
+            Ok(None)
+        );
+        let lost = format!("{}: hung", device::DEVICE_REMOVED);
+        assert_eq!(
+            glint_noise_or_fallback::<u8>(Err(lost.clone()), &mut false),
+            Err(lost)
+        );
+    }
     #[test]
     fn a_device_removed_error_keeps_its_prefix() {
         let lost = format!("{}: hung (CreateTexture2D: x)", device::DEVICE_REMOVED);
