@@ -31,6 +31,15 @@ const EDIT_DEFAULT: f32 = 380.0;
 /// The left column's widest share of the window (T7 review Minor 1).
 const TREE_MAX_SHARE: f32 = 0.4;
 
+/// The In game toggle's label, as the Meshes view draws it (Note GH1).
+pub const IN_GAME: &str = "In game";
+
+/// Note GH1: the weak line for `n` source paths PGPatcher's JSON replaces at run time; it names the toggle as drawn.
+pub fn pg_supplied_line(n: usize) -> String {
+    let (s, verb) = if n == 1 { ("", "is") } else { ("s", "are") };
+    format!("{n} texture path{s} {verb} replaced by PGPatcher at run time: switch to {IN_GAME} to see them")
+}
+
 mod curve;
 mod edit_ctrl;
 mod edit_extra;

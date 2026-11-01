@@ -86,6 +86,9 @@ pub struct LoadReport {
     pub pending: usize,
     /// Texture paths (canonical `textures/…`) the resolver did not return; their registers get defaults.
     pub missing_textures: Vec<String>,
+    /// Paths the caller moved out of `missing_textures` because another tool supplies them at run time (the GUI's
+    /// NIF edit Source side: PGPatcher's JSON names a replacement, Note GH1). Never filled here; drawn the same.
+    pub supplied_textures: Vec<String>,
     /// Per-shape permutation compile errors (the shape is skipped, the others still draw).
     pub compile_errors: Vec<String>,
     /// Other per-shape problems: NIF scan/geometry errors, an invalid `Mesh`, unreadable DDS, GPU errors.

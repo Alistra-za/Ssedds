@@ -482,6 +482,11 @@ fn problems(ui: &mut egui::Ui, v: &mut Viewport3d) {
                     }
                 });
             }
+            // Note GH1: the Meshes view's NIF edit moves the paths PGPatcher supplies here, as one weak line.
+            if !r.supplied_textures.is_empty() {
+                ui.weak(super::meshes::pg_supplied_line(r.supplied_textures.len()))
+                    .on_hover_text(r.supplied_textures.join("\n"));
+            }
         });
     if show.is_some() {
         v.show_in_textures = show;
