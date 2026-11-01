@@ -133,7 +133,7 @@ Every warning has a code and a severity:
 | Code | Severity | Meaning | Fix |
 |---|---|---|---|
 | `ENC-NVTT-MISSING` | blocking | NVTT chosen but not found. | Install it, give the path, or use the built-in encoder. |
-| `ENC-NVTT-VERSION` | blocking | NVTT version other than 3.2.5. | Acknowledge. |
+| `ENC-NVTT-VERSION` | blocking | Untested NVTT version ([NVTT backend](NVTT-Backend.md#codes)). | Acknowledge. |
 | `ENC-NVTT-FAILED` | error | `nvcompress` failed; no fallback. | Check NVTT, or use the built-in encoder. |
 | `ENC-WEIGHTS-IGNORED` | warning | `encoder.bc7_weights` has no effect: the format is not BC7, the backend is not bc7e, or `encoder.perceptual` is on. | Remove `encoder.bc7_weights`, or turn perceptual off. |
 | `OUT-UNKNOWN-EXISTING` | warning | An existing output with no manifest record was kept. | `--on-existing overwrite`. |

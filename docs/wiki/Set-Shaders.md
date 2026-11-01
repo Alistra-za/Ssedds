@@ -56,7 +56,7 @@ A shader the target lacks falls back to `default` (`SHADER-UNAVAILABLE`).
 | `parallax` | `_p` is BC4. |
 | `complex_grass` | Colour becomes `complex_grass`. |
 
-In the GUI, when a sub-type changes this way, a format or tag you set that the new type does not allow is reset to the new type's default. On the command line the value you set stays, and the file is blocked or reports an error.
+In the GUI, a format or tag the new type does not allow is reset ([Encoding follows type](GUI-Texture-Panel.md#editing)). On the command line the value you set stays, and the file is blocked or reports an error.
 
 ### Gloss bake for a complex `_m` (opt-in)
 

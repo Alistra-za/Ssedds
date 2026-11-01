@@ -11,7 +11,24 @@ Tessalith can hand BC7 and BC6H encoding to NVIDIA Texture Tools (`nvcompress.ex
 
 ## Installing
 
-Install NVIDIA Texture Tools 3.2.5, the tested version. See [Installation](Installation.md#optional-nvtt-325).
+1. Download NVIDIA Texture Tools 3.2.5, the tested version, from NVIDIA and install it. The default install puts `nvcompress.exe` where Tessalith looks last ([below](#how-tessalith-finds-nvcompress)).
+2. Check that Tessalith finds it:
+
+```powershell
+sdc encoders
+```
+
+The NVTT line reads one of:
+
+```text
+NVTT: 3.2.5 at C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvcompress.exe (tested)
+NVTT: 3.3.0 at D:/nvtt/nvcompress.exe (untested: acknowledge with --allow ENC-NVTT-VERSION)
+NVTT: not found (<reason>)
+```
+
+If you installed it elsewhere, either add its folder to `PATH` or pass the path explicitly with `--nvtt <path to nvcompress.exe>`. In the GUI, use the NVTT section of the Advanced drawer.
+
+Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-VERSION`, because only 3.2.5 has been tested.
 
 ## How Tessalith finds nvcompress
 
@@ -84,7 +101,7 @@ The 2D preview of an NVTT texture uses the built-in encoder and says "Preview us
 | Code | Severity | Meaning | What to do |
 |---|---|---|---|
 | `ENC-NVTT-MISSING` | blocking | A texture uses NVTT but `nvcompress.exe` was not found. | Install NVTT, give the path with `--nvtt` or in Advanced, or switch the texture back to the built-in encoder. |
-| `ENC-NVTT-VERSION` | blocking | The NVTT found is not 3.2.5. | Acknowledge with `--allow ENC-NVTT-VERSION` (or in the GUI) to use it anyway. |
+| `ENC-NVTT-VERSION` | blocking | The NVTT found is not the tested version. | Acknowledge with `--allow ENC-NVTT-VERSION` (or in the GUI) to use it anyway. |
 | `ENC-NVTT-FAILED` | error | `nvcompress` could not start, exited with an error, or wrote no or a wrong-sized result. | The file fails at the compress stage. There is no fallback to the built-in encoder. Check the NVTT install, or switch the texture back. |
 
 ## How it runs

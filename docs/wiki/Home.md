@@ -32,7 +32,7 @@ This wiki covers version 1.0.0. Tessalith is licensed GPL-3.0-or-later. Its conv
 | [Mod scanning](Mod-Scanning.md) | Scanning meshes and plugins from an MO2 instance or a folder, and what the scan feeds back. |
 | [NIF editing](GUI-NIF-Edit.md) | Editing a mesh's shader, alpha, controllers and clips in the Meshes view, and exporting the edited NIF. |
 | [Host plugins](Host-Plugins.md) | Saving DDS from Photoshop, GIMP, Paint.NET and chaiNNer: install, options, HDR. |
-| [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools 3.2.5 as an optional BC7/BC6H encoder. |
+| [NVTT backend](NVTT-Backend.md) | Using NVIDIA Texture Tools as an optional BC7/BC6H encoder. |
 | [Validation and output](Validation-and-Output.md) | What gets checked after encoding, the output layout, the manifest, re-run behaviour. |
 | [Troubleshooting](Troubleshooting.md) | Every diagnostic code, common errors, and the in-game checklist. |
 | [FAQ](FAQ.md) | Short answers to common questions. |

@@ -54,10 +54,11 @@ def jac(a, b):
 
 
 class Sent:
-    __slots__ = ("file", "line", "text", "ws", "sh", "wset", "links", "nwords", "number")
+    __slots__ = ("file", "line", "text", "ws", "sh", "wset", "links", "nwords", "number", "table")
 
     def __init__(self, file, line, text, raw_line):
         self.file, self.line, self.text = file, line, text
+        self.table = None
         self.ws = content_words(text)
         self.sh = shingles(self.ws)
         self.wset = set(self.ws)
@@ -88,12 +89,30 @@ def sentences(file, text):
                 yield n, s, line
 
 
+def tables(text):
+    """({line: table id} for table rows, {header lines}): a header is the row right above a |---| separator."""
+    block, heads, cur = {}, set(), 0
+    lines = text.splitlines()
+    for n, line in enumerate(lines, 1):
+        if line.lstrip().startswith("|"):
+            if n == 1 or not lines[n - 2].lstrip().startswith("|"):
+                cur += 1
+            block[n] = cur
+            if n < len(lines) and re.match(r"^\s*\|?[\s:|-]*-{3,}[\s:|-]*$", lines[n]):
+                heads.add(n)
+    return block, heads
+
+
 def records(texts):
-    """texts: {relpath: text} -> [Sent] with at least 7 content words."""
+    """texts: {relpath: text} -> [Sent] with at least 7 content words. Table header rows are labels, not facts."""
     out = []
     for f, t in texts.items():
+        block, heads = tables(t)
         for n, s, raw in sentences(f, t):
+            if n in heads:
+                continue
             r = Sent(f, n, s, raw)
+            r.table = block.get(n)
             if len(r.ws) >= 7:
                 out.append(r)
     return out
@@ -121,8 +140,8 @@ def find_pairs(recs):
     pairs = []
     for a, b in cand:
         ra, rb = recs[a], recs[b]
-        if ra.file == rb.file and abs(ra.line - rb.line) < 3:
-            continue
+        if ra.file == rb.file and (abs(ra.line - rb.line) < 3 or (ra.table and ra.table == rb.table)):
+            continue  # rows of one table are a record, not repetition
         if is_pair(ra, rb):
             pairs.append((a, b))
     return sorted(pairs)
@@ -224,7 +243,10 @@ def lost_sentences(old_name, old_text, current):
         for w in r.wset:
             words[w].append(i)
     out = []
+    _, heads = tables(old_text)  # header rows are not sentences on either side; line mode still lists them
     for n, s, raw in sentences(old_name, old_text):
+        if n in heads:
+            continue
         r = Sent(old_name, n, s, raw)
         if len(r.ws) < 7:
             continue
@@ -321,6 +343,12 @@ def self_test():
 
     _, p, _ = run({"A.md": "```\n" + nine + "\n```\n", "B.md": nine + "\n"})
     check("fenced text ignored", len(p) == 0)
+
+    hdr = "| Setting | RGB PSNR | premul PSNR | alpha PSNR | alpha SSIM | alpha max err | exact share |\n|---|---|---|---|---|---|---|\n"
+    row = "| BC7 weight one today | 0/30 of 30 | 0/30 of 30 | 0/14 of 14 | 0/15 of 15 | +6.08 dB more | 30/30 |\n"
+    row2 = "| BC7 weight four tried | 2/30 of 30 | 1/30 of 30 | 1/14 of 14 | 0/15 of 15 | +4.75 dB more | 29/30 |\n"
+    _, p, _ = run({"R.md": hdr + row + "| a |\n| b |\n| c |\n" + row2 + "\nText.\n\n" + hdr + "| x |\n"})
+    check("table header rows and rows of one table do not pair", len(p) == 0)
 
     old = "Intro.\n\n" + nine + "\n\nThe preview shows every mip level of the encoded texture beside the source.\n"
     cur = {"A.md": "Intro.\n", "B.md": nine + "\n"}

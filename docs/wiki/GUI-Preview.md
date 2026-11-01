@@ -11,7 +11,7 @@ Double-click a tile (or a set member), or select it and press **Enter** or **Spa
 ![The preview of a normal map.](../img/gui/GUI-Preview/preview-normal.png)
 
 - **Live encode** is off by default. Encoding happens when you press **Encode now**. Switch Live encode on to encode after every edit (a short pause after each edit, then the encode starts). A result that no longer matches the settings is badged *stale* until it is replaced.
-- Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT: its preview uses the built-in encoder and says "Preview uses the built-in encoder; the export uses NVTT."
+- Each previewed mip is byte-identical to the same mip of the DDS that Export writes, except for a texture on NVTT ([NVTT backend](NVTT-Backend.md#in-the-gui)).
 - The preview encodes only mips whose larger side is at most the **preview size limit**: 4096 by default, settable to 1024, 2048, 4096 or 8192, and 16384 only after you tick *Allow 16384 previews* in the [Advanced drawer](GUI-Advanced-Drawer.md#advanced-drawer). A GPU that cannot hold a texture that large lowers the limit, and the preview says so.
 - A DDS file in the folder previews as stored (there is no source side). Uncompressed DDS files preview from the CPU decode; BC2 and signed BC6H show "cannot be previewed".
 - With no usable GPU the preview is off and says "No usable GPU: the preview is off; everything else works". Deciding, editing and Export still work.

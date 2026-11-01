@@ -23,7 +23,7 @@ What you need:
 
 - Windows 10 or 11, x64.
 - A graphics card for the GUI's preview windows. The CLI needs none.
-- Optional: NVIDIA Texture Tools 3.2.5, as another BC7 / BC6H encoder. See [Optional: NVTT 3.2.5](#optional-nvtt-325).
+- Optional: [NVIDIA Texture Tools](NVTT-Backend.md#installing), as another BC7 / BC6H encoder.
 
 The programs are not code-signed, so Windows SmartScreen may warn the first time. Click **More info**, then **Run anyway**.
 
@@ -43,7 +43,7 @@ The plugins for Photoshop, GIMP, Paint.NET and chaiNNer come in their own zips. 
 | C++ compiler | Microsoft Visual C++ Build Tools (MSVC) with C++17 support. The `encoders-sys` crate compiles the rgbcx encoder, the ISPC Texture Compressor host code and a small C++ shim. |
 | Fonts (GUI only) | Segoe UI is required: `tessalith.exe` will not start without it. Segoe UI Symbol, Segoe UI Emoji and Consolas are used when present and skipped when missing. All four ship with Windows; Tessalith ships no fonts. |
 | ISPC | Not needed for a normal build. See [ISPC objects](#ispc-objects). |
-| NVTT | Optional. See [Optional: NVTT 3.2.5](#optional-nvtt-325). |
+| NVTT | Optional. See [Optional: NVTT 3.2.5](NVTT-Backend.md#installing). |
 
 ### Build steps
 
@@ -133,29 +133,6 @@ After you change anything under `crates\encoders-sys\vendor`, run this to rewrit
 ```
 
 It takes no parameters. It hashes every vendored file except `SHA256SUMS` itself and writes sorted `<sha256>  <relative/path>` lines.
-
-## Optional: NVTT 3.2.5
-
-Tessalith can hand BC7 and BC6H encoding to NVIDIA Texture Tools' `nvcompress.exe`. This is optional and never the default. NVTT is not bundled; you install it yourself.
-
-1. Download NVIDIA Texture Tools 3.2.5 from NVIDIA and install it. The default install puts `nvcompress.exe` in `C:\Program Files\NVIDIA Corporation\NVIDIA Texture Tools\`.
-2. Check that Tessalith finds it:
-
-```powershell
-sdc encoders
-```
-
-The NVTT line reads one of:
-
-```text
-NVTT: 3.2.5 at C:/Program Files/NVIDIA Corporation/NVIDIA Texture Tools/nvcompress.exe (tested)
-NVTT: 3.3.0 at D:/nvtt/nvcompress.exe (untested: acknowledge with --allow ENC-NVTT-VERSION)
-NVTT: not found (<reason>)
-```
-
-If you installed it elsewhere, either add its folder to `PATH` or pass the path explicitly with `--nvtt <path to nvcompress.exe>`. In the GUI, use the NVTT section of the Advanced drawer.
-
-Other NVTT versions work only after you acknowledge them with `--allow ENC-NVTT-VERSION`, because only 3.2.5 has been tested. See [NVTT backend](NVTT-Backend.md) for how to use it.
 
 ## Where Tessalith keeps its files
 

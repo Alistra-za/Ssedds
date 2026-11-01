@@ -3,3 +3,16 @@
 # The hash is in the hash_a / hash_b columns of `doc-dupes.py --out <tsv>`. An allowed cluster still fails above 3 members.
 5bd905f0102e	GUI-Generate-From-Normal: the AO entry's own greyed message; the curvature entry's message differs (false match on quoted UI text)
 eb3fc0e2bd01	GUI-Keyboard: Shift+Left and Shift+Down are separate shortcut rows (false match on a table row pattern)
+270513d74dcf	Research chart-data table (adds the alpha column) and the study round-1 table it came from
+39df9564be15	README feature bullet; the study page asks the question it answers
+600b0902df03	within one dated study: two table captions
+92373647c45b	within one dated study: set list and the section for that set
+4796526b2e85	within one dated study: summary restates its own record
+9120a414b51f	Research chart-data table (adds the alpha column) and the study round-1 table it came from
+8c56b2e67ef7	two dated research records state the same Note F choice
+fcbde32bd80e	design overview (dated record) and the Home intro list the same input formats
+7f4f8c9bbfd4	Research chart-data table (adds the alpha column) and the study round-1 table it came from
+2430c812bad6	within one dated study: summary and its table note
+3516332c62f2	the study names the NVTT build it measured; NVTT-Backend states the tested version
+457d348cbcca	within one dated study: false match on a file path sentence
+d8ee38c56046	within one dated study: summary restates its own record

@@ -13,7 +13,7 @@ The settings of the selected texture, in groups: Type, Colour, Alpha, Mipmaps, C
 | Sub-type | Grouped as PBR (Community Shaders), Advanced skin (Community Shaders), Colour maps, Normal maps, Grayscale maps, Packed and data, HDR maps, Other. Only sub-types the current Mode allows are offered, plus the texture's current sub-type. The list opens under the field with a search box and the suggested type on top, the same picker as the Problems tab's **Set type…**. |
 | Content | sRGB-encoded colour, or Linear data. |
 | DDS tag | _SRGB or UNORM (linear), limited to what the format and Mode allow. |
-| Alpha | Remove, Cutout, Blend, Cutout + Blend, Data. |
+| Alpha | The alpha policy ([values](Project-Config.md#alpha)). |
 | Threshold, Comparison | Slider 1 to 254; Greater than, or Greater than or equal. |
 | Coverage, Exact opaque alpha | Auto / On / Off; on or off. |
 | Normal handling, Normal base level | Renormalise or Renormalise and bake; Renormalise to unit length or Keep as authored. |
@@ -28,9 +28,7 @@ Options a texture cannot use are greyed out, with the reason on hover.
 
 **Encoder** is **Built-in** or **NVTT Production**. NVTT is a quality option for BC7 and BC6H only, 40 to 60 times slower ([NVTT backend](NVTT-Backend.md)).
 
-- The row is locked for BC1 to BC5 ("NVTT encodes BC7 and BC6H only") and hidden for uncompressed formats.
-- It is locked with "NVTT not found" while the NVTT status in the [Advanced drawer](GUI-Advanced-Drawer.md#advanced-drawer) says so. A texture already on NVTT can still go back.
-- Changing the format away from BC7 or BC6H returns the texture to the built-in encoder.
+- When the row is locked or hidden, and what a format change does: [In the GUI](NVTT-Backend.md#in-the-gui).
 - A failed nvcompress fails that file (`ENC-NVTT-FAILED`); there is no silent fallback.
 
 **Mipmaps: Filter and Edge.** *Filter* picks *Box* (the default), *Tent*, *Mitchell* or *Kaiser*. Tent, Mitchell and Kaiser are only for sRGB colour without alpha weighting (not cutout or blend); an HDR texture (BC6H or RGBA16F) may use Box or Tent only. *Edge* (*Wrap*, the default, or *Clamp*) is locked while the filter is Box, because only Tent, Mitchell and Kaiser read past the edge.
@@ -51,7 +49,7 @@ Options a texture cannot use are greyed out, with the reason on hover.
 
 - When the meshes decided the texture's alpha meaning, the meshes whose alpha property gave that answer are marked **decided alpha** (for blend, every blending mesh; for cutout, the meshes testing at the threshold used).
 - The list is read in the background and shows 200 meshes, then "and N more". It is read again after a scan. The read starts once the selection has stayed on the texture for 150 ms, so holding Up or Down reads only where you stop. A read that fails shows its error in the list.
-- **Show in Meshes**, under the list, switches to the Meshes view on **Any mod** with the search and chips cleared and a **Uses <texture> ✕** chip, so the list shows just the meshes that use the texture. The chip's **✕** clears it, and the selected mesh stays selected. During a scan, or after one that did not complete, the chip waits ("cuts the list after a completed scan").
+- **Show in Meshes**, under the list, switches to the Meshes view on **Any mod** with the search and chips cleared and a **Uses <texture> ✕** chip, so the list shows just the meshes that use the texture. The chip's **✕** clears it, and the selected mesh stays selected.
 
 ### BC7 weighting against BC3
 
