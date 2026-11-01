@@ -20,7 +20,7 @@ pub const LEGACY_ENCODE_VERSION: &str = "1.0.0";
 
 /// The newest released engine version. The release commit sets it to [`ENGINE_VERSION`]; the encode-version guard
 /// accepts a changed hash only for an arm bumped in the current, unreleased cycle.
-pub const RELEASED_ENGINE_VERSION: &str = "1.0.0";
+pub const RELEASED_ENGINE_VERSION: &str = "1.1.0";
 
 /// The engine version in which each sub-type's output last changed. Set an arm to the current `ENGINE_VERSION` in
 /// the same commit that changes that type's output bytes or validation verdict. Bumping the engine version alone
@@ -30,13 +30,13 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         Subtype::Diffuse
         | Subtype::LandscapeDiffuse
         | Subtype::PbrAlbedo
-        | Subtype::PbrEmissive
         | Subtype::Glow
-        | Subtype::PbrSubsurface
-        | Subtype::PbrFuzz
         | Subtype::SubsurfaceTint
         | Subtype::BacklightTint
         | Subtype::UiSky
+        | Subtype::SkinAlbedo
+        | Subtype::PbrSubsurface
+        | Subtype::PbrFuzz
         | Subtype::Normal
         | Subtype::LandscapeNormal
         | Subtype::PbrNormal
@@ -51,12 +51,12 @@ pub const fn encode_version(st: Subtype) -> &'static str {
         | Subtype::MsnSpecular
         | Subtype::GenericTwoChannel
         | Subtype::GenericData
-        | Subtype::HdrSky
-        | Subtype::SkinAlbedo
         | Subtype::SkinSk
         | Subtype::SkinWet
         | Subtype::ComplexGrass => "1.0.0",
         Subtype::Cubemap => "1.1.0",
+        // Note FF4: the two sub-types whose default is BC6H; Slowest/Max use the peak mode.
+        Subtype::PbrEmissive | Subtype::HdrSky => "1.2.0",
     }
 }
 

@@ -304,7 +304,7 @@ fn effort_max_needs_the_patch_0002_objects() {
         .iter()
         .any(|w| w.code == Code::CfgInvalid && w.message.contains("encoder.effort max"));
     assert_eq!(refused, !encoders_sys::BC7E_MAX_NATIVE, "{:?}", j.warnings);
-    // The level maps to bc7e's level 7 and keeps BC6H on ISPC veryslow, as `slowest` does.
+    // The level maps to bc7e's level 7 and puts BC6H on ISPC's peak-preserving mode, as `slowest` does (Note FF).
     assert_eq!(
         engine::encode::bc7_level(Effort::Max),
         encoders_sys::Bc7Level::Max

@@ -46,7 +46,9 @@ pub fn bc6h_level(e: Effort) -> Bc6hLevel {
         Effort::Ultrafast | Effort::Veryfast => Bc6hLevel::Veryfast,
         Effort::Fast => Bc6hLevel::Fast,
         Effort::Basic => Bc6hLevel::Basic,
-        Effort::Veryslow | Effort::Slowest | Effort::Max => Bc6hLevel::Veryslow,
+        Effort::Veryslow => Bc6hLevel::Veryslow,
+        // Note FF: the peak-preserving mode (Note FE).
+        Effort::Slowest | Effort::Max => Bc6hLevel::VeryslowPeak,
     }
 }
 

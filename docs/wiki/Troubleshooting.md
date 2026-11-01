@@ -266,7 +266,7 @@ Every warning has a code and a severity:
 | `VAL-M-GRAYSCALE` | warning | A complex `_m`'s smallest mip is grey, so it reads as a plain env mask. | Check the channels. |
 | `VAL-M-HEIGHT-CLIP` | warning | Large `_m` alpha areas at or below 4/255 or at or above 251/255: no parallax. | Remap the height. |
 | `VAL-PGPATCHER-50` | warning | A plain `_m` with alpha is 50% or more non-white; PGPatcher would treat it as complex. | Use BC4, or turn `exact_opaque` on. |
-| `VAL-BC6H-PEAK` | warning | A BC6H texture's peak ratio is below 0.8. | Try NVTT Production. |
+| `VAL-BC6H-PEAK` | warning | A BC6H texture's peak ratio is below 0.8. | Set `encoder.effort = "slowest"` for that texture (BC6H's peak-preserving mode), or try NVTT Production. |
 | `VAL-GRASS-DETECT` | error | The encoded complex-grass corner texel still fails detection after a slowest re-encode. The file is written. | Fix the source corner. |
 
 ### Encoders and output
