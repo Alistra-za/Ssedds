@@ -1,0 +1,8 @@
+# Documentation screenshots (docs/DOCUMENTATION.md §5). Rendered by crates/gui/tests/doc_shots.rs, refreshed with tools\doc-shots.ps1.
+
+[render]
+size = [1600, 900]
+pixels_per_point = 1.0
+theme = "dark"
+adapter = ""          # filled by Task 2 from the first render
+[render.fonts]        # filled by Task 2: file name -> sha256 of %WINDIR%\Fonts\<file>
