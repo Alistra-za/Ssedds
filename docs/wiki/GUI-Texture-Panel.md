@@ -43,9 +43,9 @@ Options a texture cannot use are greyed out, with the reason on hover.
 - The row is hidden when the alpha is removed (the `_m` alpha is then 255).
 - The same box is under the slot rows in the set editor, on the `_m`'s entry, and the bulk panel lists it for a selection of complex `_m` textures.
 
-**DDS files.** A DDS in the folder is left as it is and not exported. **Re-encode this file** encodes it again with the project's settings (`reencode = true` in `sdc.toml`, one undo step; **Stop re-encoding** goes back); block-compressed files lose some quality. It is off for a read-only `sdc.toml` and for a DDS another input already writes (hover names it), and fails into the DDS's own folder. The bulk panel's **Re-encode *n* DDS files** does the same for a selection.
+**DDS files.** A DDS in the folder reads "Already a DDS file: it is left as it is and not written to the export." **Re-encode this file** decodes it and encodes it again with the project's settings (block-compressed files lose some quality): it writes `reencode = true` to the file's `[files]` entry in `sdc.toml`, as one undo step, and the file then has settings like any other texture, with **Stop re-encoding** at the top of its panel to go back. The button is off while `sdc.toml` is read-only, and for a DDS another input already writes (an image twin such as `rock.png` beside `rock.dds`), since both would then be blocking duplicates; the hover names that file. Re-encoding into the folder the DDS comes from fails that file with a red row ("re-encoding would overwrite the source DDS: choose another output folder"). With several textures selected, the bulk panel's **Re-encode *n* DDS files** does the same for the selected DDS files, leaving out the ones another file already writes (named on hover).
 
-A DDS file also shows its header check (one line, the fields on hover), a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
+A DDS file also shows its header check (one line, "The DDS header has fields other tools may misread.", with the header fields on hover), a *Tag on patch* choice and **Patch header…**, then **Patch**, which writes a patched copy to the export folder. The DDS itself is never changed.
 
 **Used by meshes.** When a mod scan exists, the settings end with a collapsed **Used by meshes (N)** list: each mesh that uses the texture, with its mod and MO2 priority, the winner first (loose files before BSAs, then the highest priority).
 
@@ -73,7 +73,7 @@ For colour with smooth alpha, Alpha ×8 beats BC3 on alpha and keeps 5.6 dB more
 
 ## Deciding
 
-A texture whose name follows the conventions decides itself: a High-confidence suggestion is accepted and written to the project ([below](#what-the-gui-writes-on-its-own)). Until then its sub-type reads **(auto)**, with the reason on hover. High suggestions include a known suffix such as `_n`, `_rmaos` or `_rfaos`; an exporter term such as `_albedo`; a file with no suffix, as its set's colour map; and `_n` in a PBR set. The naming rules are in [Texture types](Texture-Types.md).
+A texture whose name follows the conventions decides itself: a High-confidence suggestion is accepted and written to the project ([what the GUI writes on its own](GUI-Problems.md#what-the-gui-writes-on-its-own)). Until then its sub-type reads **(auto)**, with the reason on hover. High suggestions include a known suffix such as `_n`, `_rmaos` or `_rfaos`; an exporter term such as `_albedo`; a file with no suffix, as its set's colour map; and `_n` in a PBR set. The naming rules are in [Texture types](Texture-Types.md).
 
 Naming that breaks the conventions (a normal map saved without `_n`) is read as a colour map, so rename the file ([Renaming](GUI-Bulk-and-Rename.md#renaming)) or choose its sub-type.
 
@@ -87,17 +87,6 @@ A texture that still needs an answer has an **amber border**: a Medium or Low su
 | A blocking warning | **Acknowledge for this texture**. For `DIM-NPOT` (a size that is not a power of two) there is also **Resize to a power of two**, which writes `resize = "pot-down"` and clears the block. |
 
 Each answer is written to `sdc.toml`, as a field value or as an `allow` code on the file's `[files]` entry, so it stays in your project file. A choice you make always wins over a suggestion. The **Sub-type** field opens the same type picker as the Problems tab's **Set type…**, with the engine's suggestion on top.
-
-### What the GUI writes on its own
-
-When a plan settles, every sub-type it took from a High-confidence suggestion (including a type the scanned meshes or a GRAS grass model gave it) and every alpha meaning it took from the meshes is written to `sdc.toml` as a `[files]` entry, as if you had chosen it.
-
-- It is one undo step, `Set {n} types automatically`, and one Info row in Problems, "{n} types set automatically (High confidence)", with **Undo this change** and the list of textures on hover. Both say *values* instead of *types* when an alpha meaning is among them.
-- The project then has unsaved changes. Save keeps them (its hover says so while they are the only ones), and `sdc convert` reads the same types without `--accept-suggestions high` and without the scan. On their own they add no dot to the title and nothing asks about them on close, open or Reload: the next plan records them again.
-- A file you already gave a sub-type or alpha policy is never touched. An Undo of the step stays undone until the folder is opened again.
-- A written type is a value of the project: it reads as a set value, without **(auto)**, and a later scan does not change it (the scan's view shows as a suggestion).
-- While it is still the type Tessalith would pick by itself, these re-type it: a set shader you pick (written to the project too, since `sdc convert` does not read set shaders) or going back to Auto, deciding a set's diffuse as a PBR albedo (its members follow), or a new preset alias. A type you changed is kept. The writing is always an undo step of its own, also when an edit of yours led to it.
-- Two decisions stay in the GUI only: a mesh *Remove* (written out, it would change the format the compact presets pick), and the environment-map `_m` that Also export derives from the meshes (`sdc convert` writes no `_m`).
 
 ### Alpha from the meshes
 
