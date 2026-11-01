@@ -525,6 +525,22 @@ fn no_folder_open_reads_plain_export() {
     assert_eq!(m.header_export_text(), "Export");
 }
 
+/// Note F?18 (3; HANDOFF 2026-11-01 owed item 3): with no folder open the header counts pending NIF edits as the
+/// project case does (Note F?7): `Review k NIF edit(s)`, blocked ones included; none pending keeps plain "Export".
+#[test]
+fn no_folder_open_counts_pending_nif_edits() {
+    let mut m = AppModel::new(GuiSettings::default(), None, session());
+    m.set_nif_review_rows(vec![]);
+    assert_eq!(m.header_export_text(), "Export");
+    m.set_nif_review_rows(vec![nif_row(None)]);
+    assert_eq!(m.header_export_text(), "Review 1 NIF edit");
+    m.set_nif_review_rows(vec![
+        nif_row(None),
+        nif_row(Some("its NIF changed on disk")),
+    ]);
+    assert_eq!(m.header_export_text(), "Review 2 NIF edits");
+}
+
 /// Note GH8: a fresh start (no project, no folder, no edit) still says "Open a folder first", not the folder reason.
 #[test]
 fn fresh_start_with_no_folder_says_open_a_folder_first() {

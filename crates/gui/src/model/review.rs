@@ -838,7 +838,11 @@ impl AppModel {
     pub fn export_text(&self, clean: bool) -> String {
         // Final review M5: with no folder open there is no count to give ("Review 0 files" greeted a new user).
         if self.root.is_none() {
-            return "Export".into();
+            // Note F?18 (GH handoff item 3): pending NIF edits are counted as in F?7; there are no files to name.
+            return match self.nif_rows.len() {
+                0 => "Export".into(),
+                rows => format!("Review {}", nif_edits(rows)),
+            };
         }
         let n = self.export_files();
         let rows = self.nif_rows.len();
